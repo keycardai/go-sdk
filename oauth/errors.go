@@ -2,6 +2,16 @@ package oauth
 
 import "fmt"
 
+// ConfigurationError indicates the SDK was constructed with invalid configuration,
+// such as a verifier built without a trusted issuer or with an unsupported algorithm.
+type ConfigurationError struct {
+	Message string
+}
+
+func (e *ConfigurationError) Error() string {
+	return e.Message
+}
+
 // HTTPError represents an HTTP-related error with a status code.
 type HTTPError struct {
 	Message string

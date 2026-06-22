@@ -42,8 +42,14 @@ func main() {
 		mcp.WithResourceName("Delegated Access Example"),
 	))
 
+	verifier, err := mcp.NewZoneTokenVerifier(zoneURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Chain: bearer auth -> grant -> handler
 	apiHandler := mcp.RequireBearerAuth(
+		verifier,
 		mcp.WithRequiredScopes("mcp:tools"),
 	)(authProvider.Grant("https://api.github.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ac := mcp.AccessContextFromRequest(r)

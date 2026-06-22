@@ -35,33 +35,30 @@ func AccessContextFromRequest(r *http.Request) *AccessContext {
 type BearerAuthOption func(*bearerAuthConfig)
 
 type bearerAuthConfig struct {
-	verifier       TokenVerifier
 	requiredScopes []string
 }
 
-// WithVerifier sets the token verifier. If not set, a default JWTOAuthTokenVerifier
-// with a JWKSOAuthKeyring is used.
-func WithVerifier(v TokenVerifier) BearerAuthOption {
-	return func(cfg *bearerAuthConfig) { cfg.verifier = v }
-}
-
-// WithRequiredScopes sets the scopes that must be present in the token.
+// WithRequiredScopes sets the scopes that must all be present in the token; a token
+// missing any is rejected with an insufficient-scope failure.
 func WithRequiredScopes(scopes ...string) BearerAuthOption {
 	return func(cfg *bearerAuthConfig) { cfg.requiredScopes = scopes }
 }
 
-// RequireBearerAuth returns middleware that verifies Bearer tokens.
-// On success, stores AuthInfo in the request context (retrieve with AuthInfoFromRequest).
-// On failure, writes the appropriate WWW-Authenticate challenge and HTTP status.
-func RequireBearerAuth(opts ...BearerAuthOption) func(http.Handler) http.Handler {
+// RequireBearerAuth returns middleware that verifies Bearer tokens with verifier.
+// The verifier carries the trusted issuers and audience binding; build one with
+// NewZoneTokenVerifier (single zone) or NewJWTOAuthTokenVerifier (custom keyring or
+// multiple issuers). On success it stores AuthInfo in the request context (read with
+// AuthInfoFromRequest); on failure it writes the appropriate WWW-Authenticate challenge
+// and HTTP status. It panics if verifier is nil, since an auth boundary with no verifier
+// is a programming error best caught at startup.
+func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("mcp: RequireBearerAuth requires a non-nil TokenVerifier")
+	}
+
 	cfg := bearerAuthConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
-	}
-
-	if cfg.verifier == nil {
-		keyring := oauth.NewJWKSOAuthKeyring()
-		cfg.verifier = NewJWTOAuthTokenVerifier(keyring)
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -90,7 +87,7 @@ func RequireBearerAuth(opts ...BearerAuthOption) func(http.Handler) http.Handler
 				return
 			}
 
-			authInfo, err := cfg.verifier.VerifyAccessToken(r.Context(), token)
+			authInfo, err := verifier.VerifyAccessToken(r.Context(), token)
 			if err != nil {
 				var errCode, errMsg string
 

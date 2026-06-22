@@ -30,7 +30,7 @@ func TestRequireBearerAuth_ValidToken(t *testing.T) {
 		},
 	}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := AuthInfoFromRequest(r)
 		json.NewEncoder(w).Encode(info)
 	}))
@@ -49,7 +49,7 @@ func TestRequireBearerAuth_ValidToken(t *testing.T) {
 func TestRequireBearerAuth_MissingHeader(t *testing.T) {
 	verifier := &mockTokenVerifier{}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	}))
 
@@ -74,7 +74,7 @@ func TestRequireBearerAuth_MissingHeader(t *testing.T) {
 func TestRequireBearerAuth_MalformedHeader(t *testing.T) {
 	verifier := &mockTokenVerifier{}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	}))
 
@@ -96,7 +96,7 @@ func TestRequireBearerAuth_InvalidToken(t *testing.T) {
 		},
 	}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	}))
 
@@ -128,7 +128,7 @@ func TestRequireBearerAuth_InsufficientScope(t *testing.T) {
 	}
 
 	handler := RequireBearerAuth(
-		WithVerifier(verifier),
+		verifier,
 		WithRequiredScopes("admin"),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
@@ -162,7 +162,7 @@ func TestRequireBearerAuth_ExpiredToken(t *testing.T) {
 		},
 	}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for expired token")
 	}))
 
@@ -194,7 +194,7 @@ func TestRequireBearerAuth_NoExpiry(t *testing.T) {
 		},
 	}
 
-	handler := RequireBearerAuth(WithVerifier(verifier))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
