@@ -121,7 +121,7 @@ type capturingCredential struct {
 	capturedOpts *PrepareOptions
 }
 
-func (c *capturingCredential) Auth() *ClientAuth {
+func (c *capturingCredential) Auth(_ string) *ClientAuth {
 	return &ClientAuth{ClientID: "test-client", ClientSecret: "test-secret"}
 }
 
@@ -191,8 +191,8 @@ func TestNewAuthProvider_BuildsZoneURLFromID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if provider.zoneURL != "https://my-zone.keycard.cloud" {
-		t.Errorf("zoneURL: got %q", provider.zoneURL)
+	if provider.defaultZone != "https://my-zone.keycard.cloud" {
+		t.Errorf("defaultZone: got %q", provider.defaultZone)
 	}
 }
 

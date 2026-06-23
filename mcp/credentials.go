@@ -25,28 +25,69 @@ type PrepareOptions struct {
 
 // ApplicationCredential authenticates the MCP server during token exchange.
 type ApplicationCredential interface {
-	// Auth returns client credentials for HTTP basic auth, or nil for assertion-based auth.
-	Auth() *ClientAuth
+	// Auth returns client credentials for HTTP basic auth for the given zone issuer, or
+	// nil for assertion-based auth or an unknown zone. Single-zone credentials ignore
+	// the issuer.
+	Auth(issuer string) *ClientAuth
 
 	// PrepareTokenExchangeRequest builds a token exchange request with any needed
 	// client authentication (assertions, etc.).
 	PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, opts *PrepareOptions) (*oauth.TokenExchangeRequest, error)
 }
 
-// ClientSecretCredential implements ApplicationCredential using client_id/client_secret basic auth.
+// MultiZoneCredential is implemented by credentials that carry per-zone client
+// credentials keyed by zone issuer URL. A provider uses Zones to discover the zone set
+// and switch into multi-zone routing. Single-zone credentials report no zones.
+type MultiZoneCredential interface {
+	// Zones returns the configured zone issuer URLs (empty for a single-zone credential).
+	Zones() []string
+}
+
+// ClientSecretCredential implements ApplicationCredential using client_id/client_secret
+// basic auth. It is single-zone by default; NewMultiZoneClientSecret makes it carry
+// per-zone credentials keyed by zone issuer URL.
 type ClientSecretCredential struct {
 	clientID     string
 	clientSecret string
+	zones        map[string]ClientAuth // non-nil only for a multi-zone credential
 }
 
-// NewClientSecret creates a new ClientSecretCredential.
+// NewClientSecret creates a single-zone ClientSecretCredential.
 func NewClientSecret(clientID, clientSecret string) *ClientSecretCredential {
 	return &ClientSecretCredential{clientID: clientID, clientSecret: clientSecret}
 }
 
-// Auth returns the client credentials for basic auth.
-func (c *ClientSecretCredential) Auth() *ClientAuth {
+// NewMultiZoneClientSecret creates a multi-zone ClientSecretCredential from a map of
+// zone issuer URL to that zone's client credentials. The credential is self-describing:
+// holding zone entries marks it multi-zone.
+func NewMultiZoneClientSecret(zones map[string]ClientAuth) *ClientSecretCredential {
+	return &ClientSecretCredential{zones: zones}
+}
+
+// Auth returns the basic-auth credentials for the given zone issuer. A single-zone
+// credential returns its one credential for any issuer; a multi-zone credential returns
+// the matching zone's credential, or nil if the zone is unknown (fail-closed).
+func (c *ClientSecretCredential) Auth(issuer string) *ClientAuth {
+	if c.zones != nil {
+		if a, ok := c.zones[issuer]; ok {
+			return &a
+		}
+		return nil
+	}
 	return &ClientAuth{ClientID: c.clientID, ClientSecret: c.clientSecret}
+}
+
+// Zones returns the configured zone issuer URLs (nil for a single-zone credential),
+// implementing MultiZoneCredential.
+func (c *ClientSecretCredential) Zones() []string {
+	if c.zones == nil {
+		return nil
+	}
+	zones := make([]string, 0, len(c.zones))
+	for issuer := range c.zones {
+		zones = append(zones, issuer)
+	}
+	return zones
 }
 
 // PrepareTokenExchangeRequest builds a basic token exchange request.
@@ -134,7 +175,7 @@ func (w *WebIdentityCredential) Bootstrap() error {
 }
 
 // Auth returns nil (WebIdentity uses assertion-based auth, not basic auth).
-func (w *WebIdentityCredential) Auth() *ClientAuth {
+func (w *WebIdentityCredential) Auth(_ string) *ClientAuth {
 	return nil
 }
 
@@ -257,7 +298,7 @@ func NewEKSWorkloadIdentity(opts ...EKSWorkloadIdentityOption) (*EKSWorkloadIden
 }
 
 // Auth returns nil (EKS uses assertion-based auth, not basic auth).
-func (e *EKSWorkloadIdentityCredential) Auth() *ClientAuth {
+func (e *EKSWorkloadIdentityCredential) Auth(_ string) *ClientAuth {
 	return nil
 }
 

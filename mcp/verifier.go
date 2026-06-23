@@ -13,6 +13,9 @@ type AuthInfo struct {
 	Scopes    []string
 	Resource  string
 	ExpiresAt int64
+	// Issuer is the verified token's iss claim. It identifies the zone that minted
+	// the token and is used to route the outbound exchange in a multi-zone provider.
+	Issuer string
 }
 
 // TokenVerifier verifies access tokens and returns auth information.
@@ -47,6 +50,14 @@ func NewZoneTokenVerifier(zoneURL string, opts ...oauth.JWTVerifierOption) (*JWT
 	return NewJWTOAuthTokenVerifier(oauth.NewJWKSOAuthKeyring(), []string{zoneURL}, opts...)
 }
 
+// NewMultiZoneTokenVerifier builds a verifier that trusts tokens from any of zoneURLs,
+// resolving each token's verification key from its own zone's JWKS. The token's iss
+// claim selects the zone; a token whose iss is not one of zoneURLs is rejected. This is
+// the inbound half of multi-zone support.
+func NewMultiZoneTokenVerifier(zoneURLs []string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
+	return NewJWTOAuthTokenVerifier(oauth.NewJWKSOAuthKeyring(), zoneURLs, opts...)
+}
+
 // VerifyAccessToken verifies a JWT access token and returns auth information.
 func (v *JWTOAuthTokenVerifier) VerifyAccessToken(ctx context.Context, token string) (*AuthInfo, error) {
 	claims, err := v.verifier.Verify(ctx, token)
@@ -58,6 +69,7 @@ func (v *JWTOAuthTokenVerifier) VerifyAccessToken(ctx context.Context, token str
 		Token:    token,
 		ClientID: claims.ClientID,
 		Scopes:   parseScopes(claims.Scope),
+		Issuer:   claims.Issuer,
 	}
 
 	if claims.Expiry != 0 {
