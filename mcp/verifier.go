@@ -25,11 +25,26 @@ type JWTOAuthTokenVerifier struct {
 	verifier *oauth.JWTVerifier
 }
 
-// NewJWTOAuthTokenVerifier creates a new JWTOAuthTokenVerifier with the given keyring.
-func NewJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring) *JWTOAuthTokenVerifier {
-	return &JWTOAuthTokenVerifier{
-		verifier: oauth.NewJWTVerifier(keyring),
+// NewJWTOAuthTokenVerifier creates a JWTOAuthTokenVerifier that trusts tokens issued
+// by one of issuers, resolving verification keys through keyring. At least one trusted
+// issuer is required. Additional verifier options (oauth.WithAudiences,
+// oauth.WithAlgorithms, oauth.WithVerifierLeeway) are forwarded to the underlying JWT
+// verifier. Returns a configuration error when no trusted issuer is supplied.
+func NewJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring, issuers []string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
+	verifier, err := oauth.NewJWTVerifier(keyring, issuers, opts...)
+	if err != nil {
+		return nil, err
 	}
+	return &JWTOAuthTokenVerifier{verifier: verifier}, nil
+}
+
+// NewZoneTokenVerifier builds a verifier for a single Keycard zone. It trusts only
+// tokens whose iss equals zoneURL and resolves verification keys from that zone's JWKS
+// on demand. Pass oauth.WithAudiences to bind tokens to this resource server. This is
+// the convenience path; use NewJWTOAuthTokenVerifier directly to supply your own keyring
+// or trust more than one issuer.
+func NewZoneTokenVerifier(zoneURL string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
+	return NewJWTOAuthTokenVerifier(oauth.NewJWKSOAuthKeyring(), []string{zoneURL}, opts...)
 }
 
 // VerifyAccessToken verifies a JWT access token and returns auth information.

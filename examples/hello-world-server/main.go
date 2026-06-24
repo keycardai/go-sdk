@@ -25,8 +25,16 @@ func main() {
 		mcp.WithResourceName("Hello World MCP Server"),
 	))
 
-	// Protected endpoint with bearer auth
+	// The verifier trusts only tokens issued by this zone and resolves keys from its
+	// JWKS. It rejects tokens from any other issuer before resolving a key.
+	verifier, err := mcp.NewZoneTokenVerifier(zoneURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Protected endpoint with bearer auth.
 	protected := mcp.RequireBearerAuth(
+		verifier,
 		mcp.WithRequiredScopes("mcp:tools"),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authInfo := mcp.AuthInfoFromRequest(r)

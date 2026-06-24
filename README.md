@@ -51,7 +51,11 @@ mux.Handle("/.well-known/", mcp.AuthMetadataHandler(
     mcp.WithScopesSupported([]string{"mcp:tools"}),
 ))
 
+// The verifier trusts only tokens issued by this zone.
+verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+
 protected := mcp.RequireBearerAuth(
+    verifier,
     mcp.WithRequiredScopes("mcp:tools"),
 )(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     info := mcp.AuthInfoFromRequest(r)
@@ -69,7 +73,10 @@ authProvider, _ := mcp.NewAuthProvider(
     mcp.WithApplicationCredential(mcp.NewClientSecret(clientID, clientSecret)),
 )
 
+verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+
 handler := mcp.RequireBearerAuth(
+    verifier,
     mcp.WithRequiredScopes("mcp:tools"),
 )(authProvider.Grant("https://api.github.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     ac := mcp.AccessContextFromRequest(r)
