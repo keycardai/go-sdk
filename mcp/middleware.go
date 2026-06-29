@@ -143,7 +143,11 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 	}
 }
 
-// protectedResourceMetadataURL constructs the well-known URL for the protected resource metadata.
+// protectedResourceMetadataURL constructs the well-known URL for the protected resource
+// metadata. Following RFC 9728 path insertion, the protected resource's path is appended
+// after the well-known segment (e.g. a resource at /mcp advertises
+// .../.well-known/oauth-protected-resource/mcp), so the metadata, and the resource audience
+// it carries, match the full endpoint URL rather than the bare origin.
 func protectedResourceMetadataURL(r *http.Request) string {
 	scheme := "https"
 	if r.TLS == nil {
@@ -153,5 +157,9 @@ func protectedResourceMetadataURL(r *http.Request) string {
 			scheme = "http"
 		}
 	}
-	return fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", scheme, r.Host)
+	resourcePath := r.URL.Path
+	if resourcePath == "/" {
+		resourcePath = ""
+	}
+	return fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource%s", scheme, r.Host, resourcePath)
 }

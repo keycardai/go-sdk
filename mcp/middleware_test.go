@@ -71,6 +71,26 @@ func TestRequireBearerAuth_MissingHeader(t *testing.T) {
 	}
 }
 
+func TestRequireBearerAuth_ChallengeIncludesResourcePath(t *testing.T) {
+	verifier := &mockTokenVerifier{}
+
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called")
+	}))
+
+	// RFC 9728 path insertion: the challenge for a resource at /mcp must advertise
+	// .well-known/oauth-protected-resource/mcp, not the bare origin (ACC-591).
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	challenge := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(challenge, "/.well-known/oauth-protected-resource/mcp") {
+		t.Errorf("expected path-inserted resource_metadata in challenge, got %q", challenge)
+	}
+}
+
 func TestRequireBearerAuth_MalformedHeader(t *testing.T) {
 	verifier := &mockTokenVerifier{}
 

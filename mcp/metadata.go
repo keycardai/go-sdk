@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // ProtectedResourceMetadata represents OAuth Protected Resource Metadata.
@@ -65,17 +66,19 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+	// protectedResource serves the Protected Resource Metadata (RFC 9728). It is registered
+	// for both the bare well-known path (origin resource) and the path-inserted form
+	// (e.g. /.well-known/oauth-protected-resource/mcp), so a resource mounted at a sub-path
+	// advertises and resolves to its full URL rather than the bare origin.
+	protectedResource := func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 
 		scheme := requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
-		path := r.URL.Path
-		if path == "/.well-known/oauth-protected-resource" {
-			path = ""
-		}
-		resource := baseURL + path
+		// The resource is the origin plus the path that follows the well-known prefix:
+		// "" for the origin resource, "/mcp" for the path-inserted form.
+		resource := baseURL + strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource")
 
 		metadata := ProtectedResourceMetadata{
 			Resource:              resource,
@@ -83,16 +86,15 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 			ResourceName:          cfg.resourceName,
 			ResourceDocumentation: cfg.resourceDocumentation,
 		}
-
-		// Handle MCP protocol version for backward compatibility
-		mcpVersion := r.Header.Get("MCP-Protocol-Version")
-		if mcpVersion == "2025-03-26" {
-			metadata.AuthorizationServers = []string{baseURL}
+		if cfg.issuer != "" {
+			metadata.AuthorizationServers = []string{cfg.issuer}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metadata)
-	})
+	}
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", protectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/{resourcePath...}", protectedResource)
 
 	if cfg.issuer != "" {
 		mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
