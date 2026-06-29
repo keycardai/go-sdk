@@ -1,3 +1,50 @@
+## v0.7.0 (2026-06-29)
+
+
+- ci: match scoped commits in the cz changelog pattern (#20)
+- The customize changelog_pattern lacked a scope group, so a scoped subject such
+as "feat(oauth): ..." did not match. bump.py gates on `cz changelog --dry-run`,
+which therefore reported no unreleased changes and skipped the release: the
+impersonation feat (#12) merged but never cut a version. Add the optional
+(\(.+\))? scope group so scoped conventional commits are recognized.
+- Verified with cz against current main: `cz changelog --dry-run` now lists the
+unreleased feat(oauth) commit, and `cz bump --dry-run` reports
+0.6.0 -> 0.7.0 (MINOR). Unscoped commits still match; chore still does not.
+- Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- feat(oauth): implement user impersonation via substitute-user token exchange (ECO-92) (#12)
+- * feat(oauth): implement user impersonation via substitute-user token exchange
+- Add TokenExchangeClient.Impersonate per
+specs/delegated-access/impersonation.md. Mints the actor token from the
+client's application credential via a client_credentials grant, then
+performs an RFC 8693 exchange with an unsigned substitute-user subject
+token carrying the target user identifier.
+- - ImpersonateRequest: UserIdentifier (req), Resource (opt), Scopes (opt)
+- buildSubstituteUserToken + SubstituteUserTokenType vendor URN
+- Tests cover the spec unit-test table
+- * docs(oauth): add runnable impersonation example
+- Adds a background-agent example demonstrating user impersonation via
+token exchange (oauth.TokenExchangeClient.Impersonate), matching the
+Impersonation spec. Configured via environment variables; run with
+`go run ./examples/impersonation`.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- * fix(oauth): require resource for impersonation and reuse the client-credentials grant
+- Two follow-ups to align Impersonate with the spec and reduce duplication:
+- - Require ImpersonateRequest.Resource. The impersonation spec marks resource
+  as required (unit-test row 4: "resource omitted -> client-side validation
+  error"); validate it before any network call, alongside UserIdentifier.
+- Mint the actor token by reusing the existing ClientCredentialsClient instead
+  of a hand-rolled client_credentials POST. TokenExchangeClient now lazily
+  builds and caches a ClientCredentialsClient sharing its issuer, credentials,
+  and HTTP client, so the grant logic and its error handling live in one place
+  and the actor-token endpoint is discovered once.
+- Tests updated: the two OAuth-error cases now pass a resource so they reach the
+exchange, and the former resource-optional test is replaced by one asserting
+local rejection when resource is missing.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Co-authored-by: Larry-Osakwe <larryosak@gmail.com>
+
 ## v0.6.0 (2026-06-29)
 
 
