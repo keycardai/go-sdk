@@ -55,6 +55,11 @@ func WithMetadataHTTPClient(c *http.Client) MetadataOption {
 
 // AuthMetadataHandler returns an http.Handler that serves both
 // /.well-known/oauth-protected-resource and /.well-known/oauth-authorization-server endpoints.
+//
+// An issuer (WithIssuer) is effectively required for a usable deployment: without it the
+// protected-resource metadata advertises no authorization_servers and the
+// authorization-server proxy route is not registered, leaving clients no way to discover
+// the authorization server.
 func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 	cfg := metadataConfig{}
 	for _, opt := range opts {
