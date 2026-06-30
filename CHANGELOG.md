@@ -1,3 +1,37 @@
+## v0.13.0 (2026-06-30)
+
+
+- feat(mcp)!: tighten WebIdentity assertion + storage; add seed AccessContext (ECO-94) (#27)
+- * feat(mcp)!: tighten WebIdentity assertion + storage; add seed AccessContext (ECO-94)
+- Closes the last two ECO-94 items.
+- WebIdentity:
+- Add WithClientID: the assertion's iss/sub are the registered OAuth client id, with a
+  request-time resource_client_id override. Drop the key-id fallback for iss and the
+  iss fallback for aud, per RFC 7523; PrepareTokenExchangeRequest now returns a
+  WebIdentityConfigurationError when the client id or token endpoint is missing.
+- Default key storage is now ./server_keys, falling back to the legacy ./mcp_keys when
+  it exists, matching Python/TS.
+- Add WithAudienceConfig to override the assertion audience.
+- AccessContext:
+- Add NewAccessContextWithTokens, the seed-token constructor present in Python/TS.
+- BREAKING CHANGE: a WebIdentity credential now requires a client id (WithClientID or a
+request-time resource_client_id) and a token endpoint; it no longer falls back to the
+local key id. The default key storage directory is ./server_keys (with ./mcp_keys as a
+legacy fallback).
+- Aligns with the WebIdentity spec contract (iss=sub=client_id, aud=token_endpoint); where
+Python and TS differ on client-id sourcing, this follows the TS model (optional
+construction-time client id, request-time override).
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- * fix(mcp): reject a WebIdentity credential without a client id at provider construction
+- Addresses the #27 review: the bundled AuthProvider never supplies resource_client_id, so
+a WebIdentity credential built without WithClientID would fail every exchange with a
+runtime config error. NewAuthProvider now rejects it at construction (matching the
+fail-loud principle from #23), and WithClientID's doc states it is required for the
+provider flow.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## v0.12.0 (2026-06-30)
 
 
