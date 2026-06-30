@@ -56,7 +56,7 @@ func main() {
 	apiHandler := mcp.RequireBearerAuth(
 		verifier,
 		mcp.WithRequiredScopes("mcp:tools"),
-	)(authProvider.Grant("https://api.github.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	)(authProvider.Grant([]string{"https://api.github.com"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ac := mcp.AccessContextFromRequest(r)
 
 		if ac.HasErrors() {

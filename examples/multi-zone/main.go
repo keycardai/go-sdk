@@ -55,7 +55,7 @@ func main() {
 
 	// Grant routes the exchange to whichever zone minted the request's token.
 	handler := mcp.RequireBearerAuth(verifier)(
-		provider.Grant(resource)(
+		provider.Grant([]string{resource})(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				info := mcp.AuthInfoFromRequest(r)
 				ac := mcp.AccessContextFromRequest(r)

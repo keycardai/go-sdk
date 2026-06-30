@@ -241,7 +241,7 @@ func TestAuthProvider_GrantRoutesByTokenIssuer(t *testing.T) {
 	}
 
 	handler := RequireBearerAuth(verifier)(
-		provider.Grant("https://api.example.com")(
+		provider.Grant([]string{"https://api.example.com"})(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ac := AccessContextFromRequest(r)
 				if _, err := ac.Access("https://api.example.com"); err != nil {

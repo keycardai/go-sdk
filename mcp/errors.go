@@ -1,16 +1,10 @@
 package mcp
 
-// ResourceAccessError is returned when a resource's token is unavailable.
-type ResourceAccessError struct {
-	Message string
-}
+import "github.com/keycardai/credentials-go/oauth"
 
-func (e *ResourceAccessError) Error() string {
-	if e.Message != "" {
-		return e.Message
-	}
-	return "resource access error"
-}
+// ResourceAccessError is re-exported from the oauth package (where it now lives alongside
+// AccessContext) for backward compatibility.
+type ResourceAccessError = oauth.ResourceAccessError
 
 // AuthProviderConfigurationError indicates invalid AuthProvider configuration.
 type AuthProviderConfigurationError struct {
