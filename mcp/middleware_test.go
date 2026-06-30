@@ -91,6 +91,25 @@ func TestRequireBearerAuth_ChallengeIncludesResourcePath(t *testing.T) {
 	}
 }
 
+func TestRequireBearerAuth_ChallengeRootPath(t *testing.T) {
+	verifier := &mockTokenVerifier{}
+
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called")
+	}))
+
+	// A resource at the root advertises the bare well-known path, with no trailing slash.
+	req := httptest.NewRequest("POST", "/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	challenge := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(challenge, `/.well-known/oauth-protected-resource"`) {
+		t.Errorf("expected bare resource_metadata (no trailing path) for root resource, got %q", challenge)
+	}
+}
+
 func TestRequireBearerAuth_MalformedHeader(t *testing.T) {
 	verifier := &mockTokenVerifier{}
 

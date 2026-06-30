@@ -77,8 +77,10 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 		// The resource is the origin plus the path that follows the well-known prefix:
-		// "" for the origin resource, "/mcp" for the path-inserted form.
-		resource := baseURL + strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource")
+		// "" for the origin resource, "/mcp" for the path-inserted form. A trailing slash
+		// (e.g. the bare path-inserted form ".../oauth-protected-resource/") normalizes to
+		// the origin so the advertised resource matches an origin-bound audience exactly.
+		resource := baseURL + strings.TrimRight(strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource"), "/")
 
 		metadata := ProtectedResourceMetadata{
 			Resource:              resource,
@@ -93,8 +95,11 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metadata)
 	}
+	// Two routes: the exact bare path (origin resource) and the subtree for the
+	// path-inserted form (.../oauth-protected-resource/mcp). The handler derives the
+	// resource from r.URL.Path, so no path wildcard binding is needed.
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", protectedResource)
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource/{resourcePath...}", protectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/", protectedResource)
 
 	if cfg.issuer != "" {
 		mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {

@@ -81,6 +81,40 @@ func TestAuthMetadataHandler_PathInsertedResource(t *testing.T) {
 	}
 }
 
+func TestAuthMetadataHandler_AuthorizationServersOmittedWithoutIssuer(t *testing.T) {
+	// With no issuer configured, authorization_servers is omitted entirely (omitempty).
+	// This is the contract change from dropping the MCP-Protocol-Version origin-as-AS
+	// branch; a correct Keycard deployment always sets WithIssuer (the zone).
+	handler := AuthMetadataHandler(WithScopesSupported([]string{"mcp:tools"}))
+
+	req := httptest.NewRequest("GET", "/.well-known/oauth-protected-resource", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var metadata ProtectedResourceMetadata
+	json.NewDecoder(rec.Body).Decode(&metadata)
+	if len(metadata.AuthorizationServers) != 0 {
+		t.Errorf("authorization_servers: got %v, want empty when no issuer is configured", metadata.AuthorizationServers)
+	}
+}
+
+func TestAuthMetadataHandler_PathInsertedTrailingSlash(t *testing.T) {
+	handler := AuthMetadataHandler(WithIssuer("https://zone.example.com"))
+
+	// A path-inserted form with a trailing slash normalizes to the origin, so the
+	// advertised resource still matches an origin-bound audience exactly.
+	req := httptest.NewRequest("GET", "/.well-known/oauth-protected-resource/", nil)
+	req.Host = "mcp.example.com"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var metadata ProtectedResourceMetadata
+	json.NewDecoder(rec.Body).Decode(&metadata)
+	if metadata.Resource != "http://mcp.example.com" {
+		t.Errorf("resource: got %q, want http://mcp.example.com (trailing slash normalized)", metadata.Resource)
+	}
+}
+
 func TestAuthMetadataHandler_AuthorizationServer(t *testing.T) {
 	// Mock upstream authorization server
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
