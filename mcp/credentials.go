@@ -165,8 +165,10 @@ func WithKeyID(kid string) WebIdentityOption {
 
 // WithClientID sets the registered OAuth client id used as the assertion's iss and sub
 // claims. A request-time resource_client_id (from the exchange auth context) overrides it.
-// The client id is required to prepare a token exchange (there is no key-id fallback), so
-// set it here or supply resource_client_id at request time.
+// The client id is required to prepare a token exchange (there is no key-id fallback). It
+// is effectively mandatory when the credential is used with AuthProvider, which does not
+// supply resource_client_id at request time; NewAuthProvider rejects a WebIdentity
+// credential built without it.
 func WithClientID(clientID string) WebIdentityOption {
 	return func(cfg *webIdentityConfig) { cfg.clientID = clientID }
 }
