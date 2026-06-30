@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,6 +93,45 @@ func TestServiceDiscovery_Refresh_BypassesCache(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(hits); got != 2 {
 		t.Errorf("card fetches: got %d, want 2 (Refresh should bypass cache)", got)
+	}
+}
+
+// Review #3: concurrent first-time lookups for the same target share one fetch.
+func TestServiceDiscovery_GetCard_SingleFlight(t *testing.T) {
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != agentCardPath {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(100 * time.Millisecond) // hold the flight open so concurrent callers join it
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "Target Agent"})
+	}))
+	defer server.Close()
+
+	d := NewServiceDiscovery()
+	const n = 10
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := d.GetCard(context.Background(), server.URL); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("GetCard: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("card fetches: got %d, want 1 (concurrent misses should share one fetch)", got)
 	}
 }
 

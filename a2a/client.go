@@ -42,6 +42,7 @@ type DelegationClient struct {
 	discovery       *ServiceDiscovery
 	httpClient      *http.Client
 	protocolVersion string
+	invokeTimeout   time.Duration
 }
 
 // DelegationOption configures a DelegationClient.
@@ -51,12 +52,22 @@ type delegationConfig struct {
 	httpClient      *http.Client
 	discovery       *ServiceDiscovery
 	protocolVersion string
+	invokeTimeout   time.Duration
 }
 
-// WithHTTPClient sets the HTTP client used for both the token exchange and the agent
-// invocation. The default client has a 30 second timeout.
+// WithHTTPClient sets the HTTP client used for the token exchange and the agent
+// invocation. Unless a ServiceDiscovery is supplied via WithServiceDiscovery, this
+// client also governs agent-card discovery. The default client has a 30 second timeout.
 func WithHTTPClient(c *http.Client) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.httpClient = c }
+}
+
+// WithInvokeTimeout bounds the total time for a single Invoke call (discovery, token
+// exchange, and invocation combined). It is enforced via the context, independent of any
+// HTTP client timeout, so it still applies when a caller supplies an http.Client with no
+// Timeout of its own. Defaults to 30 seconds; a value <= 0 disables it.
+func WithInvokeTimeout(d time.Duration) DelegationOption {
+	return func(cfg *delegationConfig) { cfg.invokeTimeout = d }
 }
 
 // WithServiceDiscovery supplies a shared ServiceDiscovery (for a shared agent-card
@@ -84,7 +95,10 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 		return nil, &ConfigurationError{Message: "client_id and client_secret must not be empty"}
 	}
 
-	cfg := delegationConfig{protocolVersion: defaultProtocolVersion}
+	cfg := delegationConfig{
+		protocolVersion: defaultProtocolVersion,
+		invokeTimeout:   defaultInvokeTimeout,
+	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -96,7 +110,12 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 
 	discovery := cfg.discovery
 	if discovery == nil {
-		discovery = NewServiceDiscovery()
+		var dopts []DiscoveryOption
+		if cfg.httpClient != nil {
+			// A caller-supplied client governs discovery too (e.g. a shared proxy).
+			dopts = append(dopts, WithDiscoveryHTTPClient(cfg.httpClient))
+		}
+		discovery = NewServiceDiscovery(dopts...)
 	}
 
 	exchange := oauth.NewTokenExchangeClient(issuer,
@@ -109,6 +128,7 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 		discovery:       discovery,
 		httpClient:      httpClient,
 		protocolVersion: cfg.protocolVersion,
+		invokeTimeout:   cfg.invokeTimeout,
 	}, nil
 }
 
@@ -122,6 +142,12 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken string, msg Message) (*Result, error) {
 	if strings.TrimSpace(subjectToken) == "" {
 		return nil, &ConfigurationError{Message: "subject_token must not be empty"}
+	}
+
+	if c.invokeTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.invokeTimeout)
+		defer cancel()
 	}
 
 	card, err := c.discovery.GetCard(ctx, target)
@@ -221,6 +247,9 @@ func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, 
 	}
 	if rpcResp.Result == nil {
 		return Message{}, &InvocationError{Message: "agent response carried neither result nor error"}
+	}
+	if rpcResp.Result.Message.MessageID == "" && len(rpcResp.Result.Message.Parts) == 0 {
+		return Message{}, &InvocationError{Message: "agent response carried an empty result message"}
 	}
 
 	return rpcResp.Result.Message, nil

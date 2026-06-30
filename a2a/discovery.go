@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -25,6 +27,7 @@ type ServiceDiscovery struct {
 
 	mu    sync.Mutex
 	cache map[string]cardEntry
+	group singleflight.Group
 }
 
 type cardEntry struct {
@@ -61,24 +64,45 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 }
 
 // GetCard returns the target agent's card, serving a cached copy while it is fresh and
-// fetching otherwise. It validates that the card carries a name.
+// fetching otherwise. Concurrent misses for the same target share a single fetch. It
+// validates that the card carries a name.
 func (d *ServiceDiscovery) GetCard(ctx context.Context, baseURL string) (AgentCard, error) {
 	key := strings.TrimRight(baseURL, "/")
 
-	d.mu.Lock()
-	if entry, ok := d.cache[key]; ok && time.Now().Before(entry.expiresAt) {
-		card := entry.card
-		d.mu.Unlock()
+	if card, ok := d.cachedFresh(key); ok {
 		return card, nil
 	}
-	d.mu.Unlock()
 
-	return d.Refresh(ctx, baseURL)
+	v, err, _ := d.group.Do(key, func() (any, error) {
+		// Another flight may have populated the cache while this one waited.
+		if card, ok := d.cachedFresh(key); ok {
+			return card, nil
+		}
+		return d.fetchAndCache(ctx, baseURL)
+	})
+	if err != nil {
+		return AgentCard{}, err
+	}
+	return v.(AgentCard), nil
 }
 
 // Refresh fetches the target agent's card, bypassing the cache, validates it, and
 // stores it in the cache.
 func (d *ServiceDiscovery) Refresh(ctx context.Context, baseURL string) (AgentCard, error) {
+	return d.fetchAndCache(ctx, baseURL)
+}
+
+// cachedFresh returns a cached card for key if present and not yet expired.
+func (d *ServiceDiscovery) cachedFresh(key string) (AgentCard, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if entry, ok := d.cache[key]; ok && time.Now().Before(entry.expiresAt) {
+		return entry.card, true
+	}
+	return AgentCard{}, false
+}
+
+func (d *ServiceDiscovery) fetchAndCache(ctx context.Context, baseURL string) (AgentCard, error) {
 	key := strings.TrimRight(baseURL, "/")
 	cardURL := key + agentCardPath
 

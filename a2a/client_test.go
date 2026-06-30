@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/keycardai/credentials-go/oauth"
 )
@@ -83,6 +84,8 @@ type fakeAgent struct {
 	lastBearer  string
 	failCode    int
 	failMessage string
+	hang        bool
+	emptyResult bool
 }
 
 func newFakeAgent(t *testing.T) *fakeAgent {
@@ -102,13 +105,32 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 		a.lastBearer = r.Header.Get("Authorization")
 		failMessage := a.failMessage
 		failCode := a.failCode
+		hang := a.hang
+		emptyResult := a.emptyResult
 		a.mu.Unlock()
+
+		if hang {
+			// Return when the client cancels, but cap it so the test server's Close()
+			// never blocks waiting on this handler.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(time.Second):
+			}
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if failMessage != "" {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"error":   map[string]any{"code": failCode, "message": failMessage},
+			})
+			return
+		}
+		if emptyResult {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"result":  map[string]any{},
 			})
 			return
 		}
@@ -222,6 +244,111 @@ func TestDelegationClient_Invoke_JSONRPCError(t *testing.T) {
 	if invErr.Code != -32000 {
 		t.Errorf("invocation error code: got %d, want -32000", invErr.Code)
 	}
+}
+
+// Review #1: the per-call timeout bounds Invoke even when the caller supplies an
+// http.Client with no Timeout, and surfaces the deadline as an InvocationError.
+func TestDelegationClient_Invoke_TimesOutIndependentOfClient(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+	agent.hang = true
+
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret",
+		WithHTTPClient(&http.Client{}), // no Timeout of its own
+		WithInvokeTimeout(150*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi"))
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Invoke ignored the invoke timeout (took %s)", elapsed)
+	}
+	var invErr *InvocationError
+	if !errors.As(err, &invErr) {
+		t.Errorf("errors.As(*InvocationError): got %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(context.DeadlineExceeded): got %v", err)
+	}
+}
+
+// Review #4: a result object present but carrying no message is an invocation error,
+// not a silent empty success.
+func TestDelegationClient_Invoke_EmptyResultMessage(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+	agent.emptyResult = true
+
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret")
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+
+	_, err = client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi"))
+	var invErr *InvocationError
+	if !errors.As(err, &invErr) {
+		t.Fatalf("errors.As(*InvocationError): got %v", err)
+	}
+}
+
+// Review #2: a caller-supplied HTTP client governs agent-card discovery too.
+func TestDelegationClient_HTTPClientGovernsDiscovery(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+
+	rt := &recordingTransport{base: http.DefaultTransport}
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret",
+		WithHTTPClient(&http.Client{Transport: rt}),
+	)
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+
+	if _, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi")); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if !rt.sawPath(agentCardPath) {
+		t.Errorf("agent-card discovery did not use the supplied HTTP client; paths=%v", rt.seenPaths())
+	}
+}
+
+// recordingTransport records the request paths it forwards, for asserting which client
+// served a given request.
+type recordingTransport struct {
+	base  http.RoundTripper
+	mu    sync.Mutex
+	paths []string
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.paths = append(rt.paths, req.URL.Path)
+	rt.mu.Unlock()
+	return rt.base.RoundTrip(req)
+}
+
+func (rt *recordingTransport) sawPath(p string) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for _, x := range rt.paths {
+		if x == p {
+			return true
+		}
+	}
+	return false
+}
+
+func (rt *recordingTransport) seenPaths() []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]string(nil), rt.paths...)
 }
 
 func TestNewDelegationClient_RejectsEmpty(t *testing.T) {
