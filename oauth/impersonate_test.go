@@ -53,17 +53,6 @@ func newImpersonateFixture(t *testing.T, responders ...http.HandlerFunc) *impers
 	return f
 }
 
-func ccOKResponder() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "actor-access-token",
-			"token_type":   "Bearer",
-			"expires_in":   3600,
-		})
-	}
-}
-
 func exchangeOKResponder() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -85,8 +74,8 @@ func oauthErrorResponder(status int, code string) http.HandlerFunc {
 }
 
 // Spec table row 1: valid user, valid resource → token returned, substitute-user URN
-// sent, and by default no actor token — zones without RFC 8693 actor-token support
-// reject any actor_token_type, so the zero value must produce the plain exchange.
+// sent, and no actor token — the server derives the acting party from the
+// authenticated client.
 func TestImpersonate_FullCall(t *testing.T) {
 	f := newImpersonateFixture(t, exchangeOKResponder())
 
@@ -133,16 +122,15 @@ func TestImpersonate_FullCall(t *testing.T) {
 	}
 }
 
-// ActorResource set → an actor token is minted via client_credentials audienced to
-// it and attached to the exchange; ClientAssertion rides on both calls.
-func TestImpersonate_WithActorResource(t *testing.T) {
-	f := newImpersonateFixture(t, ccOKResponder(), exchangeOKResponder())
+// ClientAssertion set → the assertion authenticates the exchange in the form
+// body; still a single token call with no actor fields.
+func TestImpersonate_WithClientAssertion(t *testing.T) {
+	f := newImpersonateFixture(t, exchangeOKResponder())
 
-	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
+	client := NewTokenExchangeClient(f.server.URL)
 	resp, err := client.Impersonate(context.Background(), ImpersonateRequest{
 		UserIdentifier:      "alice@example.com",
 		Resource:            "https://graph.microsoft.com",
-		ActorResource:       "urn:example:agent:self",
 		ClientAssertion:     "assertion.jwt.value",
 		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
 	})
@@ -153,32 +141,20 @@ func TestImpersonate_WithActorResource(t *testing.T) {
 		t.Errorf("access_token: got %q, want issued-token", resp.AccessToken)
 	}
 
-	if len(f.calls) != 2 {
-		t.Fatalf("token endpoint hit count: got %d, want 2 (actor mint + exchange)", len(f.calls))
+	if len(f.calls) != 1 {
+		t.Fatalf("token endpoint hit count: got %d, want 1 (exchange only)", len(f.calls))
 	}
 
-	cc, exchange := f.calls[0], f.calls[1]
-	if got := cc.Get("grant_type"); got != "client_credentials" {
-		t.Errorf("actor mint grant_type: got %q", got)
-	}
-	if got := cc.Get("resource"); got != "urn:example:agent:self" {
-		t.Errorf("actor mint resource: got %q, want urn:example:agent:self", got)
-	}
-	if got := cc.Get("client_assertion"); got != "assertion.jwt.value" {
-		t.Errorf("actor mint client_assertion: got %q", got)
-	}
-
-	if got := exchange.Get("actor_token"); got != "actor-access-token" {
-		t.Errorf("actor_token: got %q", got)
-	}
-	if got := exchange.Get("actor_token_type"); got != substituteUserActorTokenType {
-		t.Errorf("actor_token_type: got %q", got)
-	}
+	exchange := f.calls[0]
 	if got := exchange.Get("client_assertion"); got != "assertion.jwt.value" {
-		t.Errorf("exchange client_assertion: got %q", got)
+		t.Errorf("client_assertion: got %q", got)
 	}
 	if got := exchange.Get("client_assertion_type"); got != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
-		t.Errorf("exchange client_assertion_type: got %q", got)
+		t.Errorf("client_assertion_type: got %q", got)
+	}
+	if exchange.Has("actor_token") || exchange.Has("actor_token_type") {
+		t.Errorf("actor fields must be absent, got actor_token=%q actor_token_type=%q",
+			exchange.Get("actor_token"), exchange.Get("actor_token_type"))
 	}
 }
 
