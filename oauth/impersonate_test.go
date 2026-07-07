@@ -84,9 +84,11 @@ func oauthErrorResponder(status int, code string) http.HandlerFunc {
 	}
 }
 
-// Spec table row 1: valid user, valid resource → token returned, substitute-user URN sent.
+// Spec table row 1: valid user, valid resource → token returned, substitute-user URN
+// sent, and by default no actor token — zones without RFC 8693 actor-token support
+// reject any actor_token_type, so the zero value must produce the plain exchange.
 func TestImpersonate_FullCall(t *testing.T) {
-	f := newImpersonateFixture(t, ccOKResponder(), exchangeOKResponder())
+	f := newImpersonateFixture(t, exchangeOKResponder())
 
 	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
 	resp, err := client.Impersonate(context.Background(), ImpersonateRequest{
@@ -101,26 +103,22 @@ func TestImpersonate_FullCall(t *testing.T) {
 		t.Errorf("access_token: got %q, want issued-token", resp.AccessToken)
 	}
 
-	if len(f.calls) != 2 {
-		t.Fatalf("token endpoint hit count: got %d, want 2", len(f.calls))
+	if len(f.calls) != 1 {
+		t.Fatalf("token endpoint hit count: got %d, want 1 (exchange only)", len(f.calls))
 	}
 
-	cc, exchange := f.calls[0], f.calls[1]
-	if cc.Get("grant_type") != "client_credentials" {
-		t.Errorf("client_credentials grant_type: got %q", cc.Get("grant_type"))
-	}
-
+	exchange := f.calls[0]
 	if got := exchange.Get("grant_type"); got != "urn:ietf:params:oauth:grant-type:token-exchange" {
 		t.Errorf("exchange grant_type: got %q", got)
 	}
 	if got := exchange.Get("subject_token_type"); got != SubstituteUserTokenType {
 		t.Errorf("subject_token_type: got %q, want %q", got, SubstituteUserTokenType)
 	}
-	if got := exchange.Get("actor_token"); got != "actor-access-token" {
-		t.Errorf("actor_token: got %q", got)
+	if exchange.Has("actor_token") {
+		t.Errorf("actor_token: got %q, want absent", exchange.Get("actor_token"))
 	}
-	if got := exchange.Get("actor_token_type"); got != substituteUserActorTokenType {
-		t.Errorf("actor_token_type: got %q", got)
+	if exchange.Has("actor_token_type") {
+		t.Errorf("actor_token_type: got %q, want absent", exchange.Get("actor_token_type"))
 	}
 	if got := exchange.Get("resource"); got != "https://graph.microsoft.com" {
 		t.Errorf("resource: got %q", got)
@@ -135,9 +133,58 @@ func TestImpersonate_FullCall(t *testing.T) {
 	}
 }
 
+// ActorResource set → an actor token is minted via client_credentials audienced to
+// it and attached to the exchange; ClientAssertion rides on both calls.
+func TestImpersonate_WithActorResource(t *testing.T) {
+	f := newImpersonateFixture(t, ccOKResponder(), exchangeOKResponder())
+
+	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
+	resp, err := client.Impersonate(context.Background(), ImpersonateRequest{
+		UserIdentifier:      "alice@example.com",
+		Resource:            "https://graph.microsoft.com",
+		ActorResource:       "urn:example:agent:self",
+		ClientAssertion:     "assertion.jwt.value",
+		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+	})
+	if err != nil {
+		t.Fatalf("Impersonate: %v", err)
+	}
+	if resp.AccessToken != "issued-token" {
+		t.Errorf("access_token: got %q, want issued-token", resp.AccessToken)
+	}
+
+	if len(f.calls) != 2 {
+		t.Fatalf("token endpoint hit count: got %d, want 2 (actor mint + exchange)", len(f.calls))
+	}
+
+	cc, exchange := f.calls[0], f.calls[1]
+	if got := cc.Get("grant_type"); got != "client_credentials" {
+		t.Errorf("actor mint grant_type: got %q", got)
+	}
+	if got := cc.Get("resource"); got != "urn:example:agent:self" {
+		t.Errorf("actor mint resource: got %q, want urn:example:agent:self", got)
+	}
+	if got := cc.Get("client_assertion"); got != "assertion.jwt.value" {
+		t.Errorf("actor mint client_assertion: got %q", got)
+	}
+
+	if got := exchange.Get("actor_token"); got != "actor-access-token" {
+		t.Errorf("actor_token: got %q", got)
+	}
+	if got := exchange.Get("actor_token_type"); got != substituteUserActorTokenType {
+		t.Errorf("actor_token_type: got %q", got)
+	}
+	if got := exchange.Get("client_assertion"); got != "assertion.jwt.value" {
+		t.Errorf("exchange client_assertion: got %q", got)
+	}
+	if got := exchange.Get("client_assertion_type"); got != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
+		t.Errorf("exchange client_assertion_type: got %q", got)
+	}
+}
+
 // Spec table row 2: unknown user_identifier → invalid_grant.
 func TestImpersonate_UnknownUserIdentifier(t *testing.T) {
-	f := newImpersonateFixture(t, ccOKResponder(), oauthErrorResponder(http.StatusBadRequest, "invalid_grant"))
+	f := newImpersonateFixture(t, oauthErrorResponder(http.StatusBadRequest, "invalid_grant"))
 
 	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
 	_, err := client.Impersonate(context.Background(), ImpersonateRequest{
@@ -155,7 +202,7 @@ func TestImpersonate_UnknownUserIdentifier(t *testing.T) {
 
 // Spec table row 3: client lacks impersonation permission → unauthorized_client.
 func TestImpersonate_UnauthorizedClient(t *testing.T) {
-	f := newImpersonateFixture(t, ccOKResponder(), oauthErrorResponder(http.StatusBadRequest, "unauthorized_client"))
+	f := newImpersonateFixture(t, oauthErrorResponder(http.StatusBadRequest, "unauthorized_client"))
 
 	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
 	_, err := client.Impersonate(context.Background(), ImpersonateRequest{
@@ -188,7 +235,7 @@ func TestImpersonate_ResourceRequiredLocally(t *testing.T) {
 
 // Spec table row 5: scopes omitted → exchange call omits scope param.
 func TestImpersonate_ScopesOmitted(t *testing.T) {
-	f := newImpersonateFixture(t, ccOKResponder(), exchangeOKResponder())
+	f := newImpersonateFixture(t, exchangeOKResponder())
 
 	client := NewTokenExchangeClient(f.server.URL, WithClientCredentials("app", "secret"))
 	_, err := client.Impersonate(context.Background(), ImpersonateRequest{
@@ -198,7 +245,7 @@ func TestImpersonate_ScopesOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Impersonate: %v", err)
 	}
-	exchange := f.calls[1]
+	exchange := f.calls[0]
 	if exchange.Has("scope") {
 		t.Errorf("scope should be omitted, got %q", exchange.Get("scope"))
 	}
