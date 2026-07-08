@@ -18,7 +18,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 func main() {

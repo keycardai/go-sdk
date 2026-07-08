@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // grantTokenServer is a fake zone that serves discovery and a /token endpoint, recording

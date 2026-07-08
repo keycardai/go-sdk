@@ -19,7 +19,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 	}
 
 	resp, err := oauth.RegisterClient(ctx, zoneURL, oauth.RegistrationRequest{
-		ClientName:              "credentials-go example",
+		ClientName:              "go-sdk example",
 		RedirectURIs:            []string{"http://127.0.0.1:8765/callback"},
 		GrantTypes:              []string{"authorization_code"},
 		TokenEndpointAuthMethod: "none",

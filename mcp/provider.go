@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // AccessContext, its status/error types, and ResourceAccessError now live in the oauth

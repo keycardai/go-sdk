@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/keycardai/credentials-go/a2a"
+	"github.com/keycardai/go-sdk/a2a"
 )
 
 // ExampleDelegationClient_Invoke shows a calling agent delegating a task to a target

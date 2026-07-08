@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/keycardai/credentials-go/a2a"
+	"github.com/keycardai/go-sdk/a2a"
 )
 
 func main() {

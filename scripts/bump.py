@@ -133,7 +133,7 @@ def push_changes_with_retry(max_attempts: int = 3) -> bool:
 
 
 def main():
-    print("Starting version bump for credentials-go...")
+    print("Starting version bump for go-sdk...")
 
     configure_git()
 

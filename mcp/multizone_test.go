@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // mustMultiZone builds a multi-zone client-secret credential and fails the test if

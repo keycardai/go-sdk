@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // PrivateKeyStorage persists RSA key pairs for WebIdentity.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // ClientAuth holds client_id and client_secret for HTTP basic auth.
