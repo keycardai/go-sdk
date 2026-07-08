@@ -1,3 +1,10 @@
+## v0.13.1 (2026-07-08)
+
+
+- fix: allow for non-actor impersonation (#29)
+- * fix: allow for non-actor impersonation
+- * fix: remove actor_token
+
 ## v0.13.0 (2026-06-30)
 
 
