@@ -6,11 +6,10 @@
 // requested resource. Impersonation is forbidden by default and must be
 // explicitly permitted by server-side Keycard policy.
 //
-// It performs an RFC 8693 token exchange where the actor token is minted from
-// the client's own credentials (a client_credentials grant) and the subject
-// token is an unsigned substitute-user assertion carrying the target user id.
-// The issued token's "sub" is the target user; its "act" chain identifies this
-// service for audit.
+// It performs an RFC 8693 token exchange authenticated with the client's own
+// credentials, where the subject token is an unsigned substitute-user
+// assertion carrying the target user id. The issued token's "sub" is the
+// target user; the server records this service in its "act" chain for audit.
 //
 // Configuration (environment variables):
 //

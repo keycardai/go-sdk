@@ -70,9 +70,6 @@ type TokenExchangeClient struct {
 	once          sync.Once
 	tokenEndpoint string
 	discoverErr   error
-
-	ccOnce sync.Once
-	cc     *ClientCredentialsClient
 }
 
 // NewTokenExchangeClient creates a new TokenExchangeClient for the given issuer.
@@ -129,20 +126,6 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	}
 
 	return deserializeTokenResponse(resp)
-}
-
-// clientCredentialsClient lazily builds a ClientCredentialsClient that shares this
-// client's issuer, credentials, and HTTP client. It is used to mint the actor token
-// for an impersonation exchange, reusing the client-credentials grant rather than
-// reimplementing it. The instance is cached so it discovers its token endpoint once.
-func (c *TokenExchangeClient) clientCredentialsClient() *ClientCredentialsClient {
-	c.ccOnce.Do(func() {
-		c.cc = NewClientCredentialsClient(c.issuerURL,
-			WithCCBasicAuth(c.cfg.clientID, c.cfg.clientSecret),
-			WithCCHTTPClient(c.cfg.httpClient),
-		)
-	})
-	return c.cc
 }
 
 func (c *TokenExchangeClient) getTokenEndpoint(ctx context.Context) (string, error) {
