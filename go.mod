@@ -1,4 +1,4 @@
-module github.com/keycardai/credentials-go
+module github.com/keycardai/go-sdk
 
 go 1.22
 

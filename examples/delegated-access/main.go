@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/keycardai/credentials-go/mcp"
+	"github.com/keycardai/go-sdk/mcp"
 )
 
 func main() {

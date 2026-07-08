@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // These tests drive real signed JWTs through RequireBearerAuth with a hardened

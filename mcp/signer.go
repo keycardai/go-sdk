@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // JSONWebTokenSigner signs JWTs for MCP client authentication.

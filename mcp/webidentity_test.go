@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // assertionClaims decodes (without verifying) the claims of a JWT client assertion.

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // fakeZone is a fake Keycard authorization server: it advertises a token endpoint and

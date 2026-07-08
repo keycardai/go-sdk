@@ -8,15 +8,15 @@ Go SDK for [Keycard](https://keycard.cloud) — OAuth 2.0 and MCP authentication
 ## Installation
 
 ```bash
-go get github.com/keycardai/credentials-go
+go get github.com/keycardai/go-sdk
 ```
 
 Import the sub-package you need:
 
 ```go
-import "github.com/keycardai/credentials-go/oauth"  // Pure OAuth 2.0 primitives
-import "github.com/keycardai/credentials-go/mcp"    // MCP-specific OAuth integration
-import "github.com/keycardai/credentials-go/a2a"    // Agent-to-agent delegation
+import "github.com/keycardai/go-sdk/oauth"  // Pure OAuth 2.0 primitives
+import "github.com/keycardai/go-sdk/mcp"    // MCP-specific OAuth integration
+import "github.com/keycardai/go-sdk/a2a"    // Agent-to-agent delegation
 ```
 
 ## Packages
@@ -134,11 +134,11 @@ authProvider, _ := mcp.NewAuthProvider(
 
 ## Credential Types
 
-| Type | Auth Method | Use Case |
-|------|-------------|----------|
-| `ClientSecret` | HTTP Basic Auth | Simple deployments with client_id/secret |
-| `WebIdentity` | `private_key_jwt` (RFC 7523) | Zero-secret deployments, auto-generates RSA keys |
-| `EKSWorkloadIdentity` | Pod identity token | AWS EKS workloads |
+| Type                  | Auth Method                  | Use Case                                         |
+| --------------------- | ---------------------------- | ------------------------------------------------ |
+| `ClientSecret`        | HTTP Basic Auth              | Simple deployments with client_id/secret         |
+| `WebIdentity`         | `private_key_jwt` (RFC 7523) | Zero-secret deployments, auto-generates RSA keys |
+| `EKSWorkloadIdentity` | Pod identity token           | AWS EKS workloads                                |
 
 ## Error Handling
 
@@ -181,5 +181,5 @@ git push origin v0.1.0
 [pkg.go.dev](https://pkg.go.dev) indexes automatically. To trigger manually:
 
 ```bash
-GOPROXY=proxy.golang.org go list -m github.com/keycardai/credentials-go@v0.1.0
+GOPROXY=proxy.golang.org go list -m github.com/keycardai/go-sdk@v0.1.0
 ```

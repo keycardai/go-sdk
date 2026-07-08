@@ -1,6 +1,6 @@
 // Package mcp provides MCP-specific OAuth integration for the Keycard SDK.
 //
-// This package builds on [github.com/keycardai/credentials-go/oauth] to provide:
+// This package builds on [github.com/keycardai/go-sdk/oauth] to provide:
 //
 //   - Bearer auth middleware for protecting HTTP endpoints ([RequireBearerAuth])
 //   - Token exchange orchestration for delegated access ([AuthProvider], [AccessContext])

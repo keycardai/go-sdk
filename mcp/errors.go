@@ -1,6 +1,6 @@
 package mcp
 
-import "github.com/keycardai/credentials-go/oauth"
+import "github.com/keycardai/go-sdk/oauth"
 
 // ResourceAccessError is re-exported from the oauth package (where it now lives alongside
 // AccessContext) for backward compatibility.

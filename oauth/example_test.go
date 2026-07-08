@@ -3,7 +3,7 @@ package oauth_test
 import (
 	"fmt"
 
-	"github.com/keycardai/credentials-go/oauth"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // ExampleGenerateCodeChallenge derives an S256 PKCE challenge from a verifier
