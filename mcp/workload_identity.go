@@ -1,0 +1,81 @@
+package mcp
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/keycardai/go-sdk/oauth"
+)
+
+// SubjectTokenSource supplies a platform-signed OIDC token for use as a client
+// assertion during token exchange. It is the only per-platform piece of a
+// workload identity credential: [FileTokenSource] covers platforms that
+// project the token to a file (EKS, AKS, Kubernetes projected service-account
+// tokens), [GCPMetadataTokenSource] covers platforms that serve it from the
+// GCP metadata endpoint (GKE, GCE, Cloud Run), and [SubjectTokenFunc] adapts
+// any custom fetch.
+//
+// SubjectToken is called on every token exchange. Implementations must return
+// the current token; platforms rotate these tokens, so returning a stale
+// cached value risks an expired assertion.
+type SubjectTokenSource interface {
+	SubjectToken(ctx context.Context) (string, error)
+}
+
+// SubjectTokenFunc adapts a function to a SubjectTokenSource.
+type SubjectTokenFunc func(ctx context.Context) (string, error)
+
+// SubjectToken implements SubjectTokenSource.
+func (f SubjectTokenFunc) SubjectToken(ctx context.Context) (string, error) { return f(ctx) }
+
+// WorkloadIdentityCredential implements ApplicationCredential using a
+// platform-signed OIDC token obtained from a SubjectTokenSource. On every
+// token exchange it fetches the current token from the source and attaches it
+// as a jwt-bearer client assertion. It holds no shared secret and never
+// caches the token across requests.
+type WorkloadIdentityCredential struct {
+	source SubjectTokenSource
+}
+
+// NewWorkloadIdentity creates a WorkloadIdentityCredential backed by source.
+// It returns a WorkloadIdentityConfigurationError if source is nil.
+func NewWorkloadIdentity(source SubjectTokenSource) (*WorkloadIdentityCredential, error) {
+	if source == nil {
+		return nil, &WorkloadIdentityConfigurationError{Message: "subject token source must not be nil"}
+	}
+	return &WorkloadIdentityCredential{source: source}, nil
+}
+
+// Auth returns nil (workload identity uses assertion-based auth, not basic auth).
+func (w *WorkloadIdentityCredential) Auth(_ string) *ClientAuth {
+	return nil
+}
+
+// PrepareTokenExchangeRequest builds a token exchange request with the current
+// platform token as the client assertion. Built-in sources fail with
+// WorkloadIdentityConfigurationError or WorkloadIdentityRuntimeError; any
+// other source error is wrapped in a WorkloadIdentityRuntimeError with
+// Source "custom".
+func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, _ *PrepareOptions) (*oauth.TokenExchangeRequest, error) {
+	assertion, err := w.source.SubjectToken(ctx)
+	if err != nil {
+		var cfgErr *WorkloadIdentityConfigurationError
+		var runtimeErr *WorkloadIdentityRuntimeError
+		if errors.As(err, &runtimeErr) || errors.As(err, &cfgErr) {
+			return nil, err
+		}
+		return nil, &WorkloadIdentityRuntimeError{Source: workloadIdentitySourceCustom, Message: "fetching subject token", Err: err}
+	}
+	if strings.TrimSpace(assertion) == "" {
+		return nil, &WorkloadIdentityRuntimeError{Source: workloadIdentitySourceCustom, Message: "subject token source returned an empty token"}
+	}
+
+	return &oauth.TokenExchangeRequest{
+		SubjectToken:        subjectToken,
+		Resource:            resource,
+		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
+		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+		ClientAssertion:     assertion,
+	}, nil
+}
