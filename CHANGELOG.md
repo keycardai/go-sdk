@@ -1,3 +1,18 @@
+## v0.14.0 (2026-07-13)
+
+
+- revert: undo policy bundle package and credentials-go 0.14.0 bump (#32)
+- Reverts:
+- feat(policy): add policy bundle package with tar+gzip codec (14b9500)
+- bump: credentials-go 0.13.1 → 0.14.0 (11f125c)
+- Co-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>
+- feat(policy): add policy bundle package with tar+gzip codec
+- Adds github.com/keycardai/go-sdk/policy — a pure format layer for
+Keycard policy bundles (Cedar schema + policy set + manifest). Includes
+a deterministic tar+gzip codec, decompression-bomb protection, and a
+JCS-canonical manifest digest (RFC 8785) for content-addressed ETags.
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
 ## v0.13.1 (2026-07-08)
 
 
