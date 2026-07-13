@@ -1,6 +1,6 @@
 [tool.commitizen]
 name = "cz_customize"
-version = "0.14.0"
+version = "0.13.1"
 tag_format = "v${version}"
 update_changelog_on_bump = true
 bump_message = "bump: credentials-go $current_version → $new_version"
