@@ -35,20 +35,37 @@ func (f SubjectTokenFunc) SubjectToken(ctx context.Context) (string, error) { re
 // as a jwt-bearer client assertion. It holds no shared secret and never
 // caches the token across requests.
 type WorkloadIdentityCredential struct {
-	source SubjectTokenSource
+	source   SubjectTokenSource
+	clientID string
+}
+
+// WorkloadIdentityOption configures a WorkloadIdentityCredential.
+type WorkloadIdentityOption func(*WorkloadIdentityCredential)
+
+// WithWorkloadClientID sets the ID of the Keycard application credential this
+// workload authenticates as. It is sent as the client_id form parameter
+// alongside the client assertion. Token-federation application credentials
+// are resolved by this ID, so they require it; legacy token credentials are
+// resolved by the assertion's subject and ignore it.
+func WithWorkloadClientID(clientID string) WorkloadIdentityOption {
+	return func(w *WorkloadIdentityCredential) { w.clientID = clientID }
 }
 
 // NewWorkloadIdentity creates a WorkloadIdentityCredential backed by source.
 // It returns a WorkloadIdentityConfigurationError if source is nil (including
 // a nil SubjectTokenFunc).
-func NewWorkloadIdentity(source SubjectTokenSource) (*WorkloadIdentityCredential, error) {
+func NewWorkloadIdentity(source SubjectTokenSource, opts ...WorkloadIdentityOption) (*WorkloadIdentityCredential, error) {
 	if source == nil {
 		return nil, &WorkloadIdentityConfigurationError{Message: "subject token source must not be nil"}
 	}
 	if f, ok := source.(SubjectTokenFunc); ok && f == nil {
 		return nil, &WorkloadIdentityConfigurationError{Message: "subject token source function must not be nil"}
 	}
-	return &WorkloadIdentityCredential{source: source}, nil
+	w := &WorkloadIdentityCredential{source: source}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w, nil
 }
 
 // Auth returns nil (workload identity uses assertion-based auth, not basic auth).
@@ -81,5 +98,6 @@ func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Con
 		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
 		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
 		ClientAssertion:     assertion,
+		ClientID:            w.clientID,
 	}, nil
 }

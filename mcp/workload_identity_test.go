@@ -493,3 +493,35 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 		}
 	})
 }
+
+func TestWorkloadIdentity_ClientID(t *testing.T) {
+	source := SubjectTokenFunc(func(_ context.Context) (string, error) { return "platform-token", nil })
+
+	t.Run("set", func(t *testing.T) {
+		cred, err := NewWorkloadIdentity(source, WithWorkloadClientID("acr_123"))
+		if err != nil {
+			t.Fatalf("constructing credential: %v", err)
+		}
+		req, err := cred.PrepareTokenExchangeRequest(context.Background(), "subject-token", "https://resource.example.com", nil)
+		if err != nil {
+			t.Fatalf("preparing request: %v", err)
+		}
+		if req.ClientID != "acr_123" {
+			t.Errorf("client id: got %q, want the configured credential id", req.ClientID)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		cred, err := NewWorkloadIdentity(source)
+		if err != nil {
+			t.Fatalf("constructing credential: %v", err)
+		}
+		req, err := cred.PrepareTokenExchangeRequest(context.Background(), "subject-token", "https://resource.example.com", nil)
+		if err != nil {
+			t.Fatalf("preparing request: %v", err)
+		}
+		if req.ClientID != "" {
+			t.Errorf("client id: got %q, want empty when not configured", req.ClientID)
+		}
+	})
+}

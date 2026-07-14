@@ -142,6 +142,8 @@ authProvider, _ := mcp.NewAuthProvider(
 
 `WorkloadIdentity` takes a pluggable token source: `FileTokenSource` (projected token files: EKS, AKS, any Kubernetes projected service-account token), `GCPMetadataTokenSource` (GKE, GCE, Cloud Run), `FlyTokenSource` (Fly Machines), or any `SubjectTokenFunc`:
 
+When the zone-side application credential is resolved by ID (a token-federation credential), pass that ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion.
+
 ```go
 source, _ := mcp.NewFileTokenSource() // discovers the projected token file from env
 credential, _ := mcp.NewWorkloadIdentity(source)
