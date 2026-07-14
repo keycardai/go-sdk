@@ -29,6 +29,7 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **JWKS keyring** — `JWKSOAuthKeyring` with two-level caching and request deduplication
 - **Token exchange** — `TokenExchangeClient` (RFC 8693)
 - **Discovery** — `FetchAuthorizationServerMetadata` (RFC 8414)
+- **Application credentials** — `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
 
 ### `mcp` — MCP OAuth Integration
 
@@ -36,8 +37,9 @@ Builds on `oauth` to provide server-side and client-side MCP authentication.
 
 - **Bearer auth middleware** — `RequireBearerAuth` (standard `net/http` middleware), audience-bound via `oauth.WithAudiences`
 - **Token exchange orchestration** — `AuthProvider`, `AccessContext`; the `Grant` decorator with `WithUserIdentifier` (impersonation) and `WithRequestScopes`
-- **Application credentials** — `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
 - **Metadata endpoints** — `AuthMetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
+
+Application credentials moved to the `oauth` package; `mcp` re-exports them as deprecated aliases, so existing imports keep working.
 
 ### `a2a` — Agent-to-Agent Delegation
 
@@ -74,7 +76,7 @@ mux.Handle("GET /api/hello", protected)
 ### Delegated access via token exchange
 
 ```go
-cred, _ := mcp.NewClientSecret(clientID, clientSecret)
+cred, _ := oauth.NewClientSecret(clientID, clientSecret)
 authProvider, _ := mcp.NewAuthProvider(
     mcp.WithZoneURL("https://your-zone.keycard.cloud"),
     mcp.WithApplicationCredential(cred),
@@ -102,7 +104,7 @@ handler := mcp.RequireBearerAuth(
 ### Standalone token exchange (without middleware)
 
 ```go
-cred, _ := mcp.NewClientSecret(clientID, clientSecret)
+cred, _ := oauth.NewClientSecret(clientID, clientSecret)
 authProvider, _ := mcp.NewAuthProvider(
     mcp.WithZoneURL("https://your-zone.keycard.cloud"),
     mcp.WithApplicationCredential(cred),
@@ -120,10 +122,10 @@ token, _ := ac.Access("https://api.github.com")
 ### Using WebIdentity (private_key_jwt)
 
 ```go
-webIdentity := mcp.NewWebIdentity(
-    mcp.WithClientID("your-client-id"), // required: the assertion's iss/sub
-    mcp.WithServerName("my-mcp-server"),
-    mcp.WithStorageDir("./server_keys"),
+webIdentity := oauth.NewWebIdentity(
+    oauth.WithClientID("your-client-id"), // required: the assertion's iss/sub
+    oauth.WithServerName("my-mcp-server"),
+    oauth.WithStorageDir("./server_keys"),
 )
 
 authProvider, _ := mcp.NewAuthProvider(
@@ -145,8 +147,8 @@ authProvider, _ := mcp.NewAuthProvider(
 When the zone-side application credential is resolved by ID (a token-federation credential), pass that ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion.
 
 ```go
-source, _ := mcp.NewFileTokenSource() // discovers the projected token file from env
-credential, _ := mcp.NewWorkloadIdentity(source)
+source, _ := oauth.NewFileTokenSource() // discovers the projected token file from env
+credential, _ := oauth.NewWorkloadIdentity(source)
 ```
 
 `EKSWorkloadIdentity` is deprecated: it is an alias for `WorkloadIdentity` with a `FileTokenSource` limited to EKS env-var discovery. Existing code keeps working; new code should use `NewWorkloadIdentity`.

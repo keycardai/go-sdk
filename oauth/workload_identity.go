@@ -1,11 +1,9 @@
-package mcp
+package oauth
 
 import (
 	"context"
 	"errors"
 	"strings"
-
-	"github.com/keycardai/go-sdk/oauth"
 )
 
 // IdentityTokenSource supplies a platform-signed OIDC token for use as a client
@@ -78,7 +76,7 @@ func (w *WorkloadIdentityCredential) Auth(_ string) *ClientAuth {
 // WorkloadIdentityConfigurationError or WorkloadIdentityRuntimeError; any
 // other source error is wrapped in a WorkloadIdentityRuntimeError with
 // Source "custom".
-func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, _ *PrepareOptions) (*oauth.TokenExchangeRequest, error) {
+func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, _ *PrepareOptions) (*TokenExchangeRequest, error) {
 	assertion, err := w.source.IdentityToken(ctx)
 	if err != nil {
 		var cfgErr *WorkloadIdentityConfigurationError
@@ -92,7 +90,7 @@ func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Con
 		return nil, &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "identity token source returned an empty token"}
 	}
 
-	return &oauth.TokenExchangeRequest{
+	return &TokenExchangeRequest{
 		SubjectToken:        subjectToken,
 		Resource:            resource,
 		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
