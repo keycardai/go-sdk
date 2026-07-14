@@ -36,6 +36,58 @@ func sampleBundle() *Bundle {
 	}
 }
 
+// Bundle.Digest recomputes SHAs from content, so it matches Manifest.Digest
+// whether the in-memory manifest carries correct SHAs, empty SHAs, or wrong
+// ones — the bundle bytes are authoritative.
+func TestBundleDigest_RecomputesFromContent(t *testing.T) {
+	want, err := sampleBundle().Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+
+	// Same content, but the manifest carries bogus SHAs: digest is unchanged.
+	dirty := sampleBundle()
+	dirty.Manifest.Schema.SHA = "sha256:deadbeef"
+	for i := range dirty.Manifest.Policies {
+		dirty.Manifest.Policies[i].SHA = "sha256:garbage"
+	}
+	got, err := dirty.Digest()
+	if err != nil {
+		t.Fatalf("Digest (dirty): %v", err)
+	}
+	if got != want {
+		t.Errorf("Digest must ignore manifest-carried SHAs: got %q, want %q", got, want)
+	}
+
+	// Different policy bytes must change the digest.
+	changed := sampleBundle()
+	changed.Policies["pol_a"] = []byte(`permit(principal, action, resource);`)
+	other, err := changed.Digest()
+	if err != nil {
+		t.Fatalf("Digest (changed): %v", err)
+	}
+	if other == want {
+		t.Error("Digest must change when policy content changes")
+	}
+}
+
+// Bundle.Digest rejects a Policies key with no manifest entry, like Encode.
+func TestBundleDigest_PolicyWithoutManifestEntry(t *testing.T) {
+	b := sampleBundle()
+	b.Policies["pol_orphan"] = []byte(`permit(principal, action, resource);`)
+	if _, err := b.Digest(); !errors.Is(err, ErrInvalidManifest) {
+		t.Errorf("got %v, want ErrInvalidManifest", err)
+	}
+}
+
+// A nil bundle has no identity.
+func TestBundleDigest_Nil(t *testing.T) {
+	var b *Bundle
+	if _, err := b.Digest(); !errors.Is(err, ErrMissingBundle) {
+		t.Errorf("got %v, want ErrMissingBundle", err)
+	}
+}
+
 func encodeToBytes(t *testing.T, b *Bundle) []byte {
 	t.Helper()
 	var buf bytes.Buffer

@@ -53,17 +53,79 @@ func (m Manifest) Digest() (string, error) {
 	for i := range c.Policies {
 		c.Policies[i].Name = ""
 	}
-	sort.Slice(c.Policies, func(i, j int) bool {
-		if c.Policies[i].PublicID != c.Policies[j].PublicID {
-			return c.Policies[i].PublicID < c.Policies[j].PublicID
-		}
-		return c.Policies[i].NewPolicy < c.Policies[j].NewPolicy
-	})
+	sortPolicyRefs(c.Policies)
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return "", fmt.Errorf("marshal manifest: %w", err)
 	}
 	return contentSHA(raw)
+}
+
+// Digest returns the bundle's attestable identity computed from its current
+// content: it recomputes the schema and every policy SHA from the in-memory
+// bytes, then returns Manifest.Digest of the resulting manifest. Prefer this
+// over Manifest.Digest when you hold a Bundle — Manifest.Digest trusts whatever
+// SHAs the manifest already carries, whereas this is authoritative over the
+// actual Schema and Policies bytes (the same SHAs Encode would write).
+func (b *Bundle) Digest() (string, error) {
+	if b == nil {
+		return "", ErrMissingBundle
+	}
+	manifest, err := b.buildManifest()
+	if err != nil {
+		return "", err
+	}
+	return manifest.Digest()
+}
+
+// buildManifest constructs the canonical manifest for the bundle's current
+// content: the schema SHA and every policy SHA are computed from b's in-memory
+// bytes, each policy ref keeps its PublicID/NewPolicy identity and advisory
+// Name, and entries are sorted for determinism. It errors if a Policies key has
+// no matching manifest entry. Encode, Unload, and Digest share it so the three
+// agree byte-for-byte on the manifest they produce. Callers guard b != nil.
+func (b *Bundle) buildManifest() (Manifest, error) {
+	manifest := Manifest{
+		Schema: SchemaRef{
+			Version: b.Manifest.Schema.Version,
+			SHA:     sha256Hex(b.Schema),
+		},
+		TargetType: b.Manifest.TargetType,
+		TargetID:   b.Manifest.TargetID,
+		Policies:   make([]PolicyRef, 0, len(b.Policies)),
+	}
+	// Look up each content key's manifest ref to preserve PolicyRef type
+	// (PublicID vs NewPolicy) and advisory Name in the output.
+	refByKey := make(map[string]PolicyRef, len(b.Manifest.Policies))
+	for _, ref := range b.Manifest.Policies {
+		key, err := manifestRefKey(ref)
+		if err != nil {
+			return Manifest{}, err
+		}
+		refByKey[key] = ref
+	}
+	for id, content := range b.Policies {
+		ref, ok := refByKey[id]
+		if !ok {
+			return Manifest{}, fmt.Errorf("%w: policy %q has no manifest entry", ErrInvalidManifest, id)
+		}
+		ref.SHA = sha256Hex(content)
+		manifest.Policies = append(manifest.Policies, ref)
+	}
+	sortPolicyRefs(manifest.Policies)
+	return manifest, nil
+}
+
+// sortPolicyRefs orders refs by PublicID then NewPolicy so a manifest built from
+// map iteration is deterministic. new_policy-only entries (empty PublicID) sort
+// together, ordered by NewPolicy.
+func sortPolicyRefs(refs []PolicyRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].PublicID != refs[j].PublicID {
+			return refs[i].PublicID < refs[j].PublicID
+		}
+		return refs[i].NewPolicy < refs[j].NewPolicy
+	})
 }
 
 // SchemaRef identifies the bundle's schema version and the digest of its bytes.
@@ -227,12 +289,7 @@ func LoadBundle(fsys fs.FS) (*Bundle, error) {
 		ref.SHA = sha256Hex(policies[key])
 		manifest.Policies = append(manifest.Policies, ref)
 	}
-	sort.Slice(manifest.Policies, func(i, j int) bool {
-		if manifest.Policies[i].PublicID != manifest.Policies[j].PublicID {
-			return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
-		}
-		return manifest.Policies[i].NewPolicy < manifest.Policies[j].NewPolicy
-	})
+	sortPolicyRefs(manifest.Policies)
 
 	return &Bundle{Manifest: manifest, Schema: schemaData, Policies: policies}, nil
 }
@@ -248,38 +305,10 @@ func (b *Bundle) Unload(fsys WriteFS) error {
 		return ErrMissingVersion
 	}
 
-	manifest := Manifest{
-		Schema: SchemaRef{
-			Version: b.Manifest.Schema.Version,
-			SHA:     sha256Hex(b.Schema),
-		},
-		TargetType: b.Manifest.TargetType,
-		TargetID:   b.Manifest.TargetID,
-		Policies:   make([]PolicyRef, 0, len(b.Policies)),
+	manifest, err := b.buildManifest()
+	if err != nil {
+		return err
 	}
-	// preserve PolicyRef type (PublicID vs NewPolicy) and advisory Name
-	refByKey := make(map[string]PolicyRef, len(b.Manifest.Policies))
-	for _, ref := range b.Manifest.Policies {
-		key, err := manifestRefKey(ref)
-		if err != nil {
-			return err
-		}
-		refByKey[key] = ref
-	}
-	for id, content := range b.Policies {
-		ref, ok := refByKey[id]
-		if !ok {
-			return fmt.Errorf("%w: policy %q has no manifest entry", ErrInvalidManifest, id)
-		}
-		ref.SHA = sha256Hex(content)
-		manifest.Policies = append(manifest.Policies, ref)
-	}
-	sort.Slice(manifest.Policies, func(i, j int) bool {
-		if manifest.Policies[i].PublicID != manifest.Policies[j].PublicID {
-			return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
-		}
-		return manifest.Policies[i].NewPolicy < manifest.Policies[j].NewPolicy
-	})
 
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

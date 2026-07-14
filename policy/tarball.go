@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 )
@@ -51,39 +50,10 @@ func (tarGZipCodec) Encode(w io.Writer, b *Bundle) (err error) {
 	if b.Manifest.Schema.Version == "" {
 		return ErrMissingVersion
 	}
-	manifest := Manifest{
-		Schema: SchemaRef{
-			Version: b.Manifest.Schema.Version,
-			SHA:     sha256Hex(b.Schema),
-		},
-		TargetType: b.Manifest.TargetType,
-		TargetID:   b.Manifest.TargetID,
-		Policies:   make([]PolicyRef, 0, len(b.Policies)),
+	manifest, err := b.buildManifest()
+	if err != nil {
+		return err
 	}
-	// build lookup for manifest refs so PolicyRef type (PublicID vs NewPolicy)
-	// and advisory Name are preserved in the encoded output.
-	refByKey := make(map[string]PolicyRef, len(b.Manifest.Policies))
-	for _, ref := range b.Manifest.Policies {
-		key, err := manifestRefKey(ref)
-		if err != nil {
-			return err
-		}
-		refByKey[key] = ref
-	}
-	for id, content := range b.Policies {
-		ref, ok := refByKey[id]
-		if !ok {
-			return fmt.Errorf("%w: policy %q has no manifest entry", ErrInvalidManifest, id)
-		}
-		ref.SHA = sha256Hex(content)
-		manifest.Policies = append(manifest.Policies, ref)
-	}
-	sort.Slice(manifest.Policies, func(i, j int) bool {
-		if manifest.Policies[i].PublicID != manifest.Policies[j].PublicID {
-			return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
-		}
-		return manifest.Policies[i].NewPolicy < manifest.Policies[j].NewPolicy
-	})
 
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -258,12 +228,7 @@ func (tarGZipCodec) Decode(r io.Reader) (*Bundle, error) {
 		manifest.Policies = append(manifest.Policies, ref)
 		kept[key] = content
 	}
-	sort.Slice(manifest.Policies, func(i, j int) bool {
-		if manifest.Policies[i].PublicID != manifest.Policies[j].PublicID {
-			return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
-		}
-		return manifest.Policies[i].NewPolicy < manifest.Policies[j].NewPolicy
-	})
+	sortPolicyRefs(manifest.Policies)
 
 	return &Bundle{Manifest: manifest, Schema: schema, Policies: kept}, nil
 }
