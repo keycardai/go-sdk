@@ -5,6 +5,46 @@ import (
 	"testing"
 )
 
+func TestPolicySet(t *testing.T) {
+	b := &Bundle{
+		Manifest: Manifest{Schema: SchemaRef{Version: "2026-02-14"}},
+		Policies: map[string][]byte{
+			"pol_a": []byte(`@id("a")
+permit(principal, action, resource);`),
+			"pol_b": []byte(`@id("b")
+forbid(principal, action, resource);`),
+		},
+	}
+	ps, err := b.PolicySet()
+	if err != nil {
+		t.Fatalf("PolicySet: %v", err)
+	}
+	count := 0
+	for range ps.All() {
+		count++
+	}
+	if count != 2 {
+		t.Errorf("policy count = %d, want 2", count)
+	}
+}
+
+func TestPolicySet_InvalidPolicy(t *testing.T) {
+	b := &Bundle{
+		Manifest: Manifest{Schema: SchemaRef{Version: "2026-02-14"}},
+		Policies: map[string][]byte{"pol_bad": []byte(`this is not cedar !!!`)},
+	}
+	if _, err := b.PolicySet(); !errors.Is(err, ErrInvalidPolicy) {
+		t.Errorf("got %v, want ErrInvalidPolicy", err)
+	}
+}
+
+func TestPolicySet_Nil(t *testing.T) {
+	var b *Bundle
+	if _, err := b.PolicySet(); !errors.Is(err, ErrMissingBundle) {
+		t.Errorf("got %v, want ErrMissingBundle", err)
+	}
+}
+
 func TestValidate_ValidBundle(t *testing.T) {
 	b := sampleBundle()
 	result, err := b.Validate()

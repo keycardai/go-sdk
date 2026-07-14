@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 
@@ -64,6 +65,32 @@ func (b *Bundle) Validate() (*ValidationResult, error) {
 	sort.Strings(result.UnknownActions)
 
 	return &result, nil
+}
+
+// PolicySet parses every policy in the bundle into a single cedar-go PolicySet:
+// the parsed, evaluable form of the bundle's Policies. Policies are concatenated
+// in sorted key order and parsed together, so the cedar-go-assigned policy IDs
+// are deterministic. It returns ErrMissingBundle for a nil bundle, or
+// ErrInvalidPolicy if any policy fails to parse.
+func (b *Bundle) PolicySet() (*cedar.PolicySet, error) {
+	if b == nil {
+		return nil, ErrMissingBundle
+	}
+	keys := make([]string, 0, len(b.Policies))
+	for k := range b.Policies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var buf bytes.Buffer
+	for _, k := range keys {
+		buf.Write(b.Policies[k])
+		buf.WriteByte('\n')
+	}
+	ps, err := cedar.NewPolicySetFromBytes("bundle.cedar", buf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPolicy, err)
+	}
+	return ps, nil
 }
 
 // collectUnknownActions inspects the action scope of a policy and adds any
