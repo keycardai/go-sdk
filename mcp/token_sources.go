@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,11 +15,13 @@ import (
 )
 
 // Source identifiers carried in the Source field of
-// WorkloadIdentityConfigurationError and WorkloadIdentityRuntimeError.
+// WorkloadIdentityConfigurationError and WorkloadIdentityRuntimeError, for
+// branching on which token source failed.
 const (
-	workloadIdentitySourceFile        = "file"
-	workloadIdentitySourceGCPMetadata = "gcp-metadata"
-	workloadIdentitySourceCustom      = "custom"
+	WorkloadIdentitySourceFile        = "file"
+	WorkloadIdentitySourceGCPMetadata = "gcp-metadata"
+	WorkloadIdentitySourceFly         = "fly"
+	WorkloadIdentitySourceCustom      = "custom"
 )
 
 // defaultFileTokenEnvVars is the env-var discovery order for
@@ -89,7 +94,7 @@ func newFileTokenSource(discoveryEnvVars []string, cfg fileTokenSourceConfig) (*
 
 		if tokenFilePath == "" {
 			return nil, &WorkloadIdentityConfigurationError{
-				Source: workloadIdentitySourceFile,
+				Source: WorkloadIdentitySourceFile,
 				Message: fmt.Sprintf("could not find token file path in environment variables; checked: %s",
 					strings.Join(envVars, ", ")),
 			}
@@ -100,14 +105,14 @@ func newFileTokenSource(discoveryEnvVars []string, cfg fileTokenSourceConfig) (*
 	data, err := os.ReadFile(tokenFilePath)
 	if err != nil {
 		return nil, &WorkloadIdentityConfigurationError{
-			Source:  workloadIdentitySourceFile,
+			Source:  WorkloadIdentitySourceFile,
 			Message: fmt.Sprintf("error reading token file %q", tokenFilePath),
 			Err:     err,
 		}
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return nil, &WorkloadIdentityConfigurationError{
-			Source:  workloadIdentitySourceFile,
+			Source:  WorkloadIdentitySourceFile,
 			Message: fmt.Sprintf("token file is empty: %s", tokenFilePath),
 		}
 	}
@@ -120,7 +125,7 @@ func (f *FileTokenSource) SubjectToken(_ context.Context) (string, error) {
 	data, err := os.ReadFile(f.tokenFilePath)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceFile,
+			Source:  WorkloadIdentitySourceFile,
 			Message: fmt.Sprintf("reading token file %q", f.tokenFilePath),
 			Err:     err,
 		}
@@ -129,7 +134,7 @@ func (f *FileTokenSource) SubjectToken(_ context.Context) (string, error) {
 	token := strings.TrimSpace(string(data))
 	if token == "" {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceFile,
+			Source:  WorkloadIdentitySourceFile,
 			Message: fmt.Sprintf("token file is empty: %s", f.tokenFilePath),
 		}
 	}
@@ -160,11 +165,6 @@ func WithGCPMetadataURL(u string) GCPMetadataOption {
 	return func(g *GCPMetadataTokenSource) { g.metadataURL = u }
 }
 
-// WithGCPHTTPClient overrides the HTTP client used for metadata requests.
-func WithGCPHTTPClient(c *http.Client) GCPMetadataOption {
-	return func(g *GCPMetadataTokenSource) { g.httpClient = c }
-}
-
 // WithGCPTimeout overrides the per-call deadline for metadata requests.
 func WithGCPTimeout(d time.Duration) GCPMetadataOption {
 	return func(g *GCPMetadataTokenSource) { g.timeout = d }
@@ -176,7 +176,7 @@ func WithGCPTimeout(d time.Duration) GCPMetadataOption {
 func NewGCPMetadataTokenSource(audience string, opts ...GCPMetadataOption) (*GCPMetadataTokenSource, error) {
 	if strings.TrimSpace(audience) == "" {
 		return nil, &WorkloadIdentityConfigurationError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: "audience must not be empty",
 		}
 	}
@@ -203,7 +203,7 @@ func (g *GCPMetadataTokenSource) SubjectToken(ctx context.Context) (string, erro
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: "building metadata request",
 			Err:     err,
 		}
@@ -213,7 +213,7 @@ func (g *GCPMetadataTokenSource) SubjectToken(ctx context.Context) (string, erro
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: fmt.Sprintf("calling metadata server at %s (is this running on GCP?)", g.metadataURL),
 			Err:     err,
 		}
@@ -223,14 +223,14 @@ func (g *GCPMetadataTokenSource) SubjectToken(ctx context.Context) (string, erro
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: "reading metadata response",
 			Err:     err,
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: fmt.Sprintf("metadata server returned status %d", resp.StatusCode),
 		}
 	}
@@ -238,8 +238,115 @@ func (g *GCPMetadataTokenSource) SubjectToken(ctx context.Context) (string, erro
 	token := strings.TrimSpace(string(body))
 	if token == "" {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  workloadIdentitySourceGCPMetadata,
+			Source:  WorkloadIdentitySourceGCPMetadata,
 			Message: "metadata server returned an empty token",
+		}
+	}
+	return token, nil
+}
+
+const (
+	defaultFlySocketPath = "/.fly/api"
+	flyOIDCTokenURL      = "http://localhost/v1/tokens/oidc"
+	flyRequestTimeout    = 5 * time.Second
+)
+
+// FlyTokenSource fetches an OIDC token from the Fly.io Machines API over the
+// local Unix socket. It covers workloads running on Fly Machines.
+type FlyTokenSource struct {
+	audience   string
+	socketPath string
+	httpClient *http.Client
+}
+
+// FlyTokenSourceOption configures a FlyTokenSource.
+type FlyTokenSourceOption func(*FlyTokenSource)
+
+// WithFlyAudience sets the audience claim for the requested token, typically
+// the Keycard zone URL.
+func WithFlyAudience(audience string) FlyTokenSourceOption {
+	return func(f *FlyTokenSource) { f.audience = audience }
+}
+
+// WithFlySocketPath overrides the Machines API socket path (default /.fly/api).
+func WithFlySocketPath(path string) FlyTokenSourceOption {
+	return func(f *FlyTokenSource) { f.socketPath = path }
+}
+
+// NewFlyTokenSource creates a FlyTokenSource. The socket is not probed at
+// construction; an unreachable Machines API surfaces as a
+// WorkloadIdentityRuntimeError at the first fetch.
+func NewFlyTokenSource(opts ...FlyTokenSourceOption) *FlyTokenSource {
+	f := &FlyTokenSource{socketPath: defaultFlySocketPath}
+	for _, opt := range opts {
+		opt(f)
+	}
+	f.httpClient = &http.Client{
+		Timeout: flyRequestTimeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", f.socketPath)
+			},
+		},
+	}
+	return f
+}
+
+// SubjectToken requests a Fly-signed OIDC JWT from the Machines API.
+func (f *FlyTokenSource) SubjectToken(ctx context.Context) (string, error) {
+	payload := struct {
+		Aud string `json:"aud,omitempty"`
+	}{Aud: f.audience}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: "encoding token request",
+			Err:     err,
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, flyOIDCTokenURL, bytes.NewReader(body))
+	if err != nil {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: "building token request",
+			Err:     err,
+		}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := f.httpClient.Do(req)
+	if err != nil {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: fmt.Sprintf("calling Machines API socket %s (is this running on a Fly Machine?)", f.socketPath),
+			Err:     err,
+		}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: "reading token response",
+			Err:     err,
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: fmt.Sprintf("Machines API returned status %d", resp.StatusCode),
+		}
+	}
+
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", &WorkloadIdentityRuntimeError{
+			Source:  WorkloadIdentitySourceFly,
+			Message: "Machines API returned an empty token",
 		}
 	}
 	return token, nil

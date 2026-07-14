@@ -39,10 +39,14 @@ type WorkloadIdentityCredential struct {
 }
 
 // NewWorkloadIdentity creates a WorkloadIdentityCredential backed by source.
-// It returns a WorkloadIdentityConfigurationError if source is nil.
+// It returns a WorkloadIdentityConfigurationError if source is nil (including
+// a nil SubjectTokenFunc).
 func NewWorkloadIdentity(source SubjectTokenSource) (*WorkloadIdentityCredential, error) {
 	if source == nil {
 		return nil, &WorkloadIdentityConfigurationError{Message: "subject token source must not be nil"}
+	}
+	if f, ok := source.(SubjectTokenFunc); ok && f == nil {
+		return nil, &WorkloadIdentityConfigurationError{Message: "subject token source function must not be nil"}
 	}
 	return &WorkloadIdentityCredential{source: source}, nil
 }
@@ -65,10 +69,10 @@ func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Con
 		if errors.As(err, &runtimeErr) || errors.As(err, &cfgErr) {
 			return nil, err
 		}
-		return nil, &WorkloadIdentityRuntimeError{Source: workloadIdentitySourceCustom, Message: "fetching subject token", Err: err}
+		return nil, &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "fetching subject token", Err: err}
 	}
 	if strings.TrimSpace(assertion) == "" {
-		return nil, &WorkloadIdentityRuntimeError{Source: workloadIdentitySourceCustom, Message: "subject token source returned an empty token"}
+		return nil, &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "subject token source returned an empty token"}
 	}
 
 	return &oauth.TokenExchangeRequest{

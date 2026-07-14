@@ -30,7 +30,7 @@ func (e *WebIdentityConfigurationError) Error() string {
 // or token source was misconfigured at construction: a nil source, a missing,
 // unreadable, or empty token file, no discovery environment variable set, or
 // a missing required audience. Source identifies the token source ("file",
-// "gcp-metadata"; empty when the fault is in the credential itself). Err
+// "gcp-metadata", "fly"; empty when the fault is in the credential itself). Err
 // carries the underlying cause (e.g. os.ErrNotExist or os.ErrPermission from
 // reading a token file) for errors.Is/errors.As, and is nil when there is no
 // underlying error.
@@ -54,7 +54,8 @@ func (e *WorkloadIdentityConfigurationError) Unwrap() error { return e.Err }
 // after construction, or the platform endpoint was unreachable). It is
 // distinct from WorkloadIdentityConfigurationError, which is a
 // construction-time fault. Source identifies the token source ("file",
-// "gcp-metadata", or "custom" for an adapted function). Err carries the
+// "gcp-metadata", "fly", or "custom" for a source whose error is not one of
+// this package's typed errors). Err carries the
 // underlying cause for errors.Is/errors.As, and is nil when there is no
 // underlying error (e.g. an empty token).
 type WorkloadIdentityRuntimeError struct {

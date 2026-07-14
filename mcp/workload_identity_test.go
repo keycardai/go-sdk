@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -368,4 +370,126 @@ func TestGCPMetadataTokenSource_RuntimeErrorWhenUnreachable(t *testing.T) {
 	if runtimeErr.Err == nil {
 		t.Error("Err: got nil, want the underlying transport error preserved")
 	}
+}
+
+func TestNewWorkloadIdentity_RejectsNilFunc(t *testing.T) {
+	cred, err := NewWorkloadIdentity(SubjectTokenFunc(nil))
+
+	var cfgErr *WorkloadIdentityConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want WorkloadIdentityConfigurationError", err)
+	}
+	if cred != nil {
+		t.Errorf("credential: got %v, want nil on error", cred)
+	}
+}
+
+// startFlySocketServer serves handler on a Unix socket and returns the socket
+// path. It uses os.MkdirTemp rather than t.TempDir to keep the path under the
+// platform's Unix socket path length limit.
+func startFlySocketServer(t *testing.T, handler http.Handler) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "fly")
+	if err != nil {
+		t.Fatalf("creating socket dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	socketPath := filepath.Join(dir, "api.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listening on unix socket: %v", err)
+	}
+
+	server := &http.Server{Handler: handler}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	return socketPath
+}
+
+func TestFlyTokenSource_RequestShape(t *testing.T) {
+	socketPath := startFlySocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method: got %q, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/tokens/oidc" {
+			t.Errorf("path: got %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type: got %q", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		if string(body) != `{"aud":"https://zone.example.com"}` {
+			t.Errorf("body: got %s, want audience in JSON body", body)
+		}
+		_, _ = w.Write([]byte("fly-oidc-token\n"))
+	}))
+
+	source := NewFlyTokenSource(
+		WithFlyAudience("https://zone.example.com"),
+		WithFlySocketPath(socketPath),
+	)
+
+	token, err := source.SubjectToken(context.Background())
+	if err != nil {
+		t.Fatalf("fetching token: %v", err)
+	}
+	if token != "fly-oidc-token" {
+		t.Errorf("token: got %q, want trimmed response body", token)
+	}
+}
+
+func TestFlyTokenSource_EmptyObjectBodyWithoutAudience(t *testing.T) {
+	socketPath := startFlySocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		if string(body) != `{}` {
+			t.Errorf("body: got %s, want {} when no audience is set", body)
+		}
+		_, _ = w.Write([]byte("fly-oidc-token"))
+	}))
+
+	source := NewFlyTokenSource(WithFlySocketPath(socketPath))
+
+	if _, err := source.SubjectToken(context.Background()); err != nil {
+		t.Fatalf("fetching token: %v", err)
+	}
+}
+
+func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
+	t.Run("non-200 status", func(t *testing.T) {
+		socketPath := startFlySocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "machine not found", http.StatusNotFound)
+		}))
+		source := NewFlyTokenSource(WithFlySocketPath(socketPath))
+
+		_, err := source.SubjectToken(context.Background())
+		var runtimeErr *WorkloadIdentityRuntimeError
+		if !errors.As(err, &runtimeErr) {
+			t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
+		}
+		if runtimeErr.Source != WorkloadIdentitySourceFly {
+			t.Errorf("source: got %q, want %q", runtimeErr.Source, WorkloadIdentitySourceFly)
+		}
+	})
+
+	t.Run("socket missing", func(t *testing.T) {
+		source := NewFlyTokenSource(WithFlySocketPath(filepath.Join(t.TempDir(), "no-such.sock")))
+
+		_, err := source.SubjectToken(context.Background())
+		var runtimeErr *WorkloadIdentityRuntimeError
+		if !errors.As(err, &runtimeErr) {
+			t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
+		}
+		if runtimeErr.Err == nil {
+			t.Error("Err: got nil, want the underlying dial error preserved")
+		}
+	})
 }
