@@ -1,0 +1,20 @@
+{
+  "schema": {
+    "version": "2026-02-14",
+    "sha": "sha256:bebad81d45871ebaeada2303b84f2b9c352ad5b0daf27c86174d6a149df2ebf1"
+  },
+  "target_type": "user",
+  "target_id": "user_sample",
+  "policies": [
+    {
+      "public_id": "pol_a",
+      "name": "allow-read",
+      "sha": "sha256:8a3a5c4c85e2700cde757aebae119bca71b58b7394bb5bc80726ecbd7837494f"
+    },
+    {
+      "public_id": "pol_b",
+      "name": "deny-all",
+      "sha": "sha256:bacfa3fab8b34a87fbe68d2b949b8fb62bc093942a84fd9a08543f15a0b63ee2"
+    }
+  ]
+}

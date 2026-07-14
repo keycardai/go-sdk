@@ -39,7 +39,7 @@ func sampleBundle() *Bundle {
 func encodeToBytes(t *testing.T, b *Bundle) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	err := TarGZipCodec{}.Encode(&buf, b)
+	err := tarGZipCodec{}.Encode(&buf, b)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -49,7 +49,7 @@ func encodeToBytes(t *testing.T, b *Bundle) []byte {
 func TestTarGZipCodec_RoundTrip(t *testing.T) {
 	in := sampleBundle()
 
-	codec := TarGZipCodec{}
+	codec := tarGZipCodec{}
 	out, err := codec.Decode(bytes.NewReader(encodeToBytes(t, in)))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -105,7 +105,7 @@ func TestTarGZipCodec_RoundTrip_NoPolicies(t *testing.T) {
 		Policies: map[string][]byte{},
 	}
 
-	codec := TarGZipCodec{}
+	codec := tarGZipCodec{}
 	out, err := codec.Decode(bytes.NewReader(encodeToBytes(t, in)))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -132,7 +132,7 @@ func TestTarGZipCodec_EncodeIsDeterministic(t *testing.T) {
 
 func TestTarGZipCodec_RoundTripIsIdempotent(t *testing.T) {
 	first := encodeToBytes(t, sampleBundle())
-	codec := TarGZipCodec{}
+	codec := tarGZipCodec{}
 	d1, err := codec.Decode(bytes.NewReader(first))
 	if err != nil {
 		t.Fatalf("first Decode: %v", err)
@@ -173,7 +173,7 @@ func TestTarGZipCodec_DecodeIgnoresProducerSHAs(t *testing.T) {
 		Schema:   []byte(sampleSchema),
 	})
 
-	codec2 := TarGZipCodec{}
+	codec2 := tarGZipCodec{}
 	out, err := codec2.Decode(bytes.NewReader(encoded))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -213,7 +213,7 @@ func TestTarGZipCodec_Decode_MissingSchemaIsAccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	codec3 := TarGZipCodec{}
+	codec3 := tarGZipCodec{}
 	out, err := codec3.Decode(&buf)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -239,7 +239,7 @@ func TestTarGZipCodec_Encode_RejectsEmptyVersion(t *testing.T) {
 	in := sampleBundle()
 	in.Manifest.Schema.Version = ""
 
-	codec4 := TarGZipCodec{}
+	codec4 := tarGZipCodec{}
 	err := codec4.Encode(io.Discard, in)
 	if !errors.Is(err, ErrMissingVersion) {
 		t.Errorf("Encode with empty version: got %v, want %v", err, ErrMissingVersion)
@@ -270,7 +270,7 @@ func TestTarGZipCodec_Decode_RejectsDecompressionBomb(t *testing.T) {
 		t.Errorf("compressed bomb should be far smaller than its inflated size: compressed=%d", buf.Len())
 	}
 
-	codec5 := TarGZipCodec{}
+	codec5 := tarGZipCodec{}
 	_, err := codec5.Decode(bytes.NewReader(buf.Bytes()))
 	if !errors.Is(err, ErrBundleTooLarge) {
 		t.Errorf("Decode decompression bomb: got %v, want %v", err, ErrBundleTooLarge)
@@ -310,7 +310,7 @@ func readArchiveEntry(t *testing.T, encoded []byte, name string) []byte {
 func TestManifest_Digest_ReproducibleFromArchiveManifestJSON(t *testing.T) {
 	encoded := encodeToBytes(t, sampleBundle())
 
-	codec6 := TarGZipCodec{}
+	codec6 := tarGZipCodec{}
 	decoded, err := codec6.Decode(bytes.NewReader(encoded))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -445,7 +445,7 @@ func TestManifest_Digest_IndependentOfName(t *testing.T) {
 func TestRegistry(t *testing.T) {
 	c, ok := CodecFor(MediaTypeTarGzip)
 	if !ok {
-		t.Fatal("TarGZipCodec must self-register via init")
+		t.Fatal("tarGZipCodec must self-register via init")
 	}
 	if got, want := c.MediaType(), MediaTypeTarGzip; got != want {
 		t.Errorf("MediaType() = %q, want %q", got, want)
@@ -454,5 +454,127 @@ func TestRegistry(t *testing.T) {
 	_, ok = CodecFor("application/unknown")
 	if ok {
 		t.Error("unknown media type must not be found")
+	}
+}
+
+func TestBundleEncode_RoundTrip(t *testing.T) {
+	in := sampleBundle()
+
+	var buf bytes.Buffer
+	n, err := in.Encode(&buf, MediaTypeTarGzip)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if n != buf.Len() {
+		t.Errorf("Encode returned %d bytes written but buffer holds %d", n, buf.Len())
+	}
+
+	out, err := DecodeBundle(&buf, MediaTypeTarGzip)
+	if err != nil {
+		t.Fatalf("DecodeBundle: %v", err)
+	}
+
+	if got, want := out.Manifest.Schema.Version, "2026-02-14"; got != want {
+		t.Errorf("schema version = %q, want %q", got, want)
+	}
+	if got, want := string(out.Schema), sampleSchema; got != want {
+		t.Errorf("schema content mismatch")
+	}
+	if len(out.Policies) != 2 {
+		t.Fatalf("len(Policies) = %d, want 2", len(out.Policies))
+	}
+}
+
+func TestBundleEncode_UnknownMediaType(t *testing.T) {
+	_, err := sampleBundle().Encode(io.Discard, "application/unknown")
+	if !errors.Is(err, ErrUnknownMediaType) {
+		t.Errorf("got %v, want ErrUnknownMediaType", err)
+	}
+}
+
+func TestDecodeBundle_UnknownMediaType(t *testing.T) {
+	_, err := DecodeBundle(bytes.NewReader(nil), "application/unknown")
+	if !errors.Is(err, ErrUnknownMediaType) {
+		t.Errorf("got %v, want ErrUnknownMediaType", err)
+	}
+}
+
+func TestBundleEncode_EncodeDecodeIsByteIdentical(t *testing.T) {
+	// Bundle.Encode + DecodeBundle must produce the same result as the
+	// direct codec calls.
+	b := sampleBundle()
+	var via bytes.Buffer
+	if _, err := b.Encode(&via, MediaTypeTarGzip); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	direct := encodeToBytes(t, b)
+	if !bytes.Equal(via.Bytes(), direct) {
+		t.Error("Bundle.Encode must produce byte-identical output to the codec's Encode")
+	}
+}
+
+func TestLoadBundle_RoundTrip(t *testing.T) {
+	in := sampleBundle()
+
+	vfs := &VFS{}
+	if err := in.Unload(vfs); err != nil {
+		t.Fatalf("Unload: %v", err)
+	}
+
+	out, err := LoadBundle(vfs)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+
+	if got, want := out.Manifest.Schema.Version, "2026-02-14"; got != want {
+		t.Errorf("schema version = %q, want %q", got, want)
+	}
+	if got, want := string(out.Schema), sampleSchema; got != want {
+		t.Errorf("schema content mismatch")
+	}
+	if len(out.Policies) != 2 {
+		t.Fatalf("len(Policies) = %d, want 2", len(out.Policies))
+	}
+	if !bytes.Equal(out.Policies["pol_a"], in.Policies["pol_a"]) {
+		t.Errorf("pol_a content mismatch")
+	}
+	if !bytes.Equal(out.Policies["pol_b"], in.Policies["pol_b"]) {
+		t.Errorf("pol_b content mismatch")
+	}
+	if got, want := out.Manifest.Policies[0].Name, "allow-read"; got != want {
+		t.Errorf("advisory name must survive Unload/LoadBundle: got %q", got)
+	}
+}
+
+// Decode-then-Encode and Load-then-Unload must both be byte-for-byte
+// idempotent (cross-codec fixed-point).
+func TestCrossFormatRoundTrip(t *testing.T) {
+	in := sampleBundle()
+
+	// Capture the canonical encoding first.
+	encoded := encodeToBytes(t, in)
+
+	// encoded → decoded → unloaded onto VFS → loaded → re-encoded
+	decoded, err := DecodeBundle(bytes.NewReader(encoded), MediaTypeTarGzip)
+	if err != nil {
+		t.Fatalf("DecodeBundle: %v", err)
+	}
+
+	vfs := &VFS{}
+	if err := decoded.Unload(vfs); err != nil {
+		t.Fatalf("Unload: %v", err)
+	}
+	loaded, err := LoadBundle(vfs)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+
+	var buf2 bytes.Buffer
+	if _, err := loaded.Encode(&buf2, MediaTypeTarGzip); err != nil {
+		t.Fatalf("second Encode: %v", err)
+	}
+
+	if !bytes.Equal(encoded, buf2.Bytes()) {
+		t.Error("decoded→unloaded→loaded→encoded bundle must be byte-identical to the original encoding")
 	}
 }

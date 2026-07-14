@@ -69,7 +69,7 @@ func TestTarGZipCodec_Decode_MalformedReturnsTypedErrors(t *testing.T) {
 		"duplicate policy":      {input: makeArchive(validManifest, validSchema, tarEntry{name: policiesPrefix + "p.cedar", content: "a"}, tarEntry{name: policiesPrefix + "p.cedar", content: "b"}), wantErr: ErrDuplicateEntry},
 	}
 
-	codec := TarGZipCodec{}
+	codec := tarGZipCodec{}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			out, err := codec.Decode(bytes.NewReader(tc.input))

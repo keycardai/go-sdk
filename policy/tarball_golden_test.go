@@ -17,7 +17,7 @@ var update = flag.Bool("update", false, "update golden files")
 // versions, whereas the tar stream is fully deterministic given zeroed headers.
 func TestTarGZipCodec_GoldenTarLayout(t *testing.T) {
 	var encoded bytes.Buffer
-	err := TarGZipCodec{}.Encode(&encoded, sampleBundle())
+	err := tarGZipCodec{}.Encode(&encoded, sampleBundle())
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}

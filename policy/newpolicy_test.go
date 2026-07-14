@@ -42,7 +42,7 @@ func TestTarGZipCodec_Decode_NewPolicyEntry(t *testing.T) {
 	body := `permit(principal, action, resource);`
 	manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[{"new_policy":"limit-prod","sha":"ignored"}]}`
 
-	codec := TarGZipCodec{}
+	codec := tarGZipCodec{}
 	out, err := codec.Decode(bytes.NewReader(archiveWith(t, manifest, map[string]string{"limit-prod": body})))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -71,7 +71,7 @@ func TestTarGZipCodec_Decode_MixedExistingAndNew(t *testing.T) {
 	manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[` +
 		`{"public_id":"AbC123","sha":"x"},` +
 		`{"new_policy":"limit-prod","sha":"y"}]}`
-	codec2 := TarGZipCodec{}
+	codec2 := tarGZipCodec{}
 	out, err := codec2.Decode(bytes.NewReader(archiveWith(t, manifest, map[string]string{
 		"AbC123":     `forbid(principal, action, resource);`,
 		"limit-prod": `permit(principal, action, resource);`,
@@ -107,7 +107,7 @@ func TestTarGZipCodec_Decode_MixedExistingAndNew(t *testing.T) {
 
 func TestTarGZipCodec_Decode_RejectsBothIDAndNewPolicy(t *testing.T) {
 	manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[{"public_id":"AbC123","new_policy":"limit-prod","sha":"x"}]}`
-	codec3 := TarGZipCodec{}
+	codec3 := tarGZipCodec{}
 	_, err := codec3.Decode(bytes.NewReader(archiveWith(t, manifest, map[string]string{"AbC123": "x"})))
 	if !errors.Is(err, ErrInvalidManifest) {
 		t.Errorf("got %v, want %v", err, ErrInvalidManifest)
@@ -116,7 +116,7 @@ func TestTarGZipCodec_Decode_RejectsBothIDAndNewPolicy(t *testing.T) {
 
 func TestTarGZipCodec_Decode_RejectsEntryWithoutFile(t *testing.T) {
 	manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[{"new_policy":"limit-prod","sha":"x"}]}`
-	codec4 := TarGZipCodec{}
+	codec4 := tarGZipCodec{}
 	_, err := codec4.Decode(bytes.NewReader(archiveWith(t, manifest, nil)))
 	if !errors.Is(err, ErrInvalidManifest) {
 		t.Errorf("got %v, want %v", err, ErrInvalidManifest)
@@ -129,7 +129,7 @@ func TestTarGZipCodec_Decode_RejectsEntryWithoutFile(t *testing.T) {
 func TestTarGZipCodec_Decode_FileWithoutEntryIsDropped(t *testing.T) {
 	manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[]}`
 	body := `permit(principal, action, resource);`
-	codec5 := TarGZipCodec{}
+	codec5 := tarGZipCodec{}
 	out, err := codec5.Decode(bytes.NewReader(archiveWith(t, manifest, map[string]string{"pol_x": body})))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -139,6 +139,38 @@ func TestTarGZipCodec_Decode_FileWithoutEntryIsDropped(t *testing.T) {
 	}
 	if len(out.Policies) != 0 {
 		t.Errorf("unreferenced file must be dropped from bundle: got %v", out.Policies)
+	}
+}
+
+// Decode rejects a manifest key that would escape the policies/ directory.
+func TestTarGZipCodec_Decode_RejectsUnsafeKey(t *testing.T) {
+	for _, key := range []string{"../evil", "sub/pol", ".."} {
+		t.Run(key, func(t *testing.T) {
+			manifest := `{"schema":{"version":"2026-02-14","sha":""},"policies":[{"public_id":"` + key + `","sha":""}]}`
+			_, err := tarGZipCodec{}.Decode(bytes.NewReader(archiveWith(t, manifest, nil)))
+			if !errors.Is(err, ErrInvalidManifest) {
+				t.Errorf("key %q: got %v, want ErrInvalidManifest", key, err)
+			}
+		})
+	}
+}
+
+// Encode rejects a bundle whose Policies map holds a key the manifest does not
+// reference, rather than silently emitting a corrupt policies/.cedar entry.
+func TestTarGZipCodec_Encode_PolicyWithoutManifestEntry(t *testing.T) {
+	b := &Bundle{
+		Manifest: Manifest{
+			Schema:   SchemaRef{Version: "2026-02-14"},
+			Policies: []PolicyRef{{PublicID: "pol_a"}},
+		},
+		Policies: map[string][]byte{
+			"pol_a":      []byte(`permit(principal, action, resource);`),
+			"pol_orphan": []byte(`forbid(principal, action, resource);`),
+		},
+	}
+	var buf bytes.Buffer
+	if _, err := b.Encode(&buf, MediaTypeTarGzip); !errors.Is(err, ErrInvalidManifest) {
+		t.Errorf("got %v, want ErrInvalidManifest", err)
 	}
 }
 

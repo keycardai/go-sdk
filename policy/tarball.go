@@ -13,7 +13,7 @@ import (
 )
 
 // MediaTypeTarGzip is the media type of the tar+gzip policy-bundle encoding.
-const MediaTypeTarGzip = "application/vnd.keycard.policy-bundle.v1+tar+gzip"
+const MediaTypeTarGzip MediaType = "application/vnd.keycard.policy-bundle.v1+tar+gzip"
 
 const (
 	pathManifest   = "manifest.json"
@@ -33,18 +33,18 @@ const maxDecompressedSize = 64 << 20 // 64 MiB
 // header so encoding is byte-for-byte deterministic.
 var epoch = time.Unix(0, 0).UTC()
 
-// TarGZipCodec encodes a Bundle as a gzip-compressed tar archive.
-type TarGZipCodec struct{}
+// tarGZipCodec encodes a Bundle as a gzip-compressed tar archive.
+type tarGZipCodec struct{}
 
-func init() { Register(TarGZipCodec{}) }
+func init() { Register(tarGZipCodec{}) }
 
-func (TarGZipCodec) MediaType() string { return MediaTypeTarGzip }
+func (tarGZipCodec) MediaType() MediaType { return MediaTypeTarGzip }
 
 // Encode writes manifest.json, schema.cedarschema, and policies/<public_id>.cedar
 // into a deterministic gzip-compressed tar archive on w. Content digests in the
 // manifest are computed from the supplied bytes. All content-level errors occur
 // before the first write; only w itself can fail mid-stream.
-func (TarGZipCodec) Encode(w io.Writer, b *Bundle) (err error) {
+func (tarGZipCodec) Encode(w io.Writer, b *Bundle) (err error) {
 	if b == nil {
 		return ErrMissingBundle
 	}
@@ -60,17 +60,29 @@ func (TarGZipCodec) Encode(w io.Writer, b *Bundle) (err error) {
 		TargetID:   b.Manifest.TargetID,
 		Policies:   make([]PolicyRef, 0, len(b.Policies)),
 	}
-	names := make(map[string]string, len(b.Manifest.Policies))
-	for _, p := range b.Manifest.Policies {
-		if p.PublicID != "" {
-			names[p.PublicID] = p.Name
+	// build lookup for manifest refs so PolicyRef type (PublicID vs NewPolicy)
+	// and advisory Name are preserved in the encoded output.
+	refByKey := make(map[string]PolicyRef, len(b.Manifest.Policies))
+	for _, ref := range b.Manifest.Policies {
+		key, err := manifestRefKey(ref)
+		if err != nil {
+			return err
 		}
+		refByKey[key] = ref
 	}
 	for id, content := range b.Policies {
-		manifest.Policies = append(manifest.Policies, PolicyRef{PublicID: id, Name: names[id], SHA: sha256Hex(content)})
+		ref, ok := refByKey[id]
+		if !ok {
+			return fmt.Errorf("%w: policy %q has no manifest entry", ErrInvalidManifest, id)
+		}
+		ref.SHA = sha256Hex(content)
+		manifest.Policies = append(manifest.Policies, ref)
 	}
 	sort.Slice(manifest.Policies, func(i, j int) bool {
-		return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
+		if manifest.Policies[i].PublicID != manifest.Policies[j].PublicID {
+			return manifest.Policies[i].PublicID < manifest.Policies[j].PublicID
+		}
+		return manifest.Policies[i].NewPolicy < manifest.Policies[j].NewPolicy
 	})
 
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
@@ -97,8 +109,9 @@ func (TarGZipCodec) Encode(w io.Writer, b *Bundle) (err error) {
 	if err := writeTarEntry(tw, pathSchema, b.Schema); err != nil {
 		return err
 	}
-	for _, p := range manifest.Policies {
-		if err := writeTarEntry(tw, policiesPrefix+p.PublicID+policiesSuffix, b.Policies[p.PublicID]); err != nil {
+	for _, ref := range manifest.Policies {
+		key, _ := manifestRefKey(ref)
+		if err := writeTarEntry(tw, policiesPrefix+key+policiesSuffix, b.Policies[key]); err != nil {
 			return err
 		}
 	}
@@ -128,7 +141,7 @@ func writeTarEntry(tw *tar.Writer, name string, content []byte) error {
 // version is taken from manifest.json; all content digests are re-computed from
 // the archive bytes rather than trusted from the manifest. Validation is
 // structural.
-func (TarGZipCodec) Decode(r io.Reader) (*Bundle, error) {
+func (tarGZipCodec) Decode(r io.Reader) (*Bundle, error) {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformedArchive, err)
@@ -259,16 +272,34 @@ func (TarGZipCodec) Decode(r io.Reader) (*Bundle, error) {
 // maps to: its PublicID for an existing policy, or its NewPolicy name for one the
 // caller is adding. Exactly one must be set.
 func manifestRefKey(ref PolicyRef) (string, error) {
+	var key string
 	switch {
 	case ref.PublicID != "" && ref.NewPolicy != "":
 		return "", fmt.Errorf("%w: policy entry sets both public_id and new_policy", ErrInvalidManifest)
 	case ref.PublicID != "":
-		return ref.PublicID, nil
+		key = ref.PublicID
 	case ref.NewPolicy != "":
-		return ref.NewPolicy, nil
+		key = ref.NewPolicy
 	default:
 		return "", fmt.Errorf("%w: policy entry sets neither public_id nor new_policy", ErrInvalidManifest)
 	}
+	if !validPolicyKey(key) {
+		return "", fmt.Errorf("%w: policy key %q is not a valid file name", ErrInvalidManifest, key)
+	}
+	return key, nil
+}
+
+// validPolicyKey reports whether key is safe to use as a single-segment file
+// name under policies/. A key becomes policies/<key>.cedar, so a path separator
+// or a "." / ".." segment would let a crafted manifest escape the policies/
+// directory when a bundle is written to disk (Bundle.Unload) or read back
+// (LoadBundle). All bundle paths route through manifestRefKey, so enforcing the
+// rule here keeps Encode, Decode, LoadBundle, and Unload consistent.
+func validPolicyKey(key string) bool {
+	if key == "" || key == "." || key == ".." {
+		return false
+	}
+	return !strings.ContainsAny(key, `/\`)
 }
 
 // limitReader returns ErrBundleTooLarge once the underlying reader yields more

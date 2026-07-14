@@ -1,0 +1,4 @@
+namespace Keycard {
+  entity User { email: String };
+  action any appliesTo { principal: [User], resource: User };
+}

@@ -34,4 +34,19 @@ var (
 	// ErrBundleTooLarge is returned by Decode when the decompressed archive
 	// content exceeds the codec's size limit.
 	ErrBundleTooLarge = errors.New("policy: decompressed size exceeds limit")
+
+	// ErrUnknownMediaType is returned when no codec is registered for the media type.
+	ErrUnknownMediaType = errors.New("policy: unknown media type")
+
+	// ErrOrphanPolicy is returned by LoadBundle when a policies/ file has no
+	// matching manifest entry.
+	ErrOrphanPolicy = errors.New("policy: orphan policy file")
+
+	// ErrInvalidSchema is returned by Validate when the Cedar schema is
+	// syntactically invalid.
+	ErrInvalidSchema = errors.New("policy: invalid schema")
+
+	// ErrInvalidPolicy is returned by Validate when a Cedar policy is
+	// syntactically invalid.
+	ErrInvalidPolicy = errors.New("policy: invalid policy")
 )
