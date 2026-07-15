@@ -1,3 +1,47 @@
+## v0.16.0 (2026-07-15)
+
+
+- feat(mcp): WorkloadIdentity credential with pluggable identity token sources (#31)
+- * feat(mcp): add WorkloadIdentity credential with pluggable subject token sources
+- One generic WorkloadIdentityCredential owns the exchange contract
+(jwt-bearer client assertion, no Basic auth, fresh fetch per exchange,
+no caching). A one-method SubjectTokenSource interface is the only
+per-platform code: FileTokenSource (EKS, AKS, Kubernetes projected
+tokens), GCPMetadataTokenSource (GKE, GCE, Cloud Run), and
+SubjectTokenFunc for custom fetches.
+- NewEKSWorkloadIdentity and its option types become deprecated aliases
+over FileTokenSource with unchanged signatures and EKS-only env
+discovery. EKS error types become deprecated aliases of the new
+WorkloadIdentity{Configuration,Runtime}Error, which carry a Source
+identifier and preserve causes via Err and Unwrap.
+- Implements the workload-identity spec (keycard-sdk-spec#39). ECO-109.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * feat(mcp): add FlyTokenSource; address review findings
+- Adds FlyTokenSource (POST /v1/tokens/oidc over the /.fly/api Unix
+socket, audience in the JSON body), completing the spec's v1 source
+set now that the standalone Fly credential PR is closed.
+- Review fixes: README documents WorkloadIdentity and deprecates
+EKSWorkloadIdentity; WithGCPHTTPClient dropped (unspecced surface);
+source identifier constants exported for error branching; the custom
+source doc describes when the identifier applies; NewWorkloadIdentity
+rejects a nil SubjectTokenFunc at construction.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * feat(mcp): accept an optional client id on WorkloadIdentity
+- Adds WithWorkloadClientID and a ClientID field on TokenExchangeRequest,
+sent as the client_id form parameter alongside the client assertion.
+Token-federation application credentials are resolved by this ID;
+legacy token credentials are resolved by the assertion's subject and
+do not need it. Tracks KEP 108.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * refactor(mcp): rename SubjectTokenSource to IdentityTokenSource
+- The source returns the platform-issued OIDC identity token, which the
+credential attaches as the client assertion. Naming it a subject token
+collided with TokenExchangeRequest.SubjectToken, which carries the
+inbound user token on the RFC 8693 exchange.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
 ## v0.15.0 (2026-07-15)
 
 
