@@ -1,3 +1,41 @@
+## v0.15.0 (2026-07-15)
+
+
+- feat(policy): content-addressed policy bundle package (#35)
+- * feat(policy): add policy bundle package with tar+gzip codec
+- Adds github.com/keycardai/go-sdk/policy — a pure format layer for
+Keycard policy bundles (Cedar schema + policy set + manifest). Includes
+a deterministic tar+gzip codec, decompression-bomb protection, and a
+JCS-canonical manifest digest (RFC 8785) for content-addressed ETags.
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- * feat(policy): VFS-backed bundle API — MediaType, LoadBundle, Unload, Validate
+- Adds a fully VFS-backed bundle API to the policy package: type MediaType, DecodeBundle, Bundle.Encode, LoadBundle (fs.FS), Bundle.Unload (WriteFS), Bundle.Validate (cedar-go), in-memory VFS, OsDirFS, error sentinels, and testdata golden directory. Bumps go to 1.23.0 and adds cedar-go v1.5.2 and gowebpki/jcs v1.0.1 as direct deps.
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- * refactor(policy): add Bundle.Digest and share buildManifest across codec paths
+- Bundle.Digest computes the attestable identity from a bundle's actual Schema
+and Policies bytes (recomputing SHAs), rather than trusting the SHAs a caller
+pre-populated on the manifest — the same identity Encode would produce. This
+lets consumers that hold a Bundle (e.g. svc-pdp building a response bundle)
+stop replicating the package's content hashing just to feed Manifest.Digest.
+- Also extract the shared manifest construction (buildManifest) and the policy-ref
+sort (sortPolicyRefs), which Encode, Unload, Digest, Decode, and LoadBundle
+previously duplicated inline.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- * feat(policy): add Bundle.PolicySet to parse policies into a cedar-go PolicySet
+- Exposes the bundle's policies as a parsed, evaluable cedar-go PolicySet, so
+consumers (e.g. a CLI evaluating a fetched bundle) don't reimplement the
+concatenate-and-parse step. This is the first cedar-go type in the package's
+public API — a deliberate choice to make the policy package the home for
+bundle-to-Cedar operations.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- * docs(policy): update package doc for the current API surface
+- Fix the dangling reference to the now-unexported TarGZipCodec and document the
+MediaType codec selection, LoadBundle/Unload filesystem expansion, Bundle.Digest
+attestation, and the cedar-go-backed Validate/PolicySet operations.
+- Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>
+
 ## v0.14.1 (2026-07-13)
 
 
