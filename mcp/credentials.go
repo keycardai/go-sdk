@@ -301,18 +301,24 @@ func (w *WebIdentityCredential) ClientJWKSURL(resourceServerURL string) string {
 	return w.keyManager.ClientJWKSURL(resourceServerURL)
 }
 
-// EKSWorkloadIdentityCredential implements ApplicationCredential using AWS EKS pod identity tokens.
-type EKSWorkloadIdentityCredential struct {
-	tokenFilePath string
-}
+// EKSWorkloadIdentityCredential authenticates with an AWS EKS pod-identity
+// (projected service-account) token read from a mounted file.
+//
+// Deprecated: use NewWorkloadIdentity with NewFileTokenSource, which also
+// covers AKS and other platforms that project token files.
+type EKSWorkloadIdentityCredential = WorkloadIdentityCredential
 
+// defaultEKSEnvVars is the env-var discovery order for NewEKSWorkloadIdentity.
+// Unlike defaultFileTokenEnvVars it is limited to the EKS variables.
 var defaultEKSEnvVars = []string{
 	"KEYCARD_EKS_WORKLOAD_IDENTITY_TOKEN_FILE",
 	"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
 	"AWS_WEB_IDENTITY_TOKEN_FILE",
 }
 
-// EKSWorkloadIdentityOption configures an EKSWorkloadIdentityCredential.
+// EKSWorkloadIdentityOption configures NewEKSWorkloadIdentity.
+//
+// Deprecated: use FileTokenSourceOption with NewFileTokenSource.
 type EKSWorkloadIdentityOption func(*eksConfig)
 
 type eksConfig struct {
@@ -321,85 +327,36 @@ type eksConfig struct {
 }
 
 // WithTokenFilePath sets the path to the EKS token file directly.
+//
+// Deprecated: use WithFileTokenPath with NewFileTokenSource.
 func WithTokenFilePath(path string) EKSWorkloadIdentityOption {
 	return func(cfg *eksConfig) { cfg.tokenFilePath = path }
 }
 
 // WithEnvVarName adds a custom environment variable name to check for the token file path.
+//
+// Deprecated: use WithFileEnvVar with NewFileTokenSource.
 func WithEnvVarName(name string) EKSWorkloadIdentityOption {
 	return func(cfg *eksConfig) { cfg.envVarName = name }
 }
 
-// NewEKSWorkloadIdentity creates a new EKSWorkloadIdentityCredential.
+// NewEKSWorkloadIdentity creates a workload identity credential that reads the
+// EKS projected token file, with env-var discovery limited to the EKS
+// variables.
+//
+// Deprecated: use NewWorkloadIdentity with NewFileTokenSource.
 func NewEKSWorkloadIdentity(opts ...EKSWorkloadIdentityOption) (*EKSWorkloadIdentityCredential, error) {
 	cfg := eksConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 
-	var tokenFilePath string
-	if cfg.tokenFilePath != "" {
-		tokenFilePath = cfg.tokenFilePath
-	} else {
-		envVars := defaultEKSEnvVars
-		if cfg.envVarName != "" {
-			envVars = append([]string{cfg.envVarName}, envVars...)
-		}
-
-		for _, envVar := range envVars {
-			if v := os.Getenv(envVar); v != "" {
-				tokenFilePath = v
-				break
-			}
-		}
-
-		if tokenFilePath == "" {
-			return nil, &EKSWorkloadIdentityConfigurationError{
-				Message: fmt.Sprintf("could not find token file path in environment variables; checked: %s",
-					strings.Join(envVars, ", ")),
-			}
-		}
-	}
-
-	// Validate that the token file exists and is non-empty
-	data, err := os.ReadFile(tokenFilePath)
+	source, err := newFileTokenSource(defaultEKSEnvVars, fileTokenSourceConfig{
+		tokenFilePath: cfg.tokenFilePath,
+		envVarName:    cfg.envVarName,
+	})
 	if err != nil {
-		return nil, &EKSWorkloadIdentityConfigurationError{
-			Message: fmt.Sprintf("error reading token file %q", tokenFilePath),
-			Err:     err,
-		}
+		return nil, err
 	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return nil, &EKSWorkloadIdentityConfigurationError{
-			Message: fmt.Sprintf("token file is empty: %s", tokenFilePath),
-		}
-	}
-
-	return &EKSWorkloadIdentityCredential{tokenFilePath: tokenFilePath}, nil
-}
-
-// Auth returns nil (EKS uses assertion-based auth, not basic auth).
-func (e *EKSWorkloadIdentityCredential) Auth(_ string) *ClientAuth {
-	return nil
-}
-
-// PrepareTokenExchangeRequest builds a token exchange request with the EKS pod identity token.
-func (e *EKSWorkloadIdentityCredential) PrepareTokenExchangeRequest(_ context.Context, subjectToken, resource string, _ *PrepareOptions) (*oauth.TokenExchangeRequest, error) {
-	data, err := os.ReadFile(e.tokenFilePath)
-	if err != nil {
-		return nil, &EKSWorkloadIdentityRuntimeError{Message: fmt.Sprintf("reading EKS token from %q", e.tokenFilePath), Err: err}
-	}
-
-	eksToken := strings.TrimSpace(string(data))
-	if eksToken == "" {
-		return nil, &EKSWorkloadIdentityRuntimeError{Message: fmt.Sprintf("EKS token file is empty: %s", e.tokenFilePath)}
-	}
-
-	return &oauth.TokenExchangeRequest{
-		SubjectToken:        subjectToken,
-		Resource:            resource,
-		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
-		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-		ClientAssertion:     eksToken,
-	}, nil
+	return NewWorkloadIdentity(source)
 }

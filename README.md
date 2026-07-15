@@ -36,7 +36,7 @@ Builds on `oauth` to provide server-side and client-side MCP authentication.
 
 - **Bearer auth middleware** — `RequireBearerAuth` (standard `net/http` middleware), audience-bound via `oauth.WithAudiences`
 - **Token exchange orchestration** — `AuthProvider`, `AccessContext`; the `Grant` decorator with `WithUserIdentifier` (impersonation) and `WithRequestScopes`
-- **Application credentials** — `ClientSecret`, `WebIdentity` (RFC 7523), `EKSWorkloadIdentity`; multi-zone via `NewMultiZoneClientSecret`
+- **Application credentials** — `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
 - **Metadata endpoints** — `AuthMetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
 
 ### `a2a` — Agent-to-Agent Delegation
@@ -134,11 +134,22 @@ authProvider, _ := mcp.NewAuthProvider(
 
 ## Credential Types
 
-| Type                  | Auth Method                  | Use Case                                         |
-| --------------------- | ---------------------------- | ------------------------------------------------ |
-| `ClientSecret`        | HTTP Basic Auth              | Simple deployments with client_id/secret         |
-| `WebIdentity`         | `private_key_jwt` (RFC 7523) | Zero-secret deployments, auto-generates RSA keys |
-| `EKSWorkloadIdentity` | Pod identity token           | AWS EKS workloads                                |
+| Type               | Auth Method                      | Use Case                                                 |
+| ------------------ | -------------------------------- | -------------------------------------------------------- |
+| `ClientSecret`     | HTTP Basic Auth                  | Simple deployments with client_id/secret                 |
+| `WebIdentity`      | `private_key_jwt` (RFC 7523)     | Zero-secret deployments, auto-generates RSA keys         |
+| `WorkloadIdentity` | Platform OIDC token (jwt-bearer) | EKS, AKS, GKE, Cloud Run, Fly Machines, custom sources   |
+
+`WorkloadIdentity` takes a pluggable token source: `FileTokenSource` (projected token files: EKS, AKS, any Kubernetes projected service-account token), `GCPMetadataTokenSource` (GKE, GCE, Cloud Run), `FlyTokenSource` (Fly Machines), or any `IdentityTokenFunc`:
+
+When the zone-side application credential is resolved by ID (a token-federation credential), pass that ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion.
+
+```go
+source, _ := mcp.NewFileTokenSource() // discovers the projected token file from env
+credential, _ := mcp.NewWorkloadIdentity(source)
+```
+
+`EKSWorkloadIdentity` is deprecated: it is an alias for `WorkloadIdentity` with a `FileTokenSource` limited to EKS env-var discovery. Existing code keeps working; new code should use `NewWorkloadIdentity`.
 
 ## Error Handling
 

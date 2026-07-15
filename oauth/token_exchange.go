@@ -23,6 +23,11 @@ type TokenExchangeRequest struct {
 	ActorTokenType      string
 	ClientAssertion     string
 	ClientAssertionType string
+	// ClientID names the application credential the client authenticates as,
+	// sent as the client_id form parameter. Used with assertion-based
+	// credentials that are resolved by ID rather than by the assertion's
+	// subject.
+	ClientID string
 }
 
 // TokenResponse represents an OAuth token endpoint response.
@@ -186,6 +191,9 @@ func serializeTokenExchangeRequest(req TokenExchangeRequest) url.Values {
 	}
 	if req.ClientAssertionType != "" {
 		params.Set("client_assertion_type", req.ClientAssertionType)
+	}
+	if req.ClientID != "" {
+		params.Set("client_id", req.ClientID)
 	}
 
 	return params
