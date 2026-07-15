@@ -103,7 +103,7 @@ func NewAuthProvider(opts ...AuthProviderOption) (*AuthProvider, error) {
 	// every exchange would fail with a config error, so fail loudly at construction.
 	if wi, ok := cfg.applicationCredential.(*WebIdentityCredential); ok && wi.ClientID() == "" {
 		return nil, &AuthProviderConfigurationError{
-			Message: "WebIdentity credential requires a client id: pass mcp.WithClientID to NewWebIdentity",
+			Message: "WebIdentity credential requires a client id: pass oauth.WithClientID to NewWebIdentity",
 		}
 	}
 
