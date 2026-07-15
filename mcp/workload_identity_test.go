@@ -26,7 +26,7 @@ func TestNewWorkloadIdentity_RejectsNilSource(t *testing.T) {
 }
 
 func TestWorkloadIdentity_PreparesRequestFromSource(t *testing.T) {
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(func(_ context.Context) (string, error) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
 		return "platform-token", nil
 	}))
 	if err != nil {
@@ -60,7 +60,7 @@ func TestWorkloadIdentity_PreparesRequestFromSource(t *testing.T) {
 
 func TestWorkloadIdentity_FetchesFreshTokenEveryExchange(t *testing.T) {
 	calls := 0
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(func(_ context.Context) (string, error) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
 		calls++
 		return fmt.Sprintf("token-%d", calls), nil
 	}))
@@ -84,7 +84,7 @@ func TestWorkloadIdentity_FetchesFreshTokenEveryExchange(t *testing.T) {
 
 func TestWorkloadIdentity_WrapsCustomSourceError(t *testing.T) {
 	cause := errors.New("socket unavailable")
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(func(_ context.Context) (string, error) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
 		return "", cause
 	}))
 	if err != nil {
@@ -106,7 +106,7 @@ func TestWorkloadIdentity_WrapsCustomSourceError(t *testing.T) {
 
 func TestWorkloadIdentity_PassesThroughTypedSourceError(t *testing.T) {
 	sourceErr := &WorkloadIdentityRuntimeError{Source: "file", Message: "token file is empty: /var/run/token"}
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(func(_ context.Context) (string, error) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
 		return "", sourceErr
 	}))
 	if err != nil {
@@ -124,7 +124,7 @@ func TestWorkloadIdentity_PassesThroughTypedSourceError(t *testing.T) {
 }
 
 func TestWorkloadIdentity_RejectsEmptyTokenFromSource(t *testing.T) {
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(func(_ context.Context) (string, error) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
 		return "   \n", nil
 	}))
 	if err != nil {
@@ -149,7 +149,7 @@ func TestNewFileTokenSource_ExplicitPath(t *testing.T) {
 		t.Fatalf("constructing source: %v", err)
 	}
 
-	token, err := source.SubjectToken(context.Background())
+	token, err := source.IdentityToken(context.Background())
 	if err != nil {
 		t.Fatalf("fetching token: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestNewFileTokenSource_EnvDiscovery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("constructing source with %s set: %v", envVar, err)
 			}
-			token, err := source.SubjectToken(context.Background())
+			token, err := source.IdentityToken(context.Background())
 			if err != nil {
 				t.Fatalf("fetching token: %v", err)
 			}
@@ -225,7 +225,7 @@ func TestNewFileTokenSource_CustomEnvVarWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("constructing source: %v", err)
 	}
-	token, err := source.SubjectToken(context.Background())
+	token, err := source.IdentityToken(context.Background())
 	if err != nil {
 		t.Fatalf("fetching token: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestGCPMetadataTokenSource_RequestShape(t *testing.T) {
 		t.Fatalf("constructing source: %v", err)
 	}
 
-	token, err := source.SubjectToken(context.Background())
+	token, err := source.IdentityToken(context.Background())
 	if err != nil {
 		t.Fatalf("fetching token: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestGCPMetadataTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 				t.Fatalf("constructing source: %v", err)
 			}
 
-			_, err = source.SubjectToken(context.Background())
+			_, err = source.IdentityToken(context.Background())
 			var runtimeErr *WorkloadIdentityRuntimeError
 			if !errors.As(err, &runtimeErr) {
 				t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
@@ -362,7 +362,7 @@ func TestGCPMetadataTokenSource_RuntimeErrorWhenUnreachable(t *testing.T) {
 		t.Fatalf("constructing source: %v", err)
 	}
 
-	_, err = source.SubjectToken(context.Background())
+	_, err = source.IdentityToken(context.Background())
 	var runtimeErr *WorkloadIdentityRuntimeError
 	if !errors.As(err, &runtimeErr) {
 		t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
@@ -373,7 +373,7 @@ func TestGCPMetadataTokenSource_RuntimeErrorWhenUnreachable(t *testing.T) {
 }
 
 func TestNewWorkloadIdentity_RejectsNilFunc(t *testing.T) {
-	cred, err := NewWorkloadIdentity(SubjectTokenFunc(nil))
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(nil))
 
 	var cfgErr *WorkloadIdentityConfigurationError
 	if !errors.As(err, &cfgErr) {
@@ -435,7 +435,7 @@ func TestFlyTokenSource_RequestShape(t *testing.T) {
 		WithFlySocketPath(socketPath),
 	)
 
-	token, err := source.SubjectToken(context.Background())
+	token, err := source.IdentityToken(context.Background())
 	if err != nil {
 		t.Fatalf("fetching token: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestFlyTokenSource_EmptyObjectBodyWithoutAudience(t *testing.T) {
 
 	source := NewFlyTokenSource(WithFlySocketPath(socketPath))
 
-	if _, err := source.SubjectToken(context.Background()); err != nil {
+	if _, err := source.IdentityToken(context.Background()); err != nil {
 		t.Fatalf("fetching token: %v", err)
 	}
 }
@@ -470,7 +470,7 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 		}))
 		source := NewFlyTokenSource(WithFlySocketPath(socketPath))
 
-		_, err := source.SubjectToken(context.Background())
+		_, err := source.IdentityToken(context.Background())
 		var runtimeErr *WorkloadIdentityRuntimeError
 		if !errors.As(err, &runtimeErr) {
 			t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
@@ -483,7 +483,7 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 	t.Run("socket missing", func(t *testing.T) {
 		source := NewFlyTokenSource(WithFlySocketPath(filepath.Join(t.TempDir(), "no-such.sock")))
 
-		_, err := source.SubjectToken(context.Background())
+		_, err := source.IdentityToken(context.Background())
 		var runtimeErr *WorkloadIdentityRuntimeError
 		if !errors.As(err, &runtimeErr) {
 			t.Fatalf("error: got %v, want WorkloadIdentityRuntimeError", err)
@@ -495,7 +495,7 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 }
 
 func TestWorkloadIdentity_ClientID(t *testing.T) {
-	source := SubjectTokenFunc(func(_ context.Context) (string, error) { return "platform-token", nil })
+	source := IdentityTokenFunc(func(_ context.Context) (string, error) { return "platform-token", nil })
 
 	t.Run("set", func(t *testing.T) {
 		cred, err := NewWorkloadIdentity(source, WithWorkloadClientID("acr_123"))

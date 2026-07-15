@@ -120,8 +120,8 @@ func newFileTokenSource(discoveryEnvVars []string, cfg fileTokenSourceConfig) (*
 	return &FileTokenSource{tokenFilePath: tokenFilePath}, nil
 }
 
-// SubjectToken re-reads the token file and returns its trimmed contents.
-func (f *FileTokenSource) SubjectToken(_ context.Context) (string, error) {
+// IdentityToken re-reads the token file and returns its trimmed contents.
+func (f *FileTokenSource) IdentityToken(_ context.Context) (string, error) {
 	data, err := os.ReadFile(f.tokenFilePath)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
@@ -193,8 +193,8 @@ func NewGCPMetadataTokenSource(audience string, opts ...GCPMetadataOption) (*GCP
 	return g, nil
 }
 
-// SubjectToken requests a GCP-signed OIDC JWT from the metadata server.
-func (g *GCPMetadataTokenSource) SubjectToken(ctx context.Context) (string, error) {
+// IdentityToken requests a GCP-signed OIDC JWT from the metadata server.
+func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
@@ -293,8 +293,8 @@ func NewFlyTokenSource(opts ...FlyTokenSourceOption) *FlyTokenSource {
 	return f
 }
 
-// SubjectToken requests a Fly-signed OIDC JWT from the Machines API.
-func (f *FlyTokenSource) SubjectToken(ctx context.Context) (string, error) {
+// IdentityToken requests a Fly-signed OIDC JWT from the Machines API.
+func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	payload := struct {
 		Aud string `json:"aud,omitempty"`
 	}{Aud: f.audience}

@@ -140,7 +140,7 @@ authProvider, _ := mcp.NewAuthProvider(
 | `WebIdentity`      | `private_key_jwt` (RFC 7523)     | Zero-secret deployments, auto-generates RSA keys         |
 | `WorkloadIdentity` | Platform OIDC token (jwt-bearer) | EKS, AKS, GKE, Cloud Run, Fly Machines, custom sources   |
 
-`WorkloadIdentity` takes a pluggable token source: `FileTokenSource` (projected token files: EKS, AKS, any Kubernetes projected service-account token), `GCPMetadataTokenSource` (GKE, GCE, Cloud Run), `FlyTokenSource` (Fly Machines), or any `SubjectTokenFunc`:
+`WorkloadIdentity` takes a pluggable token source: `FileTokenSource` (projected token files: EKS, AKS, any Kubernetes projected service-account token), `GCPMetadataTokenSource` (GKE, GCE, Cloud Run), `FlyTokenSource` (Fly Machines), or any `IdentityTokenFunc`:
 
 When the zone-side application credential is resolved by ID (a token-federation credential), pass that ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion.
 
