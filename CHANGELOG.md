@@ -1,3 +1,35 @@
+## v0.17.0 (2026-07-16)
+
+
+- feat(oauth): move application credentials into the oauth package (#34)
+- * feat(oauth): move application credentials into the oauth package
+- Moves the credential surface (ApplicationCredential, ClientAuth,
+PrepareOptions, MultiZoneCredential, ClientSecret, WebIdentity with its
+private key management, WorkloadIdentity with its token sources, and
+the credential error types) from mcp into oauth, matching where the
+credentials live in keycardai-oauth (Python) and @keycardai/oauth (TS).
+- The mcp package re-exports everything as deprecated aliases with
+unchanged signatures, so existing imports compile and behave
+identically; the pre-existing mcp tests run against the aliases as the
+back-compat proof. Tests that reach package internals move to oauth.
+WebIdentityCredential gains a ClientID accessor, which AuthProvider
+uses instead of the now-cross-package private field. JSONWebTokenSigner
+stays in mcp (it depends on the middleware's AuthInfo).
+- Part of the Go restructure: the protocol-agnostic-sdk KEP's two-repo
+split is superseded by the go-sdk monorepo; this is the package move.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * fix(mcp): point the WebIdentity client-id error at oauth.WithClientID
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * refactor(oauth): keycardError markers on credential errors; keep deprecated EKS surface in mcp
+- The moved credential error types now implement the package's
+KeycardError marker interface. The deprecated EKS constructor, options,
+and error aliases stay in mcp, implemented over oauth's exported
+FileTokenSource API, so the oauth package carries no deprecated
+surface.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
 ## v0.16.0 (2026-07-15)
 
 
