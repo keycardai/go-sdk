@@ -247,27 +247,6 @@ func TestNewFileTokenSource_ConfigErrorWithoutPathOrEnv(t *testing.T) {
 	}
 }
 
-func TestNewEKSWorkloadIdentity_DoesNotDiscoverAzureVar(t *testing.T) {
-	// The deprecated EKS constructor keeps the EKS-only discovery list; the
-	// AKS variable is discovered only by NewFileTokenSource.
-	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte("azure-token"), 0o600); err != nil {
-		t.Fatalf("writing token file: %v", err)
-	}
-	for _, envVar := range defaultFileTokenEnvVars {
-		t.Setenv(envVar, "")
-	}
-	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", path)
-
-	if _, err := NewEKSWorkloadIdentity(); err == nil {
-		t.Error("NewEKSWorkloadIdentity: got nil error, want configuration error (EKS discovery must not include AZURE_FEDERATED_TOKEN_FILE)")
-	}
-
-	if _, err := NewFileTokenSource(); err != nil {
-		t.Errorf("NewFileTokenSource: got %v, want AZURE_FEDERATED_TOKEN_FILE discovered", err)
-	}
-}
-
 func TestGCPMetadataTokenSource_RequiresAudience(t *testing.T) {
 	_, err := NewGCPMetadataTokenSource("  ")
 

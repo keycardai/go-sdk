@@ -3,6 +3,9 @@
 package mcp
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/keycardai/go-sdk/oauth"
@@ -284,32 +287,80 @@ func NewFlyTokenSource(opts ...FlyTokenSourceOption) *FlyTokenSource {
 // EKSWorkloadIdentityCredential authenticates with an AWS EKS pod-identity
 // (projected service-account) token read from a mounted file.
 //
-// Deprecated: use [oauth.NewWorkloadIdentity] with [oauth.NewFileTokenSource].
+// Deprecated: use [oauth.NewWorkloadIdentity] with [oauth.NewFileTokenSource],
+// which also covers AKS and other platforms that project token files.
 type EKSWorkloadIdentityCredential = oauth.WorkloadIdentityCredential
+
+// defaultEKSEnvVars is the env-var discovery order for NewEKSWorkloadIdentity.
+// Unlike oauth.NewFileTokenSource's default discovery it is limited to the EKS
+// variables.
+var defaultEKSEnvVars = []string{
+	"KEYCARD_EKS_WORKLOAD_IDENTITY_TOKEN_FILE",
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+}
 
 // EKSWorkloadIdentityOption configures NewEKSWorkloadIdentity.
 //
 // Deprecated: use [oauth.FileTokenSourceOption] with [oauth.NewFileTokenSource].
-type EKSWorkloadIdentityOption = oauth.EKSWorkloadIdentityOption
+type EKSWorkloadIdentityOption func(*eksConfig)
+
+type eksConfig struct {
+	tokenFilePath string
+	envVarName    string
+}
 
 // WithTokenFilePath sets the path to the EKS token file directly.
 //
 // Deprecated: use [oauth.WithFileTokenPath] with [oauth.NewFileTokenSource].
 func WithTokenFilePath(path string) EKSWorkloadIdentityOption {
-	return oauth.WithTokenFilePath(path)
+	return func(cfg *eksConfig) { cfg.tokenFilePath = path }
 }
 
 // WithEnvVarName adds a custom environment variable name to check for the token file path.
 //
 // Deprecated: use [oauth.WithFileEnvVar] with [oauth.NewFileTokenSource].
 func WithEnvVarName(name string) EKSWorkloadIdentityOption {
-	return oauth.WithEnvVarName(name)
+	return func(cfg *eksConfig) { cfg.envVarName = name }
 }
 
 // NewEKSWorkloadIdentity creates a workload identity credential that reads the
-// EKS projected token file.
+// EKS projected token file, with env-var discovery limited to the EKS
+// variables.
 //
 // Deprecated: use [oauth.NewWorkloadIdentity] with [oauth.NewFileTokenSource].
 func NewEKSWorkloadIdentity(opts ...EKSWorkloadIdentityOption) (*EKSWorkloadIdentityCredential, error) {
-	return oauth.NewEKSWorkloadIdentity(opts...)
+	cfg := eksConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	tokenFilePath := cfg.tokenFilePath
+	if tokenFilePath == "" {
+		envVars := defaultEKSEnvVars
+		if cfg.envVarName != "" {
+			envVars = append([]string{cfg.envVarName}, envVars...)
+		}
+
+		for _, envVar := range envVars {
+			if v := os.Getenv(envVar); v != "" {
+				tokenFilePath = v
+				break
+			}
+		}
+
+		if tokenFilePath == "" {
+			return nil, &oauth.WorkloadIdentityConfigurationError{
+				Source: oauth.WorkloadIdentitySourceFile,
+				Message: fmt.Sprintf("could not find token file path in environment variables; checked: %s",
+					strings.Join(envVars, ", ")),
+			}
+		}
+	}
+
+	source, err := oauth.NewFileTokenSource(oauth.WithFileTokenPath(tokenFilePath))
+	if err != nil {
+		return nil, err
+	}
+	return oauth.NewWorkloadIdentity(source)
 }

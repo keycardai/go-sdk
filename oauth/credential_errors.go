@@ -58,18 +58,6 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// EKSWorkloadIdentityConfigurationError indicates invalid workload identity
-// configuration at construction.
-//
-// Deprecated: use WorkloadIdentityConfigurationError.
-type EKSWorkloadIdentityConfigurationError = WorkloadIdentityConfigurationError
-
-// EKSWorkloadIdentityRuntimeError indicates the token could not be read at
-// request time.
-//
-// Deprecated: use WorkloadIdentityRuntimeError.
-type EKSWorkloadIdentityRuntimeError = WorkloadIdentityRuntimeError
-
 // ClientSecretConfigurationError indicates a ClientSecretCredential was constructed with
 // invalid configuration, such as an empty client_id or client_secret, or an empty
 // multi-zone map.
@@ -80,3 +68,8 @@ type ClientSecretConfigurationError struct {
 func (e *ClientSecretConfigurationError) Error() string {
 	return e.Message
 }
+
+func (*WebIdentityConfigurationError) keycardError()      {}
+func (*WorkloadIdentityConfigurationError) keycardError() {}
+func (*WorkloadIdentityRuntimeError) keycardError()       {}
+func (*ClientSecretConfigurationError) keycardError()     {}
