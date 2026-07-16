@@ -1,4 +1,4 @@
-package mcp
+package oauth
 
 import (
 	"context"
@@ -13,8 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/keycardai/go-sdk/oauth"
 )
 
 // PrivateKeyStorage persists RSA key pairs for WebIdentity.
@@ -202,10 +200,10 @@ func (m *PrivateKeyManager) CreateClientAssertion(ctx context.Context, issuer, a
 		issuer: issuer,
 	}
 
-	signer := oauth.NewJWTSigner(keyring)
+	signer := NewJWTSigner(keyring)
 
 	now := time.Now().Unix()
-	return signer.Sign(ctx, oauth.JWTClaims{
+	return signer.Sign(ctx, JWTClaims{
 		Issuer:   issuer,
 		Subject:  issuer,
 		Audience: []string{audience},
@@ -265,8 +263,8 @@ func (m *PrivateKeyManager) generateAndStoreKeyPair() error {
 	// Build public key JWK
 	publicJWK := map[string]any{
 		"kty": "RSA",
-		"n":   oauth.Base64URLEncode(privateKey.PublicKey.N.Bytes()),
-		"e":   oauth.Base64URLEncode(big.NewInt(int64(privateKey.PublicKey.E)).Bytes()),
+		"n":   Base64URLEncode(privateKey.PublicKey.N.Bytes()),
+		"e":   Base64URLEncode(big.NewInt(int64(privateKey.PublicKey.E)).Bytes()),
 		"kid": m.keyID,
 		"alg": "RS256",
 		"use": "sig",
@@ -305,8 +303,8 @@ type staticPrivateKeyring struct {
 	issuer string
 }
 
-func (r *staticPrivateKeyring) Key(_ context.Context, _ string) (oauth.IdentifiableKey, error) {
-	return oauth.IdentifiableKey{Key: r.key, Issuer: r.issuer, KID: r.kid}, nil
+func (r *staticPrivateKeyring) Key(_ context.Context, _ string) (IdentifiableKey, error) {
+	return IdentifiableKey{Key: r.key, Issuer: r.issuer, KID: r.kid}, nil
 }
 
 // generateUUID generates a random UUID v4 string.

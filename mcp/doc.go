@@ -4,8 +4,10 @@
 //
 //   - Bearer auth middleware for protecting HTTP endpoints ([RequireBearerAuth])
 //   - Token exchange orchestration for delegated access ([AuthProvider], [AccessContext])
-//   - Application credential implementations ([ClientSecret], [WebIdentity], [WorkloadIdentityCredential])
 //   - Well-known metadata endpoint handlers ([AuthMetadataHandler])
 //   - JWT token verification ([JWTOAuthTokenVerifier])
-//   - Private key management for client assertions ([PrivateKeyManager])
+//
+// Application credentials (ClientSecret, WebIdentity, WorkloadIdentity and its
+// token sources) live in [github.com/keycardai/go-sdk/oauth]; this package
+// re-exports them as deprecated aliases for backward compatibility.
 package mcp

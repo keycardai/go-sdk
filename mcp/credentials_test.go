@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 func TestNewClientSecret_RejectsEmpty(t *testing.T) {
@@ -182,5 +184,31 @@ func TestEKSWorkloadIdentity_PreparesRequestWhenTokenPresent(t *testing.T) {
 	}
 	if req.ClientAssertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
 		t.Errorf("client assertion type: got %q", req.ClientAssertionType)
+	}
+}
+
+func TestNewEKSWorkloadIdentity_DoesNotDiscoverAzureVar(t *testing.T) {
+	// The deprecated EKS constructor keeps the EKS-only discovery list; the
+	// AKS variable is discovered only by oauth.NewFileTokenSource.
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("azure-token"), 0o600); err != nil {
+		t.Fatalf("writing token file: %v", err)
+	}
+	for _, envVar := range []string{
+		"KEYCARD_EKS_WORKLOAD_IDENTITY_TOKEN_FILE",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+		"AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AZURE_FEDERATED_TOKEN_FILE",
+	} {
+		t.Setenv(envVar, "")
+	}
+	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", path)
+
+	if _, err := NewEKSWorkloadIdentity(); err == nil {
+		t.Error("NewEKSWorkloadIdentity: got nil error, want configuration error (EKS discovery must not include AZURE_FEDERATED_TOKEN_FILE)")
+	}
+
+	if _, err := oauth.NewFileTokenSource(); err != nil {
+		t.Errorf("oauth.NewFileTokenSource: got %v, want AZURE_FEDERATED_TOKEN_FILE discovered", err)
 	}
 }

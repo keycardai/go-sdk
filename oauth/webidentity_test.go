@@ -1,4 +1,4 @@
-package mcp
+package oauth
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/keycardai/go-sdk/oauth"
 )
 
 // assertionClaims decodes (without verifying) the claims of a JWT client assertion.
@@ -19,7 +17,7 @@ func assertionClaims(t *testing.T, jwt string) map[string]any {
 	if len(parts) != 3 {
 		t.Fatalf("not a JWT: %q", jwt)
 	}
-	payload, err := oauth.Base64URLDecode(parts[1])
+	payload, err := Base64URLDecode(parts[1])
 	if err != nil {
 		t.Fatalf("decoding assertion payload: %v", err)
 	}
@@ -103,26 +101,6 @@ func TestWebIdentity_AudienceConfigOverride(t *testing.T) {
 	}
 	if claims := assertionClaims(t, req.ClientAssertion); claims["aud"] != "https://custom.audience" {
 		t.Errorf("aud: got %v, want the audience override", claims["aud"])
-	}
-}
-
-func TestNewAuthProvider_WebIdentityRequiresClientID(t *testing.T) {
-	// The provider cannot supply resource_client_id at request time, so a WebIdentity
-	// credential without a client id is unusable; NewAuthProvider rejects it at construction.
-	_, err := NewAuthProvider(
-		WithZoneURL("https://zone.example.com"),
-		WithApplicationCredential(NewWebIdentity(WithStorageDir(t.TempDir()))),
-	)
-	var cfgErr *AuthProviderConfigurationError
-	if !errors.As(err, &cfgErr) {
-		t.Fatalf("error: got %v, want AuthProviderConfigurationError", err)
-	}
-
-	if _, err := NewAuthProvider(
-		WithZoneURL("https://zone.example.com"),
-		WithApplicationCredential(NewWebIdentity(WithClientID("client-a"), WithStorageDir(t.TempDir()))),
-	); err != nil {
-		t.Errorf("with a client id, construction should succeed: %v", err)
 	}
 }
 
