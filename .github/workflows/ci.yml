@@ -37,3 +37,24 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: go build ./examples/...
+
+  # MCP framework examples live in their own modules (with a replace directive
+  # to the root) so the root module stays free of MCP framework dependencies.
+  # Their tests integration-test the SDK against each framework, including
+  # AuthInfo freshness across token rotation within one MCP session.
+  test-examples:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        example: [mcp-server-official, mcp-server-mark3labs]
+    defaults:
+      run:
+        working-directory: examples/${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/${{ matrix.example }}/go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
