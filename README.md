@@ -148,6 +148,7 @@ import (
     mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
     keycard "github.com/keycardai/go-sdk/mcp"
+    "github.com/keycardai/go-sdk/oauth"
 )
 
 // Adapt the Keycard verifier to the official SDK's auth.TokenVerifier seam.
@@ -168,7 +169,10 @@ func keycardTokenVerifier(v keycard.TokenVerifier) auth.TokenVerifier {
     }
 }
 
-verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+// WithAudiences binds accepted tokens to this resource server; without it,
+// any token the zone minted for another resource server also passes.
+verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://mcp.example.com/mcp"))
 
 handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
 mux.Handle("/mcp", auth.RequireBearerToken(keycardTokenVerifier(verifier), &auth.RequireBearerTokenOptions{
@@ -197,9 +201,11 @@ import (
     "github.com/mark3labs/mcp-go/server"
 
     keycard "github.com/keycardai/go-sdk/mcp"
+    "github.com/keycardai/go-sdk/oauth"
 )
 
-verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://mcp.example.com/mcp"))
 
 streamable := server.NewStreamableHTTPServer(mcpServer)
 mux.Handle("/mcp", keycard.RequireBearerAuth(

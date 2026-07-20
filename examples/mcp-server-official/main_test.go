@@ -126,8 +126,15 @@ func TestAuthInfoFreshnessAcrossSession(t *testing.T) {
 
 	// A valid token for a different user must be rejected: the UserID set by
 	// the adapter binds the session to alice (session-hijack prevention).
+	// The transport rejects with 403 "session user mismatch"; the client
+	// surfaces only the status text, so assert Forbidden to distinguish the
+	// binding rejection from an invalid-token 401 (Unauthorized).
 	rt.setToken("token-mallory")
-	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "whoami"}); err == nil {
-		t.Error("expected session user mismatch error for a different user's token, got nil")
+	_, err = session.CallTool(context.Background(), &mcp.CallToolParams{Name: "whoami"})
+	if err == nil {
+		t.Fatal("expected session user mismatch error for a different user's token, got nil")
+	}
+	if !strings.Contains(err.Error(), "Forbidden") {
+		t.Errorf("rejection: got %q, want 403 Forbidden (session user mismatch)", err)
 	}
 }

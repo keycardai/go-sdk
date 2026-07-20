@@ -23,6 +23,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	keycard "github.com/keycardai/go-sdk/mcp"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 // keycardExtraKey is the TokenInfo.Extra key under which KeycardTokenVerifier
@@ -107,9 +108,17 @@ func main() {
 		log.Fatal("KEYCARD_ZONE_URL environment variable is required")
 	}
 
+	serverURL := os.Getenv("MCP_SERVER_URL")
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
+	}
+
 	// The verifier trusts only tokens issued by this zone and resolves keys
-	// from its JWKS.
-	verifier, err := keycard.NewZoneTokenVerifier(zoneURL)
+	// from its JWKS. WithAudiences binds accepted tokens to this resource
+	// server (the /mcp resource the metadata handler advertises); without it,
+	// a token the zone minted for any other resource server would also pass
+	// the scope and expiry checks here.
+	verifier, err := keycard.NewZoneTokenVerifier(zoneURL, oauth.WithAudiences(serverURL+"/mcp"))
 	if err != nil {
 		log.Fatal(err)
 	}
