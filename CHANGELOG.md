@@ -1,3 +1,71 @@
+## v0.18.0 (2026-07-21)
+
+
+- feat(mcp): Go MCP integration (context exports, official + mark3labs examples) (#36)
+- * feat(mcp): export AuthInfoFromContext and AccessContextFromContext
+- MCP framework tool handlers receive a context derived from the inbound
+HTTP request, not the *http.Request itself, so the FromRequest accessors
+were unreachable from them. The new context accessors expose the same
+values; the FromRequest variants now delegate to them.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * feat(mcp): example serving MCP with the official modelcontextprotocol/go-sdk
+- A ~25 line adapter feeds the Keycard verifier into the official SDK's
+auth.TokenVerifier seam. Verification runs per HTTP request, AuthInfo
+rides to tool handlers in TokenInfo.Extra via req.Extra.TokenInfo, and
+setting UserID activates the transport's session-hijack binding. The
+example lives in its own module so the root module stays free of MCP
+framework dependencies.
+- The test asserts AuthInfo freshness across a token rotation within one
+session, and that a different user's token is rejected on that session.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * feat(mcp): example serving MCP with mark3labs/mcp-go
+- Keycard's RequireBearerAuth wraps the mark3labs streamable server
+directly. mark3labs derives each tool handler's context from the
+inbound HTTP request, so handlers read the caller's auth with
+AuthInfoFromContext and it is always the auth for the call in flight.
+Own module, keeping MCP framework dependencies out of the root module.
+- The test asserts AuthInfo freshness across a token rotation within one
+session and that rejected tokens never reach the handler.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * docs: README section on serving MCP with the official go-sdk and mark3labs
+- Documents the stateful-context freeze in the official SDK's streamable
+transport (session context, not request context, reaches tool handlers)
+and the per-call auth.TokenVerifier seam that closes it, plus the
+stateless variant. Shows the mark3labs pairing where the handler
+context is per-request and AuthInfoFromContext is enough.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * ci: build and test the MCP framework example modules
+- The example modules are excluded from the root module's ./... patterns,
+so a dedicated matrix job runs build/vet/test in each, on the Go
+version each module's go.mod declares. This is where the AuthInfo
+freshness integration test against the official go-sdk runs.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * fix(mcp): bind example verifiers to their resource audience
+- The MCP examples and README snippets now pass oauth.WithAudiences with
+the /mcp resource the metadata handler advertises, so a copy-paste
+deployment rejects tokens the zone minted for other resource servers.
+The official example's hijack test also asserts the 403 Forbidden
+rejection reason instead of any error.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * fix(mcp): advertise resource_metadata in the official example's 401 challenge
+- The official SDK's RequireBearerToken only emits resource_metadata in
+the WWW-Authenticate header when ResourceMetadataURL is set, and without
+it an MCP client that gets a 401 has no pointer to the protected
+resource metadata and cannot discover the authorization server.
+Keycard's own middleware derives this automatically, which is why the
+mark3labs example needs nothing.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * test(mcp): assert the mark3labs 401 challenge advertises resource metadata
+- Mirrors the official example's challenge test so CI guards both halves
+of the parity claim: Keycard's middleware derives the path-inserted
+pointer from the request with no configuration. Also documents the
+MCP_SERVER_URL alignment assumption in the official example, since the
+challenge pointer and audience derive from the env var while the served
+PRM document derives its resource from the request host.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
 ## v0.17.0 (2026-07-16)
 
 
