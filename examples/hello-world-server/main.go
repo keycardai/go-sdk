@@ -8,12 +8,18 @@ import (
 	"os"
 
 	"github.com/keycardai/go-sdk/mcp"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 func main() {
 	zoneURL := os.Getenv("KEYCARD_ZONE_URL")
 	if zoneURL == "" {
 		log.Fatal("KEYCARD_ZONE_URL environment variable is required")
+	}
+
+	serverURL := os.Getenv("SERVER_URL")
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
 	}
 
 	mux := http.NewServeMux()
@@ -27,7 +33,10 @@ func main() {
 
 	// The verifier trusts only tokens issued by this zone and resolves keys from its
 	// JWKS. It rejects tokens from any other issuer before resolving a key.
-	verifier, err := mcp.NewZoneTokenVerifier(zoneURL)
+	// WithAudiences binds accepted tokens to this resource server; without it,
+	// a token the zone minted for any other resource server would also pass
+	// the scope and expiry checks here.
+	verifier, err := mcp.NewZoneTokenVerifier(zoneURL, oauth.WithAudiences(serverURL))
 	if err != nil {
 		log.Fatal(err)
 	}
