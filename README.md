@@ -175,8 +175,12 @@ verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
     oauth.WithAudiences("https://mcp.example.com/mcp"))
 
 handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
+// ResourceMetadataURL puts resource_metadata in the 401 challenge (RFC 9728),
+// which is how MCP clients discover the authorization server. Keycard's own
+// RequireBearerAuth derives it automatically; this middleware needs it set.
 mux.Handle("/mcp", auth.RequireBearerToken(keycardTokenVerifier(verifier), &auth.RequireBearerTokenOptions{
-    Scopes: []string{"mcp:tools"},
+    Scopes:              []string{"mcp:tools"},
+    ResourceMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
 })(handler))
 ```
 

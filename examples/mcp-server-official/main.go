@@ -88,7 +88,7 @@ func whoami(_ context.Context, req *mcp.CallToolRequest, _ any) (*mcp.CallToolRe
 
 // newHandler assembles the MCP server and wraps its streamable transport with
 // the official SDK's bearer middleware, backed by the Keycard verifier.
-func newHandler(verifier keycard.TokenVerifier, requiredScopes ...string) http.Handler {
+func newHandler(verifier keycard.TokenVerifier, resourceMetadataURL string, requiredScopes ...string) http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "keycard-official-example", Version: "0.1.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "whoami",
@@ -97,8 +97,13 @@ func newHandler(verifier keycard.TokenVerifier, requiredScopes ...string) http.H
 
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 
+	// ResourceMetadataURL puts resource_metadata in the 401 WWW-Authenticate
+	// challenge (RFC 9728 section 5.1), which is how MCP clients discover the
+	// authorization server. Keycard's own RequireBearerAuth derives this
+	// automatically; the official SDK's middleware needs it spelled out.
 	return auth.RequireBearerToken(KeycardTokenVerifier(verifier), &auth.RequireBearerTokenOptions{
-		Scopes: requiredScopes,
+		Scopes:              requiredScopes,
+		ResourceMetadataURL: resourceMetadataURL,
 	})(streamable)
 }
 
@@ -132,7 +137,8 @@ func main() {
 		keycard.WithResourceName("Official go-sdk MCP Server"),
 	))
 
-	mux.Handle("/mcp", newHandler(verifier, "mcp:tools"))
+	prmURL := serverURL + "/.well-known/oauth-protected-resource/mcp"
+	mux.Handle("/mcp", newHandler(verifier, prmURL, "mcp:tools"))
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

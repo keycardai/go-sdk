@@ -87,7 +87,7 @@ func TestAuthInfoFreshnessAcrossSession(t *testing.T) {
 		"token-mallory": {Subject: "mallory", ClientID: "client-2", Scopes: []string{"mcp:tools"}, ExpiresAt: expiry},
 	}}
 
-	httpServer := httptest.NewServer(newHandler(verifier, "mcp:tools"))
+	httpServer := httptest.NewServer(newHandler(verifier, "https://mcp.example.com/.well-known/oauth-protected-resource/mcp", "mcp:tools"))
 	defer httpServer.Close()
 
 	rt := &tokenRoundTripper{token: "token-a"}
@@ -136,5 +136,34 @@ func TestAuthInfoFreshnessAcrossSession(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Forbidden") {
 		t.Errorf("rejection: got %q, want 403 Forbidden (session user mismatch)", err)
+	}
+}
+
+// TestUnauthenticatedChallengeAdvertisesResourceMetadata asserts the 401
+// challenge carries resource_metadata (RFC 9728 section 5.1), which is how an
+// MCP client discovers the authorization server. The official SDK only emits
+// it when ResourceMetadataURL is set on RequireBearerTokenOptions.
+func TestUnauthenticatedChallengeAdvertisesResourceMetadata(t *testing.T) {
+	verifier := &stubVerifier{tokens: map[string]*keycard.AuthInfo{}}
+	prmURL := "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+
+	httpServer := httptest.NewServer(newHandler(verifier, prmURL, "mcp:tools"))
+	defer httpServer.Close()
+
+	res, err := http.Post(httpServer.URL, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST without token: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status: got %d, want 401", res.StatusCode)
+	}
+	challenge := res.Header.Get("WWW-Authenticate")
+	if challenge == "" {
+		t.Fatal("missing WWW-Authenticate challenge on 401")
+	}
+	if !strings.Contains(challenge, `resource_metadata="`+prmURL+`"`) {
+		t.Errorf("challenge %q missing resource_metadata=%q", challenge, prmURL)
 	}
 }
