@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -120,5 +121,32 @@ func TestAuthInfoFreshnessAcrossSession(t *testing.T) {
 	req.Params.Name = "whoami"
 	if _, err := c.CallTool(context.Background(), req); err == nil {
 		t.Error("expected error for a rejected token, got nil")
+	}
+}
+
+// TestUnauthenticatedChallengeAdvertisesResourceMetadata asserts Keycard's
+// middleware advertises the path-inserted protected-resource metadata in the
+// 401 challenge with no configuration, derived from the request host and
+// path. This is the discovery pointer the official-SDK example must set
+// explicitly; here it comes for free.
+func TestUnauthenticatedChallengeAdvertisesResourceMetadata(t *testing.T) {
+	verifier := &stubVerifier{tokens: map[string]*keycard.AuthInfo{}}
+
+	httpServer := httptest.NewServer(newHandler(verifier, "mcp:tools"))
+	defer httpServer.Close()
+
+	res, err := http.Post(httpServer.URL+"/mcp", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST without token: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status: got %d, want 401", res.StatusCode)
+	}
+	challenge := res.Header.Get("WWW-Authenticate")
+	want := `resource_metadata="` + httpServer.URL + `/.well-known/oauth-protected-resource/mcp"`
+	if !strings.Contains(challenge, want) {
+		t.Errorf("challenge %q missing %s", challenge, want)
 	}
 }

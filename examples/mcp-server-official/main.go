@@ -137,6 +137,11 @@ func main() {
 		keycard.WithResourceName("Official go-sdk MCP Server"),
 	))
 
+	// MCP_SERVER_URL must be the public URL clients actually reach: the
+	// challenge pointer and the token audience derive from it, while the
+	// served PRM document derives its resource from the request Host. If a
+	// proxy fronts this server with a different host or scheme, the three
+	// disagree and clients fail discovery or audience checks.
 	prmURL := serverURL + "/.well-known/oauth-protected-resource/mcp"
 	mux.Handle("/mcp", newHandler(verifier, prmURL, "mcp:tools"))
 
