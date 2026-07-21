@@ -17,18 +17,34 @@ const (
 	accessContextKey contextKey = "keycard_access_context"
 )
 
+// AuthInfoFromContext retrieves the AuthInfo from ctx.
+// Returns nil if no AuthInfo is present (e.g., RequireBearerAuth middleware was not applied).
+// Use it in handlers that receive a context but not the *http.Request, such as MCP
+// framework tool handlers whose context derives from the inbound HTTP request.
+func AuthInfoFromContext(ctx context.Context) *AuthInfo {
+	info, _ := ctx.Value(authInfoKey).(*AuthInfo)
+	return info
+}
+
 // AuthInfoFromRequest retrieves the AuthInfo from the request context.
 // Returns nil if no AuthInfo is present (e.g., RequireBearerAuth middleware was not applied).
 func AuthInfoFromRequest(r *http.Request) *AuthInfo {
-	info, _ := r.Context().Value(authInfoKey).(*AuthInfo)
-	return info
+	return AuthInfoFromContext(r.Context())
+}
+
+// AccessContextFromContext retrieves the AccessContext from ctx.
+// Returns nil if no AccessContext is present (e.g., Grant middleware was not applied).
+// Use it in handlers that receive a context but not the *http.Request, such as MCP
+// framework tool handlers whose context derives from the inbound HTTP request.
+func AccessContextFromContext(ctx context.Context) *AccessContext {
+	ac, _ := ctx.Value(accessContextKey).(*AccessContext)
+	return ac
 }
 
 // AccessContextFromRequest retrieves the AccessContext from the request context.
 // Returns nil if no AccessContext is present (e.g., Grant middleware was not applied).
 func AccessContextFromRequest(r *http.Request) *AccessContext {
-	ac, _ := r.Context().Value(accessContextKey).(*AccessContext)
-	return ac
+	return AccessContextFromContext(r.Context())
 }
 
 // BearerAuthOption configures RequireBearerAuth middleware.

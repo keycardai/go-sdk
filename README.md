@@ -134,6 +134,99 @@ authProvider, _ := mcp.NewAuthProvider(
 )
 ```
 
+## Serving MCP
+
+`RequireBearerAuth` is plain `net/http` middleware and the SDK depends on no MCP framework, so it composes with any framework's HTTP handler. The two common pairings:
+
+### With the official `modelcontextprotocol/go-sdk`
+
+The official SDK's streamable transport freezes the context a stateful session was created with: tool handlers receive the session's context, not the current request's, so auth stored on the request context is only ever the auth from the `initialize` call and goes stale as the client rotates tokens. Feed the Keycard verifier into the official SDK's own `auth.TokenVerifier` seam instead — verification runs on every HTTP request and the result rides to each call in `req.Extra.TokenInfo`:
+
+```go
+import (
+    "github.com/modelcontextprotocol/go-sdk/auth"
+    mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+    keycard "github.com/keycardai/go-sdk/mcp"
+    "github.com/keycardai/go-sdk/oauth"
+)
+
+// Adapt the Keycard verifier to the official SDK's auth.TokenVerifier seam.
+func keycardTokenVerifier(v keycard.TokenVerifier) auth.TokenVerifier {
+    return func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+        info, err := v.VerifyAccessToken(ctx, token)
+        if err != nil {
+            return nil, fmt.Errorf("%w: %w", auth.ErrInvalidToken, err)
+        }
+        return &auth.TokenInfo{
+            Scopes:     info.Scopes,
+            Expiration: time.Unix(info.ExpiresAt, 0),
+            // UserID activates the transport's session-hijack binding: every
+            // request on a session must present a token for the same user.
+            UserID: info.Subject,
+            Extra:  map[string]any{"keycard": info},
+        }, nil
+    }
+}
+
+// WithAudiences binds accepted tokens to this resource server; without it,
+// any token the zone minted for another resource server also passes.
+verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://mcp.example.com/mcp"))
+
+handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
+// ResourceMetadataURL puts resource_metadata in the 401 challenge (RFC 9728),
+// which is how MCP clients discover the authorization server. Keycard's own
+// RequireBearerAuth derives it automatically; this middleware needs it set.
+mux.Handle("/mcp", auth.RequireBearerToken(keycardTokenVerifier(verifier), &auth.RequireBearerTokenOptions{
+    Scopes:              []string{"mcp:tools"},
+    ResourceMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+})(handler))
+```
+
+Tool handlers read the auth for the call in flight from the request, never from their context:
+
+```go
+func whoami(ctx context.Context, req *mcpsdk.CallToolRequest, _ any) (*mcpsdk.CallToolResult, whoamiOutput, error) {
+    info, _ := req.Extra.TokenInfo.Extra["keycard"].(*keycard.AuthInfo)
+    // ...
+}
+```
+
+With `StreamableHTTPOptions{Stateless: true}` each request gets a fresh session and context, so the freeze does not apply — but the `TokenVerifier` seam works identically in both modes and is the recommended wiring for both. Full example: [`examples/mcp-server-official`](examples/mcp-server-official).
+
+### With `mark3labs/mcp-go`
+
+mark3labs derives each tool handler's context from the inbound HTTP request on every call, so Keycard's middleware is the auth layer directly and handlers read auth from their own context:
+
+```go
+import (
+    "github.com/mark3labs/mcp-go/mcp"
+    "github.com/mark3labs/mcp-go/server"
+
+    keycard "github.com/keycardai/go-sdk/mcp"
+    "github.com/keycardai/go-sdk/oauth"
+)
+
+verifier, _ := keycard.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://mcp.example.com/mcp"))
+
+streamable := server.NewStreamableHTTPServer(mcpServer)
+mux.Handle("/mcp", keycard.RequireBearerAuth(
+    verifier,
+    keycard.WithRequiredScopes("mcp:tools"),
+)(streamable))
+
+func whoami(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+    info := keycard.AuthInfoFromContext(ctx) // always the auth for this call
+    // ...
+}
+```
+
+Full example: [`examples/mcp-server-mark3labs`](examples/mcp-server-mark3labs).
+
+Both examples live in their own Go modules; the root module stays free of MCP framework dependencies.
+
 ## Credential Types
 
 | Type               | Auth Method                      | Use Case                                                 |

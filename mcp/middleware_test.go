@@ -255,3 +255,60 @@ func TestAuthInfoFromRequest_NilWhenNotSet(t *testing.T) {
 		t.Error("expected nil AuthInfo when not set")
 	}
 }
+
+func TestAuthInfoFromContext(t *testing.T) {
+	if info := AuthInfoFromContext(context.Background()); info != nil {
+		t.Error("expected nil AuthInfo when not set")
+	}
+
+	verifier := &mockTokenVerifier{
+		verifyFunc: func(_ context.Context, token string) (*AuthInfo, error) {
+			return &AuthInfo{Token: token, ClientID: "client-123"}, nil
+		},
+	}
+
+	// The context handed to the next handler must carry the same AuthInfo the
+	// request accessor sees: MCP framework tool handlers receive that context,
+	// not the *http.Request.
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := AuthInfoFromContext(r.Context())
+		if info == nil {
+			t.Fatal("expected AuthInfo from context")
+		}
+		if info != AuthInfoFromRequest(r) {
+			t.Error("AuthInfoFromContext and AuthInfoFromRequest should return the same AuthInfo")
+		}
+		if info.ClientID != "client-123" {
+			t.Errorf("ClientID: got %q, want %q", info.ClientID, "client-123")
+		}
+	}))
+
+	req := httptest.NewRequest("GET", "/api/test", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200", rec.Code)
+	}
+}
+
+func TestAccessContextFromContext(t *testing.T) {
+	if ac := AccessContextFromContext(context.Background()); ac != nil {
+		t.Error("expected nil AccessContext when not set")
+	}
+
+	ac := NewAccessContext()
+	ctx := context.WithValue(context.Background(), accessContextKey, ac)
+
+	got := AccessContextFromContext(ctx)
+	if got != ac {
+		t.Error("expected the AccessContext stored in the context")
+	}
+
+	req := httptest.NewRequest("GET", "/api/test", nil).WithContext(ctx)
+	if AccessContextFromRequest(req) != ac {
+		t.Error("AccessContextFromRequest should return the same AccessContext as AccessContextFromContext")
+	}
+}
