@@ -36,6 +36,11 @@ func main() {
 	// WithAudiences binds accepted tokens to this resource server; without it,
 	// a token the zone minted for any other resource server would also pass
 	// the scope and expiry checks here.
+	// SERVER_URL must match the scheme and host clients actually reach: the
+	// metadata handler advertises the request-derived origin as the resource,
+	// and a token minted for that advertised origin fails this audience check
+	// if SERVER_URL differs. Behind a TLS-terminating proxy, forward
+	// X-Forwarded-Proto or the advertised scheme downgrades to http.
 	verifier, err := mcp.NewZoneTokenVerifier(zoneURL, oauth.WithAudiences(serverURL))
 	if err != nil {
 		log.Fatal(err)
