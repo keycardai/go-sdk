@@ -1,3 +1,28 @@
+## v0.18.1 (2026-07-28)
+
+
+- fix(mcp): example audience binding, CI matrix refresh, x/sync bump (#37)
+- * fix(mcp): bind the hello-world-server example verifier to its resource audience
+- Without oauth.WithAudiences, the front-door example accepts any token
+the zone minted for any resource server as long as scopes match.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * ci: test the go.mod floor and current stable instead of two EOL versions
+- The 1.22 leg auto-upgraded via GOTOOLCHAIN and silently tested 1.23
+twice; the matrix now covers the declared 1.23 floor and 1.25.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * build: bump golang.org/x/sync to v0.16.0
+- Newest release that keeps the go 1.23 directive; v0.17.0+ requires
+go 1.24+ and bumping the module floor is a separate decision.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- * docs(mcp): warn that SERVER_URL must match the request-derived resource origin
+- The metadata handler advertises requestScheme://host as the resource
+while the audience check enforces the static SERVER_URL; they agree
+only when the env var equals the origin clients reach, and a proxy
+that drops X-Forwarded-Proto downgrades the advertised scheme.
+- Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
 ## v0.18.0 (2026-07-21)
 
 
