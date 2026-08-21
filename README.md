@@ -1,8 +1,5 @@
 # Keycard Go SDK
 
-> **Preview.** APIs may change between minor versions while this SDK is in
-> preview.
-
 Go SDK for [Keycard](https://keycard.cloud) — OAuth 2.0 and MCP authentication.
 
 ## Installation
