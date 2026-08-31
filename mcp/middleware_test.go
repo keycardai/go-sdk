@@ -46,6 +46,47 @@ func TestRequireBearerAuth_ValidToken(t *testing.T) {
 	}
 }
 
+// TestRequireBearerAuth_PreservesMcpHeaders pins that the middleware forwards
+// the MCP transport headers untouched. From protocol version 2026-07-28 (SEP-2243)
+// an MCP server rejects a tools/call whose Mcp-Method or Mcp-Name is missing or
+// disagrees with the body, so any layer that rewrites or drops them turns valid
+// calls into 400s.
+func TestRequireBearerAuth_PreservesMcpHeaders(t *testing.T) {
+	verifier := &mockTokenVerifier{
+		verifyFunc: func(_ context.Context, token string) (*AuthInfo, error) {
+			return &AuthInfo{Token: token, ClientID: "client-123"}, nil
+		},
+	}
+
+	mcpHeaders := map[string]string{
+		"Mcp-Method":           "tools/call",
+		"Mcp-Name":             "whoami",
+		"MCP-Protocol-Version": "2026-07-28",
+	}
+
+	var got http.Header
+	handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+	}))
+
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	for header, value := range mcpHeaders {
+		req.Header.Set(header, value)
+	}
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got == nil {
+		t.Fatal("handler was not called")
+	}
+	for header, want := range mcpHeaders {
+		if got.Get(header) != want {
+			t.Errorf("%s: got %q, want %q", header, got.Get(header), want)
+		}
+	}
+}
+
 func TestRequireBearerAuth_MissingHeader(t *testing.T) {
 	verifier := &mockTokenVerifier{}
 
