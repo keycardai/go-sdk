@@ -21,7 +21,7 @@ headers so they reach the server verbatim. On MCP protocol version
 `2026-07-28` (SEP-2243) the server rejects a `tools/call` whose `Mcp-Method` or
 `Mcp-Name` is missing or disagrees with the JSON-RPC body, so a stripping
 intermediary turns valid calls into HTTP 400s while the bearer token is
-perfectly valid — easily misread as a Keycard auth failure. The tell is that
+perfectly valid, which is easily misread as a Keycard auth failure. The tell is that
 header validation returns 400 with no `WWW-Authenticate`, whereas Keycard auth
 failures return 401 or 403 with a challenge.
 
