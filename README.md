@@ -1,6 +1,6 @@
 # Keycard Go SDK
 
-Go SDK for [Keycard](https://keycard.cloud) — OAuth 2.0 and MCP authentication.
+Go SDK for [Keycard](https://keycard.cloud): OAuth 2.0 and MCP authentication.
 
 ## Installation
 
@@ -18,31 +18,32 @@ import "github.com/keycardai/go-sdk/a2a"    // Agent-to-agent delegation
 
 ## Packages
 
-### `oauth` — Pure OAuth 2.0 Primitives
+### `oauth`: Pure OAuth 2.0 Primitives
 
 No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token exchange, and OAuth metadata discovery.
 
-- **JWT signing/verification** — `JWTSigner`, `JWTVerifier`
-- **JWKS keyring** — `JWKSOAuthKeyring` with two-level caching and request deduplication
-- **Token exchange** — `TokenExchangeClient` (RFC 8693)
-- **Discovery** — `FetchAuthorizationServerMetadata` (RFC 8414)
-- **Application credentials** — `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
+- **JWT signing/verification**: `JWTSigner`, `JWTVerifier`
+- **JWKS keyring**: `JWKSOAuthKeyring` with two-level caching and request deduplication
+- **Token exchange**: `TokenExchangeClient` (RFC 8693)
+- **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including the OIDC `userinfo_endpoint` and `end_session_endpoint`
+- **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
+- **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
 
-### `mcp` — MCP OAuth Integration
+### `mcp`: MCP OAuth Integration
 
 Builds on `oauth` to provide server-side and client-side MCP authentication.
 
-- **Bearer auth middleware** — `RequireBearerAuth` (standard `net/http` middleware), audience-bound via `oauth.WithAudiences`
-- **Token exchange orchestration** — `AuthProvider`, `AccessContext`; the `Grant` decorator with `WithUserIdentifier` (impersonation) and `WithRequestScopes`
-- **Metadata endpoints** — `AuthMetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
+- **Bearer auth middleware**: `RequireBearerAuth` (standard `net/http` middleware), audience-bound via `oauth.WithAudiences`
+- **Token exchange orchestration**: `AuthProvider`, `AccessContext`; the `Grant` decorator with `WithUserIdentifier` (impersonation) and `WithRequestScopes`
+- **Metadata endpoints**: `AuthMetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
 
 Application credentials moved to the `oauth` package; `mcp` re-exports them as deprecated aliases, so existing imports keep working.
 
-### `a2a` — Agent-to-Agent Delegation
+### `a2a`: Agent-to-Agent Delegation
 
 One agent calling another on the user's behalf: discover the target agent's card, exchange the user's token for one scoped to the target (RFC 8693), and invoke its JSON-RPC endpoint.
 
-- **Delegation** — `DelegationClient`, `ServiceDiscovery`
+- **Delegation**: `DelegationClient`, `ServiceDiscovery`
 
 ## Quick Start
 
@@ -137,7 +138,7 @@ authProvider, _ := mcp.NewAuthProvider(
 
 ### With the official `modelcontextprotocol/go-sdk`
 
-The official SDK's streamable transport freezes the context a stateful session was created with: tool handlers receive the session's context, not the current request's, so auth stored on the request context is only ever the auth from the `initialize` call and goes stale as the client rotates tokens. Feed the Keycard verifier into the official SDK's own `auth.TokenVerifier` seam instead — verification runs on every HTTP request and the result rides to each call in `req.Extra.TokenInfo`:
+The official SDK's streamable transport freezes the context a stateful session was created with: tool handlers receive the session's context, not the current request's, so auth stored on the request context is only ever the auth from the `initialize` call and goes stale as the client rotates tokens. Feed the Keycard verifier into the official SDK's own `auth.TokenVerifier` seam instead: verification runs on every HTTP request and the result rides to each call in `req.Extra.TokenInfo`:
 
 ```go
 import (
@@ -190,7 +191,7 @@ func whoami(ctx context.Context, req *mcpsdk.CallToolRequest, _ any) (*mcpsdk.Ca
 }
 ```
 
-With `StreamableHTTPOptions{Stateless: true}` each request gets a fresh session and context, so the freeze does not apply — but the `TokenVerifier` seam works identically in both modes and is the recommended wiring for both. Full example: [`examples/mcp-server-official`](examples/mcp-server-official).
+With `StreamableHTTPOptions{Stateless: true}` each request gets a fresh session and context, so the freeze does not apply: but the `TokenVerifier` seam works identically in both modes and is the recommended wiring for both. Full example: [`examples/mcp-server-official`](examples/mcp-server-official).
 
 ### With `mark3labs/mcp-go`
 
@@ -257,7 +258,7 @@ if err != nil {
 }
 ```
 
-The `AccessContext` is a non-throwing result container — it never panics. Check status before accessing tokens:
+The `AccessContext` is a non-throwing result container: it never panics. Check status before accessing tokens:
 
 ```go
 ac := authProvider.ExchangeTokens(ctx, userToken, "res1", "res2")
@@ -266,9 +267,9 @@ switch ac.Status() {
 case mcp.StatusSuccess:
     // All resources exchanged successfully
 case mcp.StatusPartialError:
-    // Some resources failed — check individually
+    // Some resources failed: check individually
 case mcp.StatusError:
-    // Global error — no resources available
+    // Global error: no resources available
 }
 ```
 

@@ -38,27 +38,42 @@ func (e *HTTPError) Error() string {
 	return e.Message
 }
 
-// OAuthError represents an OAuth protocol error with an error code.
+// OAuthError represents an OAuth protocol error with an error code. Err carries the
+// underlying cause, when there is one (e.g. a JSON decode failure behind an
+// invalid_response), for errors.Is/errors.As.
 type OAuthError struct {
 	ErrorCode string
 	Message   string
 	ErrorURI  string
+	Err       error
 }
 
 func (e *OAuthError) Error() string {
-	if e.ErrorCode != "" {
-		return fmt.Sprintf("oauth error %s: %s", e.ErrorCode, e.Message)
+	msg := e.Message
+	if e.Err != nil {
+		msg = msg + ": " + e.Err.Error()
 	}
-	return e.Message
+	if e.ErrorCode != "" {
+		return fmt.Sprintf("oauth error %s: %s", e.ErrorCode, msg)
+	}
+	return msg
 }
+
+func (e *OAuthError) Unwrap() error { return e.Err }
 
 // InvalidTokenError indicates the token is invalid (expired, malformed, or bad signature).
 type InvalidTokenError struct {
 	Message  string
 	ErrorURI string
+	Err      error
 }
 
+func (e *InvalidTokenError) Unwrap() error { return e.Err }
+
 func (e *InvalidTokenError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
 	return e.Message
 }
 
@@ -148,6 +163,40 @@ type JWKSKeyNotFoundError struct {
 
 func (e *JWKSKeyNotFoundError) Error() string { return e.Message }
 func (*JWKSKeyNotFoundError) keycardError()   {}
+
+// UserInfoDiscoveryError indicates the UserInfo endpoint could not be resolved from the
+// issuer's authorization server metadata. Err carries the underlying cause (e.g. a
+// discovery fetch failure or an *IssuerMismatchError) for errors.Is/errors.As.
+type UserInfoDiscoveryError struct {
+	Message string
+	Err     error
+}
+
+func (e *UserInfoDiscoveryError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *UserInfoDiscoveryError) Unwrap() error { return e.Err }
+func (*UserInfoDiscoveryError) keycardError()   {}
+
+// UserInfoFetchError indicates the UserInfo request failed in transport, or its body
+// could not be read. Err carries the underlying cause (e.g. context.DeadlineExceeded)
+// for errors.Is/errors.As.
+type UserInfoFetchError struct {
+	Message string
+	Err     error
+}
+
+func (e *UserInfoFetchError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *UserInfoFetchError) Unwrap() error { return e.Err }
+func (*UserInfoFetchError) keycardError()   {}
 
 // parseOAuthErrorResponse parses an RFC 6749 section 5.2 error response from a token or
 // registration endpoint. It returns an *OAuthError when the body is JSON carrying an
