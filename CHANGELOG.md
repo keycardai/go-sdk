@@ -1,3 +1,20 @@
+## v0.19.0 (2026-09-01)
+
+
+- feat(oauth): typed OIDC discovery fields and a UserInfo call (#44)
+- * feat(oauth): typed OIDC discovery fields and a UserInfo call
+- Adds the OIDC discovery fields to AuthorizationServerMetadata and FetchUserInfo, which sends the access token to the discovered userinfo_endpoint and returns the claims document.
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * docs: colons for em dashes across the README
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+Co-authored-by: Larry-Osakwe <larryosak@gmail.com>
+- ci: read the SDK release app id from a variable (#40)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+- ci: use the SDK release app for version bumps (#39)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+
 ## v0.18.1 (2026-07-28)
 
 
