@@ -20,6 +20,21 @@ type AuthorizationServerMetadata struct {
 	ResponseTypesSupported            []string `json:"response_types_supported,omitempty"`
 	GrantTypesSupported               []string `json:"grant_types_supported,omitempty"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
+	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported,omitempty"`
+
+	// UserinfoEndpoint is where the signed-in user's identity claims are fetched
+	// (OpenID Connect Discovery 1.0 section 3). Empty when the server does not
+	// advertise it.
+	UserinfoEndpoint string `json:"userinfo_endpoint,omitempty"`
+	// EndSessionEndpoint is where the browser is sent to end the server-side session
+	// (OpenID Connect RP-Initiated Logout 1.0 section 2.1). Empty when the server does
+	// not advertise it.
+	EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
+
+	SubjectTypesSupported            []string `json:"subject_types_supported,omitempty"`
+	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported,omitempty"`
+	ClaimsSupported                  []string `json:"claims_supported,omitempty"`
+
 	// Extra holds any fields beyond the standard set, preserved for forward compatibility.
 	Extra map[string]any `json:"-"`
 }
@@ -30,6 +45,8 @@ var knownASMetadataFields = []string{
 	"issuer", "authorization_endpoint", "token_endpoint", "jwks_uri",
 	"registration_endpoint", "scopes_supported", "response_types_supported",
 	"grant_types_supported", "token_endpoint_auth_methods_supported",
+	"code_challenge_methods_supported", "userinfo_endpoint", "end_session_endpoint",
+	"subject_types_supported", "id_token_signing_alg_values_supported", "claims_supported",
 }
 
 // DiscoveryOption configures a metadata discovery request.
