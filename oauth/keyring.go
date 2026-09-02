@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -115,7 +116,8 @@ type cacheEntry[T any] struct {
 //  1. Discovery cache: issuer → jwks_uri (default TTL: 1 hour)
 //  2. Key cache: issuer::kid → public key (default TTL: 5 minutes)
 //
-// Concurrent requests for the same key are deduplicated via singleflight.
+// Concurrent requests for the same key share one fetch, which runs detached from any
+// single caller's cancellation so one caller cannot poison it for the others.
 type JWKSOAuthKeyring struct {
 	cfg jwksKeyringConfig
 
@@ -181,10 +183,7 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 		return uri.(string), nil
 	}
 
-	result, err, _ := k.discoveryGroup.Do(issuer, func() (any, error) {
-		fetchCtx, cancel := context.WithTimeout(ctx, k.cfg.fetchTimeout)
-		defer cancel()
-
+	result, err := sharedFetch(ctx, &k.discoveryGroup, issuer, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
 		metadata, err := FetchAuthorizationServerMetadata(fetchCtx, issuer,
 			WithDiscoveryHTTPClient(k.cfg.httpClient))
 		if err != nil {
@@ -209,6 +208,9 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 		return metadata.JWKSURI, nil
 	})
 	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return "", &JWKSDiscoveryError{Message: fmt.Sprintf("discovering JWKS URI for %q", issuer), Err: err}
+		}
 		return "", err
 	}
 
@@ -216,10 +218,7 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 }
 
 func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI, cacheKey string) (crypto.PublicKey, error) {
-	result, err, _ := k.keyGroup.Do(cacheKey, func() (any, error) {
-		fetchCtx, cancel := context.WithTimeout(ctx, k.cfg.fetchTimeout)
-		defer cancel()
-
+	result, err := sharedFetch(ctx, &k.keyGroup, cacheKey, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
 		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, jwksURI, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating JWKS request: %w", err)
@@ -275,6 +274,9 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 		return pubKey, nil
 	})
 	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return nil, &JWKSFetchError{Message: fmt.Sprintf("fetching JWKS from %q", jwksURI), Err: err}
+		}
 		return nil, err
 	}
 

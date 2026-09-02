@@ -6,9 +6,12 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -287,5 +290,71 @@ func TestAssertSameOrigin(t *testing.T) {
 				t.Errorf("assertSameOrigin(%q, %q) error = %v, wantErr %v", tt.issuer, tt.jwksURI, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// A caller that cancels mid-fetch must not fail the shared JWKS fetch for the others:
+// the fetch completes on a detached context and populates the cache.
+func TestJWKSOAuthKeyring_CancelledCallerDoesNotPoisonFetch(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var jwksFetches atomic.Int32
+	inner := b1RSAJWKS(t, "k0")
+	defer inner.Close()
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]string{
+				"issuer":   srv.URL,
+				"jwks_uri": srv.URL + "/.well-known/jwks.json",
+			})
+		case "/.well-known/jwks.json":
+			jwksFetches.Add(1)
+			once.Do(func() { close(started) })
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			resp, err := http.Get(inner.URL + "/.well-known/jwks.json")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+			io.Copy(w, resp.Body)
+		}
+	}))
+	defer srv.Close()
+
+	keyring := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := keyring.Key(ctx, srv.URL, "k0")
+		firstErr <- err
+	}()
+
+	<-started
+	cancel()
+	err := <-firstErr
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller: want context.Canceled, got %v", err)
+	}
+	var fetchErr *JWKSFetchError
+	if !errors.As(err, &fetchErr) {
+		t.Errorf("cancelled caller: want *JWKSFetchError, got %v", err)
+	}
+
+	close(release)
+	if _, err := keyring.Key(context.Background(), srv.URL, "k0"); err != nil {
+		t.Fatalf("second caller: %v", err)
+	}
+	if got := jwksFetches.Load(); got != 1 {
+		t.Errorf("JWKS fetches: got %d, want 1 (fetch was poisoned and restarted)", got)
 	}
 }

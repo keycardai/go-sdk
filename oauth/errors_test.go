@@ -67,6 +67,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		{"IssuerMismatchError", &IssuerMismatchError{Message: "mismatch"}, true},
 		{"JWKSFetchError", &JWKSFetchError{Message: "fetch failed"}, true},
 		{"JWKSKeyNotFoundError", &JWKSKeyNotFoundError{Message: "no key"}, true},
+		{"TokenEndpointDiscoveryError", &TokenEndpointDiscoveryError{Message: "no endpoint"}, true},
 		{"generic error", errors.New("some other error"), false},
 	}
 

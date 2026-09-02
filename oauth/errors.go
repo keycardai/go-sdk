@@ -220,3 +220,21 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 	}
 	return oauthErr
 }
+
+// TokenEndpointDiscoveryError indicates the token endpoint could not be resolved from the
+// issuer's authorization server metadata. Err carries the underlying cause (e.g. an
+// *HTTPError, an *IssuerMismatchError, or the caller's context error) for
+// errors.Is/errors.As; it is nil when the metadata simply omits token_endpoint.
+type TokenEndpointDiscoveryError struct {
+	Message string
+	Err     error
+}
+
+func (e *TokenEndpointDiscoveryError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *TokenEndpointDiscoveryError) Unwrap() error { return e.Err }
+func (*TokenEndpointDiscoveryError) keycardError()   {}
