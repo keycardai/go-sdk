@@ -68,6 +68,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		{"JWKSFetchError", &JWKSFetchError{Message: "fetch failed"}, true},
 		{"JWKSKeyNotFoundError", &JWKSKeyNotFoundError{Message: "no key"}, true},
 		{"TokenEndpointDiscoveryError", &TokenEndpointDiscoveryError{Message: "no endpoint"}, true},
+		{"InvalidMetadataError", &InvalidMetadataError{Message: "bad json"}, true},
 		{"generic error", errors.New("some other error"), false},
 	}
 

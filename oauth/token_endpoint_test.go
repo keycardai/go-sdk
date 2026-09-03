@@ -140,6 +140,20 @@ func TestTokenEndpoint_DeterministicFailureRememberedForNegativeTTL(t *testing.T
 				}
 			},
 		},
+		"malformed metadata": {
+			fail: func(ds *discoveryServer) {
+				ds.set(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"issuer": `))
+				})
+			},
+			check: func(t *testing.T, err error) {
+				var malformed *InvalidMetadataError
+				if !errors.As(err, &malformed) {
+					t.Errorf("errors.As(*InvalidMetadataError): got %v", err)
+				}
+			},
+		},
 		"missing token_endpoint": {
 			fail: func(ds *discoveryServer) {
 				ds.set(func(w http.ResponseWriter, _ *http.Request) {

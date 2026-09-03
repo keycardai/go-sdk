@@ -112,6 +112,22 @@ type IssuerMismatchError struct {
 func (e *IssuerMismatchError) Error() string { return e.Message }
 func (*IssuerMismatchError) keycardError()   {}
 
+// InvalidMetadataError indicates an authorization server's discovery document could not
+// be decoded. Err carries the JSON decode cause for errors.Is/errors.As.
+type InvalidMetadataError struct {
+	Message string
+	Err     error
+}
+
+func (e *InvalidMetadataError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *InvalidMetadataError) Unwrap() error { return e.Err }
+func (*InvalidMetadataError) keycardError()   {}
+
 // JWKSDiscoveryError indicates the JWKS URI could not be resolved from the issuer's
 // authorization server metadata. Err carries the underlying cause (e.g. a discovery
 // fetch failure or an *IssuerMismatchError) for errors.Is/errors.As.

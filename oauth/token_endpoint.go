@@ -106,6 +106,10 @@ func isDeterministicDiscoveryFailure(err error) bool {
 	if errors.As(err, &mismatch) {
 		return true
 	}
+	var malformed *InvalidMetadataError
+	if errors.As(err, &malformed) {
+		return true
+	}
 	var disc *TokenEndpointDiscoveryError
 	return errors.As(err, &disc) && disc.Err == nil
 }
