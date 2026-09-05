@@ -117,6 +117,101 @@ func TestBearerMiddleware_ValidTokenPopulatesAuthInfo(t *testing.T) {
 	}
 }
 
+func TestBearerMiddleware_IdentityClaims(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	now := time.Now().Unix()
+	verifier := zoneVerifier(t, &key.PublicKey, oauth.WithAudiences(testResource))
+
+	tests := []struct {
+		name             string
+		claims           oauth.JWTClaims
+		wantClientID     string
+		wantSubject      string
+		wantSubProfile   string
+		wantKeycardAppID string
+	}{
+		{
+			name: "keycard user token surfaces all identity claims",
+			claims: oauth.JWTClaims{
+				Subject:  "alice@example.com",
+				ClientID: "cred-123",
+				Audience: []string{testResource},
+				IssuedAt: now,
+				Expiry:   now + 3600,
+				Extra: map[string]any{
+					"sub_profile":    "user",
+					"keycard_app_id": "app-456",
+				},
+			},
+			wantClientID:     "cred-123",
+			wantSubject:      "alice@example.com",
+			wantSubProfile:   "user",
+			wantKeycardAppID: "app-456",
+		},
+		{
+			name: "keycard app token has sub equal to keycard_app_id",
+			claims: oauth.JWTClaims{
+				Subject:  "app-456",
+				ClientID: "cred-789",
+				Audience: []string{testResource},
+				IssuedAt: now,
+				Expiry:   now + 3600,
+				Extra: map[string]any{
+					"sub_profile":    "app",
+					"keycard_app_id": "app-456",
+				},
+			},
+			wantClientID:     "cred-789",
+			wantSubject:      "app-456",
+			wantSubProfile:   "app",
+			wantKeycardAppID: "app-456",
+		},
+		{
+			name: "token without keycard claims verifies with empty fields",
+			claims: oauth.JWTClaims{
+				Subject:  "some-subject",
+				ClientID: "client-1",
+				Audience: []string{testResource},
+				IssuedAt: now,
+				Expiry:   now + 3600,
+			},
+			wantClientID: "client-1",
+			wantSubject:  "some-subject",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := mintToken(t, key, testZone, tt.claims)
+
+			var got *AuthInfo
+			handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = AuthInfoFromRequest(r)
+			}))
+
+			rec := serve(handler, token)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status: got %d, want 200 (body %q)", rec.Code, rec.Body.String())
+			}
+			if got == nil {
+				t.Fatal("auth info not populated")
+			}
+			if got.ClientID != tt.wantClientID {
+				t.Errorf("ClientID: got %q, want %q", got.ClientID, tt.wantClientID)
+			}
+			if got.Subject != tt.wantSubject {
+				t.Errorf("Subject: got %q, want %q", got.Subject, tt.wantSubject)
+			}
+			if got.SubProfile != tt.wantSubProfile {
+				t.Errorf("SubProfile: got %q, want %q", got.SubProfile, tt.wantSubProfile)
+			}
+			if got.KeycardAppID != tt.wantKeycardAppID {
+				t.Errorf("KeycardAppID: got %q, want %q", got.KeycardAppID, tt.wantKeycardAppID)
+			}
+		})
+	}
+}
+
 func TestBearerMiddleware_UntrustedIssuerRejected(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	now := time.Now().Unix()

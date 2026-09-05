@@ -8,14 +8,27 @@ import (
 
 // AuthInfo contains information about an authenticated request.
 type AuthInfo struct {
-	Token    string
+	Token string
+	// ClientID is the verified token's client_id claim: the OAuth client that
+	// authenticated. It names the credential, which varies and rotates, not the
+	// application; key on KeycardAppID to identify the calling application.
 	ClientID string
-	// Subject is the verified token's sub claim: the authenticated user. Use it as the
-	// trusted identity for impersonation (see WithUserIdentifier).
-	Subject   string
-	Scopes    []string
-	Resource  string
-	ExpiresAt int64
+	// Subject is the verified token's sub claim: the authenticated user, or the
+	// application itself when SubProfile is "app". Use it as the trusted identity for
+	// impersonation (see WithUserIdentifier).
+	Subject string
+	// SubProfile is the verified token's sub_profile claim: "user" when a user
+	// authorized access, "app" when an application acts on its own behalf. It is a
+	// Keycard claim and is empty on tokens from other issuers.
+	SubProfile string
+	// KeycardAppID is the verified token's keycard_app_id claim: the stable Keycard
+	// application identifier. Key on it to identify the calling application regardless
+	// of grant type or which credential authenticated. It is a Keycard claim and is
+	// empty on tokens from other issuers.
+	KeycardAppID string
+	Scopes       []string
+	Resource     string
+	ExpiresAt    int64
 	// Issuer is the verified token's iss claim. It identifies the zone that minted
 	// the token and is used to route the outbound exchange in a multi-zone provider.
 	Issuer string
@@ -82,6 +95,12 @@ func (v *JWTOAuthTokenVerifier) VerifyAccessToken(ctx context.Context, token str
 
 	if sub, ok := claims.Extra["resource"].(string); ok {
 		info.Resource = sub
+	}
+	if v, ok := claims.Extra["sub_profile"].(string); ok {
+		info.SubProfile = v
+	}
+	if v, ok := claims.Extra["keycard_app_id"].(string); ok {
+		info.KeycardAppID = v
 	}
 
 	if info.ClientID == "" {
