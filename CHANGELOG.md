@@ -1,3 +1,9 @@
+## v0.21.0 (2026-09-05)
+
+
+- feat: avoid caching transient metadata errors, limit others
+- Implements keycard-sdk-spec #56, metadata failures are not sticky. Token-endpoint discovery on the exchange and client-credentials clients moves from a sync.Once that memoized the first outcome forever (including a cancelled first caller's context error) to a shared resolver: success cached for discovery_ttl (1 hour default), deterministic failures (4xx except 429, issuer mismatch, malformed metadata, missing token_endpoint) remembered for at most negative_ttl (1 minute default, capped by discovery_ttl, 0 disables), transient failures never cached. The shared fetch runs detached from any single caller's cancellation with an internal timeout bound. The JWKS keyring's discovery and key fetches gain the same no-poison property. New typed errors TokenEndpointDiscoveryError and InvalidMetadataError carry their causes for errors.Is/As. Discovered during a transient load failure that permanently wedged an agent until restart.
+
 ## v0.20.0 (2026-09-05)
 
 
