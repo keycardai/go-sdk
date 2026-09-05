@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
+	"time"
 )
 
 // TokenExchangeRequest represents an RFC 8693 token exchange request.
@@ -49,6 +49,8 @@ type tokenExchangeConfig struct {
 	clientID     string
 	clientSecret string
 	httpClient   *http.Client
+	discoveryTTL time.Duration
+	negativeTTL  time.Duration
 }
 
 // WithClientCredentials sets the client ID and secret for HTTP basic auth.
@@ -66,21 +68,34 @@ func WithTokenExchangeHTTPClient(c *http.Client) TokenExchangeClientOption {
 	}
 }
 
+// WithTokenExchangeDiscoveryTTL sets how long a discovered token endpoint is cached. Default: 1 hour.
+func WithTokenExchangeDiscoveryTTL(d time.Duration) TokenExchangeClientOption {
+	return func(cfg *tokenExchangeConfig) { cfg.discoveryTTL = d }
+}
+
+// WithTokenExchangeNegativeTTL bounds how long a deterministic discovery failure (a 4xx
+// other than 429, an issuer mismatch, or metadata without a token_endpoint) is remembered.
+// It never exceeds the discovery TTL; a value <= 0 disables negative caching. Transient
+// failures are never cached. Default: 1 minute.
+func WithTokenExchangeNegativeTTL(d time.Duration) TokenExchangeClientOption {
+	return func(cfg *tokenExchangeConfig) { cfg.negativeTTL = d }
+}
+
 // TokenExchangeClient performs RFC 8693 token exchange against an OAuth authorization server.
-// It lazily discovers the token endpoint via OAuth metadata.
+// It lazily discovers the token endpoint via OAuth metadata and caches it for the
+// discovery TTL; concurrent callers share one discovery fetch.
 type TokenExchangeClient struct {
 	issuerURL string
 	cfg       tokenExchangeConfig
-
-	once          sync.Once
-	tokenEndpoint string
-	discoverErr   error
+	endpoint  tokenEndpointResolver
 }
 
 // NewTokenExchangeClient creates a new TokenExchangeClient for the given issuer.
 func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption) *TokenExchangeClient {
 	cfg := tokenExchangeConfig{
-		httpClient: http.DefaultClient,
+		httpClient:   http.DefaultClient,
+		discoveryTTL: defaultDiscoveryTTL,
+		negativeTTL:  defaultNegativeTTL,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -89,18 +104,19 @@ func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption)
 	return &TokenExchangeClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
+		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
 	}
 }
 
-// TokenEndpoint returns the discovered token endpoint URL.
-// It triggers lazy metadata discovery if not already done.
+// TokenEndpoint returns the discovered token endpoint URL, fetching metadata when the
+// cached value is missing or expired.
 func (c *TokenExchangeClient) TokenEndpoint(ctx context.Context) (string, error) {
-	return c.getTokenEndpoint(ctx)
+	return c.endpoint.Endpoint(ctx)
 }
 
 // ExchangeToken performs a token exchange request.
 func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchangeRequest) (*TokenResponse, error) {
-	tokenEndpoint, err := c.getTokenEndpoint(ctx)
+	tokenEndpoint, err := c.endpoint.Endpoint(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -131,24 +147,6 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	}
 
 	return deserializeTokenResponse(resp)
-}
-
-func (c *TokenExchangeClient) getTokenEndpoint(ctx context.Context) (string, error) {
-	c.once.Do(func() {
-		metadata, err := FetchAuthorizationServerMetadata(ctx, c.issuerURL,
-			WithDiscoveryHTTPClient(c.cfg.httpClient))
-		if err != nil {
-			c.discoverErr = fmt.Errorf("discovering token endpoint: %w", err)
-			return
-		}
-		if metadata.TokenEndpoint == "" {
-			c.discoverErr = fmt.Errorf("authorization server %q does not advertise a token_endpoint", c.issuerURL)
-			return
-		}
-		c.tokenEndpoint = metadata.TokenEndpoint
-	})
-
-	return c.tokenEndpoint, c.discoverErr
 }
 
 func serializeTokenExchangeRequest(req TokenExchangeRequest) url.Values {

@@ -104,7 +104,7 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 
 	var metadata AuthorizationServerMetadata
 	if err := json.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("decoding authorization server metadata: %w", err)
+		return nil, &InvalidMetadataError{Message: fmt.Sprintf("decoding authorization server metadata from %s", url), Err: err}
 	}
 
 	// Validate the response issuer matches the requested issuer (RFC 8414 section 3.3),

@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -96,5 +97,23 @@ func TestFetchAuthorizationServerMetadata_HTTPError(t *testing.T) {
 		if httpErr.Status != 404 {
 			t.Errorf("status: got %d, want 404", httpErr.Status)
 		}
+	}
+}
+
+func TestFetchAuthorizationServerMetadata_MalformedDocument(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer server.Close()
+
+	_, err := FetchAuthorizationServerMetadata(context.Background(), server.URL)
+	var malformed *InvalidMetadataError
+	if !errors.As(err, &malformed) {
+		t.Fatalf("want *InvalidMetadataError, got %v", err)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Errorf("JSON cause was dropped: %v", err)
 	}
 }

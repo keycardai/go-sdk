@@ -105,17 +105,6 @@ func ExchangeAuthorizationCode(ctx context.Context, issuer string, req Authoriza
 	return exchangeCodeAtEndpoint(ctx, tokenEndpoint, req, cfg.httpClient)
 }
 
-func resolveTokenEndpoint(ctx context.Context, issuer string, httpClient *http.Client) (string, error) {
-	metadata, err := FetchAuthorizationServerMetadata(ctx, issuer, WithDiscoveryHTTPClient(httpClient))
-	if err != nil {
-		return "", fmt.Errorf("discovering token endpoint: %w", err)
-	}
-	if metadata.TokenEndpoint == "" {
-		return "", fmt.Errorf("authorization server %q does not advertise a token_endpoint", issuer)
-	}
-	return metadata.TokenEndpoint, nil
-}
-
 func exchangeCodeAtEndpoint(ctx context.Context, tokenEndpoint string, req AuthorizationCodeExchangeRequest, httpClient *http.Client) (*TokenResponse, error) {
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")

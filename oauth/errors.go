@@ -112,6 +112,22 @@ type IssuerMismatchError struct {
 func (e *IssuerMismatchError) Error() string { return e.Message }
 func (*IssuerMismatchError) keycardError()   {}
 
+// InvalidMetadataError indicates an authorization server's discovery document could not
+// be decoded. Err carries the JSON decode cause for errors.Is/errors.As.
+type InvalidMetadataError struct {
+	Message string
+	Err     error
+}
+
+func (e *InvalidMetadataError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *InvalidMetadataError) Unwrap() error { return e.Err }
+func (*InvalidMetadataError) keycardError()   {}
+
 // JWKSDiscoveryError indicates the JWKS URI could not be resolved from the issuer's
 // authorization server metadata. Err carries the underlying cause (e.g. a discovery
 // fetch failure or an *IssuerMismatchError) for errors.Is/errors.As.
@@ -220,3 +236,21 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 	}
 	return oauthErr
 }
+
+// TokenEndpointDiscoveryError indicates the token endpoint could not be resolved from the
+// issuer's authorization server metadata. Err carries the underlying cause (e.g. an
+// *HTTPError, an *IssuerMismatchError, or the caller's context error) for
+// errors.Is/errors.As; it is nil when the metadata simply omits token_endpoint.
+type TokenEndpointDiscoveryError struct {
+	Message string
+	Err     error
+}
+
+func (e *TokenEndpointDiscoveryError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+func (e *TokenEndpointDiscoveryError) Unwrap() error { return e.Err }
+func (*TokenEndpointDiscoveryError) keycardError()   {}
