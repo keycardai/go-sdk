@@ -368,7 +368,8 @@ func TestTokenEndpoint_FetchTimeoutBoundsDetachedFetch(t *testing.T) {
 		}
 	})
 
-	client := NewTokenExchangeClient(ds.URL, WithTokenExchangeFetchTimeout(50*time.Millisecond))
+	client := NewTokenExchangeClient(ds.URL)
+	client.endpoint.fetchTimeout = 50 * time.Millisecond
 	_, err := client.TokenEndpoint(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want context.DeadlineExceeded from fetch timeout, got %v", err)
@@ -402,8 +403,7 @@ func TestClientCredentialsClient_TransientDiscoveryFailureNotCached(t *testing.T
 
 	client := NewClientCredentialsClient(srv.URL,
 		WithCCDiscoveryTTL(time.Hour),
-		WithCCNegativeTTL(time.Minute),
-		WithCCFetchTimeout(time.Second))
+		WithCCNegativeTTL(time.Minute))
 
 	_, err := client.RequestToken(context.Background(), ClientCredentialsRequest{})
 	var disc *TokenEndpointDiscoveryError

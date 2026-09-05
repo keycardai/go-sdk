@@ -26,7 +26,6 @@ type clientCredentialsConfig struct {
 	httpClient   *http.Client
 	discoveryTTL time.Duration
 	negativeTTL  time.Duration
-	fetchTimeout time.Duration
 }
 
 // WithCCBasicAuth sets the client ID and secret for HTTP basic auth.
@@ -57,11 +56,6 @@ func WithCCNegativeTTL(d time.Duration) ClientCredentialsClientOption {
 	return func(cfg *clientCredentialsConfig) { cfg.negativeTTL = d }
 }
 
-// WithCCFetchTimeout sets the timeout for the discovery fetch. Default: 10 seconds.
-func WithCCFetchTimeout(d time.Duration) ClientCredentialsClientOption {
-	return func(cfg *clientCredentialsConfig) { cfg.fetchTimeout = d }
-}
-
 // ClientCredentialsClient performs RFC 6749 Section 4.4 client credentials grants
 // against an OAuth authorization server. It lazily discovers the token endpoint via
 // OAuth metadata and caches it for the discovery TTL; concurrent callers share one
@@ -78,7 +72,6 @@ func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClien
 		httpClient:   http.DefaultClient,
 		discoveryTTL: defaultDiscoveryTTL,
 		negativeTTL:  defaultNegativeTTL,
-		fetchTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -87,7 +80,7 @@ func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClien
 	return &ClientCredentialsClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
-		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, cfg.fetchTimeout),
+		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
 	}
 }
 

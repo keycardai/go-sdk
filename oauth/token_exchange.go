@@ -51,7 +51,6 @@ type tokenExchangeConfig struct {
 	httpClient   *http.Client
 	discoveryTTL time.Duration
 	negativeTTL  time.Duration
-	fetchTimeout time.Duration
 }
 
 // WithClientCredentials sets the client ID and secret for HTTP basic auth.
@@ -82,11 +81,6 @@ func WithTokenExchangeNegativeTTL(d time.Duration) TokenExchangeClientOption {
 	return func(cfg *tokenExchangeConfig) { cfg.negativeTTL = d }
 }
 
-// WithTokenExchangeFetchTimeout sets the timeout for the discovery fetch. Default: 10 seconds.
-func WithTokenExchangeFetchTimeout(d time.Duration) TokenExchangeClientOption {
-	return func(cfg *tokenExchangeConfig) { cfg.fetchTimeout = d }
-}
-
 // TokenExchangeClient performs RFC 8693 token exchange against an OAuth authorization server.
 // It lazily discovers the token endpoint via OAuth metadata and caches it for the
 // discovery TTL; concurrent callers share one discovery fetch.
@@ -102,7 +96,6 @@ func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption)
 		httpClient:   http.DefaultClient,
 		discoveryTTL: defaultDiscoveryTTL,
 		negativeTTL:  defaultNegativeTTL,
-		fetchTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -111,7 +104,7 @@ func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption)
 	return &TokenExchangeClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
-		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, cfg.fetchTimeout),
+		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
 	}
 }
 
