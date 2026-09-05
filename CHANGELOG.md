@@ -1,3 +1,9 @@
+## v0.20.0 (2026-09-05)
+
+
+- feat(mcp): expose SubProfile and KeycardAppID on AuthInfo
+- AuthInfo carries the two Keycard identity claims beside the existing Subject and Issuer, populated from the verified claims' Extra map like the resource claim. Implements the field set from keycard-sdk-spec specs/server-bearer-auth/bearer-token-verification-middleware.md (unit row 4), ruby-sdk #24 as the conforming reference. Both claims are zero-value strings on tokens from other issuers and never fail verification. Completes the Go half: Subject and Issuer already existed.
+
 ## v0.19.0 (2026-09-01)
 
 
