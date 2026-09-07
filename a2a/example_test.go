@@ -33,13 +33,19 @@ func ExampleDelegationClient_Invoke() {
 	agent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/agent-card.json":
-			_ = json.NewEncoder(w).Encode(map[string]any{"name": "Weather Agent", "url": agent.URL + "/a2a/jsonrpc"})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name": "Weather Agent",
+				"supportedInterfaces": []map[string]any{
+					{"url": agent.URL + "/a2a/jsonrpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+				},
+			})
 		case "/a2a/jsonrpc":
+			// An A2A 1.0 agent answers SendMessage with a message (or a task).
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"result": map[string]any{"message": map[string]any{
 					"messageId": "m1",
-					"role":      "agent",
-					"parts":     []map[string]any{{"kind": "text", "text": "Sunny, 72F"}},
+					"role":      "ROLE_AGENT",
+					"parts":     []map[string]any{{"text": "Sunny, 72F"}},
 				}},
 			})
 		}

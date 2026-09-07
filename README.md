@@ -41,7 +41,7 @@ Application credentials moved to the `oauth` package; `mcp` re-exports them as d
 
 ### `a2a`: Agent-to-Agent Delegation
 
-One agent calling another on the user's behalf: discover the target agent's card, exchange the user's token for one scoped to the target (RFC 8693), and invoke its JSON-RPC endpoint.
+One agent calling another on the user's behalf: discover the target agent's card, exchange the user's token for one scoped to the target (RFC 8693), and invoke its JSON-RPC endpoint. Speaks A2A protocol 1.0 by default (`SendMessage`, `A2A-Version: 1.0`); pass `a2a.WithProtocolVersion(a2a.ProtocolVersion03)` to reach an agent still on the 0.3 generation.
 
 - **Delegation**: `DelegationClient`, `ServiceDiscovery`
 
