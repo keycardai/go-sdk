@@ -82,10 +82,13 @@ type fakeAgent struct {
 	mu          sync.Mutex
 	invocations int
 	lastBearer  string
+	lastHeaders http.Header
+	lastBody    map[string]any
 	failCode    int
 	failMessage string
 	hang        bool
 	emptyResult bool
+	result      map[string]any
 }
 
 func newFakeAgent(t *testing.T) *fakeAgent {
@@ -100,13 +103,18 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 		})
 	})
 	mux.HandleFunc("/a2a/jsonrpc", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		a.mu.Lock()
 		a.invocations++
 		a.lastBearer = r.Header.Get("Authorization")
+		a.lastHeaders = r.Header.Clone()
+		a.lastBody = body
 		failMessage := a.failMessage
 		failCode := a.failCode
 		hang := a.hang
 		emptyResult := a.emptyResult
+		result := a.result
 		a.mu.Unlock()
 
 		if hang {
@@ -134,19 +142,31 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"jsonrpc": "2.0",
-			"result": map[string]any{
+		if result == nil {
+			// Recorded from a keycardai-a2a (a2a-sdk 1.x) agent answering SendMessage.
+			result = map[string]any{
 				"message": map[string]any{
 					"messageId": "resp-1",
-					"role":      RoleAgent,
-					"parts":     []map[string]any{{"kind": "text", "text": "handled"}},
+					"contextId": "ctx-1",
+					"role":      "ROLE_AGENT",
+					"parts":     []map[string]any{{"text": "handled"}},
 				},
-			},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      body["id"],
+			"result":  result,
 		})
 	})
 	t.Cleanup(a.Close)
 	return a
+}
+
+func (a *fakeAgent) request() (http.Header, map[string]any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastHeaders, a.lastBody
 }
 
 func (a *fakeAgent) invocationCount() int {
@@ -192,8 +212,270 @@ func TestDelegationClient_Invoke_ExchangesThenInvokes(t *testing.T) {
 	if len(res.Message.Parts) != 1 || res.Message.Parts[0].Text != "handled" {
 		t.Errorf("response message: got %+v", res.Message)
 	}
+	if res.Message.Role != RoleAgent || res.Message.ContextID != "ctx-1" {
+		t.Errorf("response message role/context: got %q/%q", res.Message.Role, res.Message.ContextID)
+	}
+	if res.Task != nil {
+		t.Errorf("task: got %+v, want nil for an inline message answer", res.Task)
+	}
 	if res.AgentCard.Name != "Target Agent" {
 		t.Errorf("resolved card name: got %q", res.AgentCard.Name)
+	}
+}
+
+// ECO-161: the wire shape per protocol generation. The default speaks A2A 1.0
+// (SendMessage, A2A-Version: 1.0, ROLE_USER, untagged text parts), which is what
+// keycardai-a2a serves; WithProtocolVersion(ProtocolVersion03) sends a real 0.3
+// envelope, not a 1.0 envelope under a 0.3 header.
+func TestDelegationClient_Invoke_WireShape(t *testing.T) {
+	cases := []struct {
+		name          string
+		opts          []DelegationOption
+		wantMethod    string
+		wantHeader    string
+		wantVersion   string
+		absentHeader  string
+		wantRole      string
+		wantPart      map[string]any
+		wantMessageID string
+	}{
+		{
+			name:         "default is protocol 1.0",
+			wantMethod:   "SendMessage",
+			wantHeader:   "A2A-Version",
+			wantVersion:  "1.0",
+			absentHeader: "x-a2a-protocol-version",
+			wantRole:     "ROLE_USER",
+			wantPart:     map[string]any{"text": "do the thing"},
+		},
+		{
+			name:         "explicit 1.0",
+			opts:         []DelegationOption{WithProtocolVersion(ProtocolVersion10)},
+			wantMethod:   "SendMessage",
+			wantHeader:   "A2A-Version",
+			wantVersion:  "1.0",
+			absentHeader: "x-a2a-protocol-version",
+			wantRole:     "ROLE_USER",
+			wantPart:     map[string]any{"text": "do the thing"},
+		},
+		{
+			name:         "0.3 sends a 0.3 envelope",
+			opts:         []DelegationOption{WithProtocolVersion(ProtocolVersion03)},
+			wantMethod:   "message/send",
+			wantHeader:   "x-a2a-protocol-version",
+			wantVersion:  "0.3",
+			absentHeader: "A2A-Version",
+			wantRole:     "user",
+			wantPart:     map[string]any{"kind": "text", "text": "do the thing"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newFakeZone(t)
+			agent := newFakeAgent(t)
+
+			client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret", tc.opts...)
+			if err != nil {
+				t.Fatalf("NewDelegationClient: %v", err)
+			}
+			msg := NewTextMessage("do the thing")
+			msg.Metadata = map[string]any{"traceId": "abc"}
+			if _, err := client.Invoke(context.Background(), agent.URL, "user-token", msg); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+
+			headers, body := agent.request()
+			if got := headers.Get(tc.wantHeader); got != tc.wantVersion {
+				t.Errorf("%s header: got %q, want %q", tc.wantHeader, got, tc.wantVersion)
+			}
+			if got := headers.Get(tc.absentHeader); got != "" {
+				t.Errorf("%s header: got %q, want absent", tc.absentHeader, got)
+			}
+			if body["jsonrpc"] != "2.0" {
+				t.Errorf("jsonrpc: got %v", body["jsonrpc"])
+			}
+			if body["method"] != tc.wantMethod {
+				t.Errorf("method: got %v, want %s", body["method"], tc.wantMethod)
+			}
+			params, _ := body["params"].(map[string]any)
+			wireMsg, _ := params["message"].(map[string]any)
+			if wireMsg["messageId"] != msg.MessageID {
+				t.Errorf("messageId: got %v, want %s", wireMsg["messageId"], msg.MessageID)
+			}
+			if wireMsg["role"] != tc.wantRole {
+				t.Errorf("role: got %v, want %s", wireMsg["role"], tc.wantRole)
+			}
+			parts, _ := wireMsg["parts"].([]any)
+			if len(parts) != 1 {
+				t.Fatalf("parts: got %v, want one part", wireMsg["parts"])
+			}
+			gotPart, _ := json.Marshal(parts[0])
+			wantPart, _ := json.Marshal(tc.wantPart)
+			if string(gotPart) != string(wantPart) {
+				t.Errorf("part: got %s, want %s", gotPart, wantPart)
+			}
+			meta, _ := wireMsg["metadata"].(map[string]any)
+			if meta["traceId"] != "abc" {
+				t.Errorf("metadata: got %v", wireMsg["metadata"])
+			}
+			for _, key := range []string{"kind", "contextId", "taskId"} {
+				if _, present := wireMsg[key]; present {
+					t.Errorf("message carried %q, want it omitted when unset", key)
+				}
+			}
+		})
+	}
+}
+
+// ECO-161 regression guard: the 0.3 method name is never sent unless 0.3 is asked for.
+func TestDelegationClient_Invoke_DefaultDoesNotSendLegacyMethod(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret")
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi")); err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+		_, body := agent.request()
+		if body["method"] == "message/send" {
+			t.Fatalf("invocation %d sent the 0.3 method message/send", i+1)
+		}
+	}
+}
+
+// A 0.3-configured client translates the 0.3 response (plain role, kind-tagged parts,
+// the message as the bare result) back to the 1.0 model callers see.
+func TestDelegationClient_Invoke_LegacyResponseDecoded(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+	agent.result = map[string]any{
+		"kind":      "message",
+		"messageId": "resp-03",
+		"role":      "agent",
+		"parts":     []map[string]any{{"kind": "text", "text": "handled-03"}},
+	}
+
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret", WithProtocolVersion(ProtocolVersion03))
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+	res, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi"))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if res.Message.Role != RoleAgent || res.Message.MessageID != "resp-03" || res.Message.Parts[0].Text != "handled-03" {
+		t.Errorf("decoded message: got %+v", res.Message)
+	}
+}
+
+// A 1.0 agent may answer SendMessage with a task; it surfaces on Result.Task rather
+// than being reported as an empty message.
+func TestDelegationClient_Invoke_TaskResponse(t *testing.T) {
+	zone := newFakeZone(t)
+	agent := newFakeAgent(t)
+	agent.result = map[string]any{
+		"task": map[string]any{
+			"id":        "task-1",
+			"contextId": "ctx-1",
+			"status": map[string]any{
+				"state":   "TASK_STATE_COMPLETED",
+				"message": map[string]any{"messageId": "resp-2", "role": "ROLE_AGENT", "parts": []map[string]any{{"text": "done"}}},
+			},
+			"artifacts": []any{},
+			"history":   []any{},
+		},
+	}
+
+	client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret")
+	if err != nil {
+		t.Fatalf("NewDelegationClient: %v", err)
+	}
+	res, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi"))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if res.Task == nil || res.Task.ID != "task-1" || res.Task.Status.State != "TASK_STATE_COMPLETED" {
+		t.Fatalf("task: got %+v", res.Task)
+	}
+	if res.Task.Status.Message == nil || res.Task.Status.Message.Parts[0].Text != "done" {
+		t.Errorf("task status message: got %+v", res.Task.Status.Message)
+	}
+	if res.Message.MessageID != "" {
+		t.Errorf("message: got %+v, want zero value alongside a task", res.Message)
+	}
+}
+
+// A 1.0 card's JSONRPC interface is the endpoint, preferring the one matching the
+// client's protocol version.
+func TestDelegationClient_JSONRPCEndpoint(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		card    AgentCard
+		want    string
+	}{
+		{
+			name:    "1.0 card, matching interface",
+			version: ProtocolVersion10,
+			card: AgentCard{SupportedInterfaces: []AgentInterface{
+				{URL: "https://t/grpc", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"},
+				{URL: "https://t/rpc03", ProtocolBinding: "JSONRPC", ProtocolVersion: "0.3"},
+				{URL: "https://t/rpc10", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"},
+			}},
+			want: "https://t/rpc10",
+		},
+		{
+			name:    "1.0 card, 0.3 client picks the 0.3 interface",
+			version: ProtocolVersion03,
+			card: AgentCard{SupportedInterfaces: []AgentInterface{
+				{URL: "https://t/rpc10", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"},
+				{URL: "https://t/rpc03", ProtocolBinding: "JSONRPC", ProtocolVersion: "0.3"},
+			}},
+			want: "https://t/rpc03",
+		},
+		{
+			name:    "1.0 card, no version match falls back to any JSONRPC interface",
+			version: ProtocolVersion10,
+			card: AgentCard{SupportedInterfaces: []AgentInterface{
+				{URL: "https://t/rpc03", ProtocolBinding: "JSONRPC", ProtocolVersion: "0.3"},
+			}},
+			want: "https://t/rpc03",
+		},
+		{
+			name:    "0.3 card url",
+			version: ProtocolVersion10,
+			card:    AgentCard{URL: "https://t/legacy"},
+			want:    "https://t/legacy",
+		},
+		{
+			name:    "no endpoint on the card",
+			version: ProtocolVersion10,
+			card:    AgentCard{Name: "x"},
+			want:    "https://target.example.com/a2a/jsonrpc",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewDelegationClient("https://zone.example.com", "id", "secret", WithProtocolVersion(tc.version))
+			if err != nil {
+				t.Fatalf("NewDelegationClient: %v", err)
+			}
+			if got := client.jsonRPCEndpoint("https://target.example.com/", tc.card); got != tc.want {
+				t.Errorf("endpoint: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewDelegationClient_RejectsUnknownProtocolVersion(t *testing.T) {
+	_, err := NewDelegationClient("https://zone.example.com", "id", "secret", WithProtocolVersion("2.0"))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
 	}
 }
 

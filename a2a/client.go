@@ -28,21 +28,20 @@ import (
 )
 
 const (
-	defaultProtocolVersion = "0.3"
+	defaultProtocolVersion = ProtocolVersion10
 	defaultInvokeTimeout   = 30 * time.Second
 	defaultJSONRPCPath     = "/a2a/jsonrpc"
-	jsonRPCMethodSend      = "message/send"
 	subjectTokenTypeAccess = "urn:ietf:params:oauth:token-type:access_token"
 )
 
 // DelegationClient delegates calls from one agent to another, carrying the user's
 // identity through an RFC 8693 token exchange. Construct it once per calling agent.
 type DelegationClient struct {
-	exchange        *oauth.TokenExchangeClient
-	discovery       *ServiceDiscovery
-	httpClient      *http.Client
-	protocolVersion string
-	invokeTimeout   time.Duration
+	exchange      *oauth.TokenExchangeClient
+	discovery     *ServiceDiscovery
+	httpClient    *http.Client
+	wire          wireProtocol
+	invokeTimeout time.Duration
 }
 
 // DelegationOption configures a DelegationClient.
@@ -76,8 +75,15 @@ func WithServiceDiscovery(d *ServiceDiscovery) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.discovery = d }
 }
 
-// WithProtocolVersion sets the A2A protocol version advertised on invocation requests
-// via the x-a2a-protocol-version header. Defaults to "0.3".
+// WithProtocolVersion selects the A2A protocol generation the client speaks to the
+// target: the JSON-RPC method name, the version header, and the message encoding move
+// together, so the advertised version always matches the envelope. Defaults to
+// ProtocolVersion10 (method SendMessage, header A2A-Version: 1.0, ROLE_USER roles and
+// untagged text parts). ProtocolVersion03 speaks to agents still on the 0.3
+// generation (method message/send, header x-a2a-protocol-version: 0.3, "user" roles
+// and kind-tagged parts); the Message and Part types callers see are unchanged, the
+// translation happens at the wire. NewDelegationClient returns a ConfigurationError
+// for any other value.
 func WithProtocolVersion(v string) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.protocolVersion = v }
 }
@@ -103,6 +109,11 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 		opt(&cfg)
 	}
 
+	wire, ok := wireFor(cfg.protocolVersion)
+	if !ok {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("unsupported A2A protocol version %q (supported: %s, %s)", cfg.protocolVersion, ProtocolVersion10, ProtocolVersion03)}
+	}
+
 	httpClient := cfg.httpClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultInvokeTimeout}
@@ -124,17 +135,18 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	)
 
 	return &DelegationClient{
-		exchange:        exchange,
-		discovery:       discovery,
-		httpClient:      httpClient,
-		protocolVersion: cfg.protocolVersion,
-		invokeTimeout:   cfg.invokeTimeout,
+		exchange:      exchange,
+		discovery:     discovery,
+		httpClient:    httpClient,
+		wire:          wire,
+		invokeTimeout: cfg.invokeTimeout,
 	}, nil
 }
 
 // Invoke delegates a call to the target agent on the user's behalf. It discovers the
 // target's card, exchanges subjectToken (the inbound user token) for a token scoped to
 // the target, and invokes the target's JSON-RPC endpoint with that token, sending msg.
+// The agent answers with a message or a task; see Result.
 //
 // A discovery, exchange, or invocation failure is returned as a *DiscoveryError, an
 // OAuth error from the exchange (wrapped), or an *InvocationError respectively. On an
@@ -166,17 +178,34 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 		return nil, fmt.Errorf("a2a delegation: token exchange for %s: %w", audience, err)
 	}
 
-	respMsg, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp.AccessToken, msg)
+	respMsg, task, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp.AccessToken, msg)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Result{Message: respMsg, AgentCard: card}, nil
+	return &Result{Message: respMsg, Task: task, AgentCard: card}, nil
 }
 
-// jsonRPCEndpoint resolves the target's JSON-RPC endpoint: the card's url when set,
-// otherwise the target base URL with the conventional /a2a/jsonrpc path.
+// jsonRPCEndpoint resolves the target's JSON-RPC endpoint. A 1.0 card is searched
+// for a JSONRPC interface matching the client's protocol version, then any JSONRPC
+// interface; a 0.3 card's url is used when set; otherwise the target base URL with
+// the conventional /a2a/jsonrpc path.
 func (c *DelegationClient) jsonRPCEndpoint(target string, card AgentCard) string {
+	var anyJSONRPC string
+	for _, iface := range card.SupportedInterfaces {
+		if !strings.EqualFold(iface.ProtocolBinding, "JSONRPC") || strings.TrimSpace(iface.URL) == "" {
+			continue
+		}
+		if iface.ProtocolVersion == c.wire.version {
+			return iface.URL
+		}
+		if anyJSONRPC == "" {
+			anyJSONRPC = iface.URL
+		}
+	}
+	if anyJSONRPC != "" {
+		return anyJSONRPC
+	}
 	if strings.TrimSpace(card.URL) != "" {
 		return card.URL
 	}
@@ -191,14 +220,12 @@ type jsonRPCRequest struct {
 }
 
 type messageParams struct {
-	Message Message `json:"message"`
+	Message wireMessage `json:"message"`
 }
 
 type jsonRPCResponse struct {
-	Result *struct {
-		Message Message `json:"message"`
-	} `json:"result"`
-	Error *jsonRPCError `json:"error"`
+	Result json.RawMessage `json:"result"`
+	Error  *jsonRPCError   `json:"error"`
 }
 
 type jsonRPCError struct {
@@ -206,51 +233,57 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
-func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, msg Message) (Message, error) {
+func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, msg Message) (Message, *Task, error) {
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      newUUID(),
-		Method:  jsonRPCMethodSend,
-		Params:  messageParams{Message: msg},
+		Method:  c.wire.sendMethod,
+		Params:  messageParams{Message: c.wire.encodeMessage(msg)},
 	})
 	if err != nil {
-		return Message{}, &InvocationError{Message: "encoding request", Err: err}
+		return Message{}, nil, &InvocationError{Message: "encoding request", Err: err}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Message{}, &InvocationError{Message: "building request", Err: err}
+		return Message{}, nil, &InvocationError{Message: "building request", Err: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+bearer)
-	if c.protocolVersion != "" {
-		req.Header.Set("x-a2a-protocol-version", c.protocolVersion)
-	}
+	req.Header.Set(c.wire.versionHeader, c.wire.version)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return Message{}, &InvocationError{Message: fmt.Sprintf("invoking %s", endpoint), Err: err}
+		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("invoking %s", endpoint), Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, &InvocationError{Message: fmt.Sprintf("agent %s returned HTTP %d", endpoint, resp.StatusCode)}
+		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("agent %s returned HTTP %d", endpoint, resp.StatusCode)}
 	}
 
 	var rpcResp jsonRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return Message{}, &InvocationError{Message: "decoding response", Err: err}
+		return Message{}, nil, &InvocationError{Message: "decoding response", Err: err}
 	}
 	if rpcResp.Error != nil {
-		return Message{}, &InvocationError{Message: rpcResp.Error.Message, Code: rpcResp.Error.Code}
+		return Message{}, nil, &InvocationError{Message: rpcResp.Error.Message, Code: rpcResp.Error.Code}
 	}
-	if rpcResp.Result == nil {
-		return Message{}, &InvocationError{Message: "agent response carried neither result nor error"}
-	}
-	if rpcResp.Result.Message.MessageID == "" && len(rpcResp.Result.Message.Parts) == 0 {
-		return Message{}, &InvocationError{Message: "agent response carried an empty result message"}
+	if len(rpcResp.Result) == 0 || string(rpcResp.Result) == "null" {
+		return Message{}, nil, &InvocationError{Message: "agent response carried neither result nor error"}
 	}
 
-	return rpcResp.Result.Message, nil
+	respMsg, task, err := c.wire.decodeSendResult(rpcResp.Result)
+	if err != nil {
+		return Message{}, nil, &InvocationError{Message: "decoding response", Err: err}
+	}
+	if task != nil {
+		return Message{}, task, nil
+	}
+	if respMsg.MessageID == "" && len(respMsg.Parts) == 0 {
+		return Message{}, nil, &InvocationError{Message: "agent response carried neither a message nor a task"}
+	}
+
+	return respMsg, nil, nil
 }
