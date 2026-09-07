@@ -1,3 +1,10 @@
+## v0.22.0 (2026-09-07)
+
+
+- feat(a2a): speak A2A protocol 1.0 by default
+- ECO-161 Go leg, after typescript-sdk #173. DelegationClient sends 1.0-generation requests by default (SendMessage, A2A-Version: 1.0, ROLE_USER roles, untagged text parts) instead of the hand-built 0.3 envelope, so invoking a keycardai-a2a (Python) agent no longer returns MethodNotFound. WithProtocolVersion now selects the whole wire generation: ProtocolVersion03 sends a real 0.3 envelope and decodes 0.3 responses back to the same caller-facing types, and any other value is a ConfigurationError instead of being sent verbatim. Result carries Message or Task, since a 1.0 agent may answer SendMessage with a task. The card reader understands supportedInterfaces and prefers the JSONRPC interface matching the client's version.
+- BREAKING CHANGE(a2a): RoleUser and RoleAgent constant values changed to the 1.0 spellings, Part no longer carries Kind, Result gains Task with one-of semantics, and 0.3-generation interop requires WithProtocolVersion(ProtocolVersion03).
+
 ## v0.21.0 (2026-09-05)
 
 
