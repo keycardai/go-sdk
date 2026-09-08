@@ -3,9 +3,11 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 )
 
@@ -205,8 +207,9 @@ func TestAuthenticate_FullLoopbackFlow(t *testing.T) {
 	}
 
 	tok, err := Authenticate(context.Background(), as.URL, AuthenticateRequest{
-		ClientID: "public-client",
-		Scopes:   []string{"mcp:tools"},
+		ClientID:     "public-client",
+		Scopes:       []string{"mcp:tools"},
+		CallbackPort: EphemeralCallbackPort,
 	}, WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(opener))
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -216,6 +219,27 @@ func TestAuthenticate_FullLoopbackFlow(t *testing.T) {
 	}
 	if as.lastForm.Get("code") != "loopback-code" {
 		t.Errorf("exchanged code: got %q, want loopback-code", as.lastForm.Get("code"))
+	}
+	assertEphemeralRedirectURI(t, as.lastForm.Get("redirect_uri"))
+}
+
+// assertEphemeralRedirectURI checks that a redirect_uri synthesized with
+// EphemeralCallbackPort carries the OS-assigned loopback port, not the default.
+func assertEphemeralRedirectURI(t *testing.T, redirectURI string) {
+	t.Helper()
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		t.Fatalf("redirect_uri %q: %v", redirectURI, err)
+	}
+	if u.Hostname() != "127.0.0.1" || u.Path != defaultCallbackPath {
+		t.Errorf("redirect_uri %q should be http://127.0.0.1:<port>%s", redirectURI, defaultCallbackPath)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 {
+		t.Fatalf("redirect_uri %q should carry the bound port", redirectURI)
+	}
+	if port == defaultCallbackPort {
+		t.Errorf("redirect_uri %q carries the default port; an ephemeral port was requested", redirectURI)
 	}
 }
 
@@ -243,7 +267,8 @@ func TestAuthenticate_StateMismatchRejected(t *testing.T) {
 	}
 
 	_, err := Authenticate(context.Background(), as.URL, AuthenticateRequest{
-		ClientID: "public-client",
+		ClientID:     "public-client",
+		CallbackPort: EphemeralCallbackPort,
 	}, WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(opener))
 	if err == nil {
 		t.Fatal("expected an error when the callback state does not match")
@@ -283,13 +308,70 @@ func TestAuthenticate_IgnoresNonGetCallback(t *testing.T) {
 	}
 
 	tok, err := Authenticate(context.Background(), as.URL, AuthenticateRequest{
-		ClientID: "public-client",
+		ClientID:     "public-client",
+		CallbackPort: EphemeralCallbackPort,
 	}, WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(opener))
 	if err != nil {
 		t.Fatalf("non-GET probe should be ignored and the flow should complete: %v", err)
 	}
 	if tok.AccessToken != "at" {
 		t.Errorf("access token: got %q, want at", tok.AccessToken)
+	}
+	assertEphemeralRedirectURI(t, as.lastForm.Get("redirect_uri"))
+}
+
+func TestAuthenticate_ExplicitRedirectURIListensOnItsHost(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	// Reserve a free port, release it, and hand it to Authenticate as an explicit
+	// RedirectURI so the parse-then-listen path is exercised without a fixed port.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := probe.Addr().String()
+	probe.Close()
+	redirectURI := "http://" + host + "/cb"
+
+	var seen string
+	opener := func(rawURL string) error {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return err
+		}
+		seen = u.Query().Get("redirect_uri")
+		cb, _ := url.Parse(seen)
+		cbq := cb.Query()
+		cbq.Set("code", "loopback-code")
+		cbq.Set("state", u.Query().Get("state"))
+		cb.RawQuery = cbq.Encode()
+		go func() {
+			if resp, err := http.Get(cb.String()); err == nil {
+				resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+
+	_, err = Authenticate(context.Background(), as.URL, AuthenticateRequest{
+		ClientID:    "public-client",
+		RedirectURI: redirectURI,
+	}, WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(opener))
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if seen != redirectURI || as.lastForm.Get("redirect_uri") != redirectURI {
+		t.Errorf("explicit redirect URI must be used verbatim: authorize=%q exchanged=%q", seen, as.lastForm.Get("redirect_uri"))
+	}
+}
+
+func TestAuthenticate_DefaultCallbackPortIsUnchanged(t *testing.T) {
+	if defaultCallbackPort != 8765 {
+		t.Fatalf("default callback port: got %d, want 8765", defaultCallbackPort)
+	}
+	if EphemeralCallbackPort == 0 {
+		t.Fatal("the ephemeral sentinel must not collide with the zero value that selects the default port")
 	}
 }
 

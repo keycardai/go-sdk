@@ -150,13 +150,19 @@ func oauthErrorFromResponse(resp *http.Response) error {
 	return fmt.Errorf("token endpoint returned HTTP %d", resp.StatusCode)
 }
 
+// EphemeralCallbackPort, as CallbackPort, makes Authenticate bind an OS-assigned
+// loopback port and build the redirect URI from it. RFC 8252 section 7.3 requires
+// authorization servers to accept any port on a loopback redirect URI, so a
+// client registered with a loopback redirect does not need a fixed port.
+const EphemeralCallbackPort = -1
+
 // AuthenticateRequest configures the high-level loopback login flow. Zero-valued
 // optional fields take their documented defaults.
 type AuthenticateRequest struct {
 	ClientID        string
 	Scopes          []string
 	RedirectURI     string        // default http://127.0.0.1:<CallbackPort><defaultCallbackPath>
-	CallbackPort    int           // default 8765
+	CallbackPort    int           // default 8765; EphemeralCallbackPort picks a free port
 	CallbackTimeout time.Duration // default 300s
 	ClientSecret    string        // set for a confidential client
 	Resource        string        // optional RFC 8707 resource indicator
@@ -191,14 +197,6 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 		opt(&cfg)
 	}
 
-	port := req.CallbackPort
-	if port == 0 {
-		port = defaultCallbackPort
-	}
-	redirectURI := req.RedirectURI
-	if redirectURI == "" {
-		redirectURI = fmt.Sprintf("http://127.0.0.1:%d%s", port, defaultCallbackPath)
-	}
 	timeout := req.CallbackTimeout
 	if timeout == 0 {
 		timeout = defaultCallbackTimeout
@@ -221,6 +219,39 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 		return nil, err
 	}
 
+	// When the redirect URI is synthesized, the listener is bound before the URI is
+	// built so an ephemeral port can be read back into it. An explicit RedirectURI
+	// is parsed and then listened on.
+	redirectURI := req.RedirectURI
+	var listener net.Listener
+	if redirectURI == "" {
+		port := req.CallbackPort
+		switch {
+		case port == 0:
+			port = defaultCallbackPort
+		case port == EphemeralCallbackPort:
+			port = 0
+		case port < 0:
+			return nil, fmt.Errorf("invalid callback port %d", port)
+		}
+		listener, err = listenLoopback(fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return nil, err
+		}
+		defer listener.Close()
+		redirectURI = fmt.Sprintf("http://%s%s", listener.Addr().String(), defaultCallbackPath)
+	} else {
+		u, parseErr := url.Parse(redirectURI)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parsing redirect URI: %w", parseErr)
+		}
+		listener, err = listenLoopback(u.Host)
+		if err != nil {
+			return nil, err
+		}
+		defer listener.Close()
+	}
+
 	authorizeURL, err := BuildAuthorizeURL(metadata.AuthorizationEndpoint, AuthorizeURLParams{
 		ClientID:            req.ClientID,
 		RedirectURI:         redirectURI,
@@ -234,7 +265,7 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 		return nil, err
 	}
 
-	code, err := runLoopbackFlow(ctx, redirectURI, state, timeout, func() error {
+	code, err := runLoopbackFlow(ctx, listener, redirectURI, state, timeout, func() error {
 		return cfg.openBrowser(authorizeURL)
 	})
 	if err != nil {
@@ -321,10 +352,19 @@ func resourceMetadataURLFromChallenge(header string) string {
 	return rest[:j]
 }
 
-// runLoopbackFlow starts a loopback HTTP server at redirectURI, invokes open to launch
-// the browser, and waits for the redirect carrying the authorization code. It validates
-// that the returned state matches and that no error parameter was sent.
-func runLoopbackFlow(ctx context.Context, redirectURI, wantState string, timeout time.Duration, open func() error) (string, error) {
+func listenLoopback(host string) (net.Listener, error) {
+	listener, err := net.Listen("tcp", host)
+	if err != nil {
+		return nil, fmt.Errorf("starting loopback listener on %s: %w", host, err)
+	}
+	return listener, nil
+}
+
+// runLoopbackFlow serves the callback path of redirectURI on the already bound
+// listener, invokes open to launch the browser, and waits for the redirect carrying
+// the authorization code. It validates that the returned state matches and that no
+// error parameter was sent.
+func runLoopbackFlow(ctx context.Context, listener net.Listener, redirectURI, wantState string, timeout time.Duration, open func() error) (string, error) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		return "", fmt.Errorf("parsing redirect URI: %w", err)
@@ -332,11 +372,6 @@ func runLoopbackFlow(ctx context.Context, redirectURI, wantState string, timeout
 	path := u.Path
 	if path == "" {
 		path = defaultCallbackPath
-	}
-
-	listener, err := net.Listen("tcp", u.Host)
-	if err != nil {
-		return "", fmt.Errorf("starting loopback listener on %s: %w", u.Host, err)
 	}
 
 	type result struct {

@@ -223,6 +223,8 @@ func whoami(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, 
 
 Full example: [`examples/mcp-server-mark3labs`](examples/mcp-server-mark3labs).
 
+`WithRequiredScopes` covers scopes every tool on the route needs. For scopes a single tool needs, call `keycard.RequireToolScopes(ctx, "files:write")` or `keycard.MissingToolScopes(ctx, ...)` inside the handler; see [`mcp/README.md`](mcp/README.md#route-level-and-per-tool-scopes) for how each library surfaces the resulting error.
+
 Both examples live in their own Go modules; the root module stays free of MCP framework dependencies.
 
 ## Credential Types
