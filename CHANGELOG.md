@@ -1,3 +1,10 @@
+## v0.23.0 (2026-09-08)
+
+
+- feat(mcp, oauth): per-tool scope helpers and ephemeral-port loopback callbacks
+- ECO-341. All MCP tools share one HTTP route, so route-level WithRequiredScopes can only express scopes every tool needs. MissingToolScopes and RequireToolScopes check per-tool requirements inside the handler, mirroring TypeScript's toolScopes helpers, returning the existing oauth.InsufficientScopeError with the missing scopes named. The docs state the real wire behavior per library (a handler error becomes a tool or JSON-RPC error, never a 403 challenge) and how to bridge the official SDK's stateful mode via ContextWithAuthInfo from req.Extra.TokenInfo.
+- Authenticate now supports EphemeralCallbackPort (-1): the listener binds before the redirect URI is built, so the URI carries the OS-assigned port, per RFC 8252 section 7.3. CallbackPort 0 still means the 8765 default. The loopback tests use the ephemeral port, ending the suite failing whenever something on the machine holds 8765 (which disrupted the #43 review run).
+
 ## v0.22.0 (2026-09-07)
 
 
