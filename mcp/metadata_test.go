@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -150,16 +149,46 @@ func TestAuthMetadataHandler_AuthorizationServer(t *testing.T) {
 		t.Fatalf("decoding: %v", err)
 	}
 
-	// Verify authorization_endpoint is rewritten with resource param
+	// The upstream document is returned unmodified
 	authEndpoint, ok := metadata["authorization_endpoint"].(string)
 	if !ok {
 		t.Fatal("missing authorization_endpoint")
 	}
-	if !strings.Contains(authEndpoint, "resource=") {
-		t.Errorf("expected resource param in authorization_endpoint, got %q", authEndpoint)
+	if authEndpoint != "https://auth.example.com/authorize" {
+		t.Errorf("authorization_endpoint: got %q, want upstream value verbatim", authEndpoint)
 	}
-	if !strings.Contains(authEndpoint, "mcp.example.com") {
-		t.Errorf("expected resource to contain host, got %q", authEndpoint)
+	if metadata["issuer"] != "https://auth.example.com" || metadata["token_endpoint"] != "https://auth.example.com/token" {
+		t.Errorf("upstream fields not passed through: %v", metadata)
+	}
+}
+
+func TestAuthMetadataHandler_AuthorizationServer_ExistingQueryPreserved(t *testing.T) {
+	const upstreamEndpoint = "https://auth.example.com/authorize?resource=stale&keep=1"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"issuer":                 "https://auth.example.com",
+			"authorization_endpoint": upstreamEndpoint,
+		})
+	}))
+	defer upstream.Close()
+
+	handler := AuthMetadataHandler(WithIssuer(upstream.URL))
+
+	req := httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
+	req.Host = "mcp.example.com"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", rec.Code)
+	}
+	var metadata map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&metadata); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if got := metadata["authorization_endpoint"]; got != upstreamEndpoint {
+		t.Errorf("authorization_endpoint: got %q, want %q unchanged", got, upstreamEndpoint)
 	}
 }
 
