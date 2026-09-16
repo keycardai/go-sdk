@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -124,10 +123,7 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 		mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 			setCORSHeaders(w)
 
-			scheme := requestScheme(r)
-			baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-			// Fetch upstream authorization server metadata
+			// Fetch upstream authorization server metadata and return it unmodified
 			issuerMetadataURL := cfg.issuer + "/.well-known/oauth-authorization-server"
 			fetchReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, issuerMetadataURL, nil)
 			if err != nil {
@@ -152,17 +148,6 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 			if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
 				http.Error(w, "failed to decode authorization server metadata", http.StatusBadGateway)
 				return
-			}
-
-			// Rewrite authorization_endpoint to include resource parameter
-			if authEndpoint, ok := metadata["authorization_endpoint"].(string); ok {
-				authURL, err := url.Parse(authEndpoint)
-				if err == nil {
-					q := authURL.Query()
-					q.Set("resource", baseURL)
-					authURL.RawQuery = q.Encode()
-					metadata["authorization_endpoint"] = authURL.String()
-				}
 			}
 
 			w.Header().Set("Content-Type", "application/json")
