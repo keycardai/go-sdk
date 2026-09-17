@@ -1,3 +1,13 @@
+## v0.23.2 (2026-09-17)
+
+
+- fix(oauth): warn once when a JWT verifier is built without an audience (SDK-4) (#50)
+- NewJWTVerifier logs one warning through the default slog logger when no
+WithAudiences option is applied, naming the option to set. Behavior with
+audiences configured is unchanged; no signature change.
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.23.1 (2026-09-16)
 
 
