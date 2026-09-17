@@ -1,10 +1,13 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -436,6 +439,42 @@ func TestNewJWTVerifier_ConfigurationErrors(t *testing.T) {
 
 	if _, err := NewJWTVerifier(keyring, []string{testIssuer}, WithAlgorithms("HS256")); err == nil {
 		t.Error("expected configuration error for an unsupported algorithm")
+	}
+}
+
+// captureDefaultSlog routes the default slog logger into a buffer for the
+// duration of the test. Tests in this package do not call t.Parallel, so
+// swapping the process-wide default is safe here.
+func captureDefaultSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestNewJWTVerifier_WarnsOnceWithoutAudiences(t *testing.T) {
+	buf := captureDefaultSlog(t)
+
+	newVerifier(t, &staticTestKeyring{}, []string{testIssuer})
+
+	out := buf.String()
+	if got := strings.Count(out, "level=WARN"); got != 1 {
+		t.Fatalf("expected exactly one warning, got %d:\n%s", got, out)
+	}
+	if !strings.Contains(out, "oauth.WithAudiences") {
+		t.Errorf("warning should name oauth.WithAudiences:\n%s", out)
+	}
+}
+
+func TestNewJWTVerifier_SilentWithAudiences(t *testing.T) {
+	buf := captureDefaultSlog(t)
+
+	newVerifier(t, &staticTestKeyring{}, []string{testIssuer}, WithAudiences("https://api.example.com"))
+
+	if out := buf.String(); out != "" {
+		t.Fatalf("expected no log output, got:\n%s", out)
 	}
 }
 
