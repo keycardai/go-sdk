@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -235,7 +236,8 @@ type jwtVerifierConfig struct {
 type JWTVerifierOption func(*jwtVerifierConfig)
 
 // WithAudiences sets the accepted audience values. When set, a verified token's aud
-// claim must be present and intersect this set; when unset, audience is not checked.
+// claim must be present and intersect this set; when unset, audience is not checked
+// and NewJWTVerifier logs one warning through the default slog logger.
 func WithAudiences(audiences ...string) JWTVerifierOption {
 	return func(c *jwtVerifierConfig) { c.audiences = audiences }
 }
@@ -285,6 +287,10 @@ func NewJWTVerifier(keyring OAuthKeyring, issuers []string, opts ...JWTVerifierO
 		if alg == "none" || !supportedVerifyAlgorithms[alg] {
 			return nil, &ConfigurationError{Message: fmt.Sprintf("unsupported JWT algorithm %q", alg)}
 		}
+	}
+
+	if len(cfg.audiences) == 0 {
+		slog.Default().Warn("keycard: JWT verifier has no audience configured; it accepts a token minted for any resource in the zone. Pass oauth.WithAudiences with this server's resource identifier.")
 	}
 
 	return &JWTVerifier{

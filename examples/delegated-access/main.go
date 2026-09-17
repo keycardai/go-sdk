@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/keycardai/go-sdk/mcp"
+	"github.com/keycardai/go-sdk/oauth"
 )
 
 func main() {
@@ -23,6 +24,11 @@ func main() {
 
 	if zoneURL == "" || clientID == "" || clientSecret == "" {
 		log.Fatal("KEYCARD_ZONE_URL, KEYCARD_CLIENT_ID, and KEYCARD_CLIENT_SECRET are required")
+	}
+
+	serverURL := os.Getenv("SERVER_URL")
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
 	}
 
 	credential, err := mcp.NewClientSecret(clientID, clientSecret)
@@ -47,7 +53,7 @@ func main() {
 		mcp.WithResourceName("Delegated Access Example"),
 	))
 
-	verifier, err := mcp.NewZoneTokenVerifier(zoneURL)
+	verifier, err := mcp.NewZoneTokenVerifier(zoneURL, oauth.WithAudiences(serverURL))
 	if err != nil {
 		log.Fatal(err)
 	}

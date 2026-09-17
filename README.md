@@ -57,8 +57,11 @@ mux.Handle("/.well-known/", mcp.AuthMetadataHandler(
     mcp.WithScopesSupported([]string{"mcp:tools"}),
 ))
 
-// The verifier trusts only tokens issued by this zone.
-verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+// The verifier trusts only tokens issued by this zone, and WithAudiences
+// binds it to this server's resource identifier; without it the verifier
+// accepts a token minted for any resource in the zone and warns at startup.
+verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://api.example.com"))
 
 protected := mcp.RequireBearerAuth(
     verifier,
@@ -80,7 +83,8 @@ authProvider, _ := mcp.NewAuthProvider(
     mcp.WithApplicationCredential(cred),
 )
 
-verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud")
+verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
+    oauth.WithAudiences("https://api.example.com"))
 
 handler := mcp.RequireBearerAuth(
     verifier,
