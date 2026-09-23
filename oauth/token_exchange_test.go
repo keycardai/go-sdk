@@ -261,3 +261,48 @@ func TestTokenExchangeClient_ClientAssertionFields(t *testing.T) {
 		t.Errorf("client_assertion_type: got %q", receivedAssertionType)
 	}
 }
+
+func TestTokenExchangeClient_RejectsInvalidTokenResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "carriage return", body: `{"access_token":"bad\rtoken"}`},
+		{name: "control characters", body: `{"access_token":"bad\r\ntoken","token_type":"Bearer"}`},
+		{name: "delete", body: `{"access_token":"bad\u007ftoken"}`},
+		{name: "empty token", body: `{"access_token":""}`},
+		{name: "line feed", body: `{"access_token":"bad\ntoken"}`},
+		{name: "malformed JSON", body: `{"access_token":`},
+		{name: "null", body: `{"access_token":"bad\u0000token"}`},
+		{name: "tab", body: `{"access_token":"bad\ttoken"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/.well-known/oauth-authorization-server":
+					json.NewEncoder(w).Encode(map[string]string{
+						"issuer":         "http://" + r.Host,
+						"token_endpoint": "http://" + r.Host + "/token",
+					})
+				case "/token":
+					w.Write([]byte(tc.body))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			client := NewTokenExchangeClient(server.URL)
+			resp, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{
+				SubjectToken: "subject-token",
+			})
+			if err == nil {
+				t.Fatalf("expected invalid token response to return an error, got response %#v", resp)
+			}
+			if resp != nil {
+				t.Fatalf("expected nil response on error, got %#v", resp)
+			}
+		})
+	}
+}
