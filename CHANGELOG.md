@@ -1,3 +1,8 @@
+## v0.23.3 (2026-09-23)
+
+
+- fix(oauth): reject control characters in access tokens (#52)
+
 ## v0.23.2 (2026-09-17)
 
 
