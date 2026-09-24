@@ -178,6 +178,38 @@ func TestAgentTokenSource_RemintsInsideTheLeeway(t *testing.T) {
 	}
 }
 
+// TestAgentTokenSource_CachesACredentialWithNoExpiry covers the credentials the
+// local server vends with no expiry at all — long-lived API keys, which the
+// authorization server answers for without an expires_in.
+//
+// Measured against a live server before this was fixed: reading a zero expiry as
+// "already expired" cost a daemon round trip on every single call, which is the
+// opposite of what the cache is for, and fell hardest on exactly the credentials
+// that never need refreshing.
+func TestAgentTokenSource_CachesACredentialWithNoExpiry(t *testing.T) {
+	var calls atomic.Int32
+	socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// expiresAt omitted entirely, which is what the server sends for these.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "an-opaque-api-key"})
+	})
+
+	src := NewAgentTokenSource(WithAgentSocket(socket))
+	for range 3 {
+		tok, err := src.ResourceToken(context.Background(), "urn:secret:DD_API_KEY")
+		if err != nil {
+			t.Fatalf("ResourceToken: %v", err)
+		}
+		if tok.ExpiresIn != 0 {
+			t.Errorf("ExpiresIn = %d, want 0 for a credential with no expiry", tok.ExpiresIn)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("agent calls: got %d, want 1 — a credential with no expiry must not be re-minted per call", got)
+	}
+}
+
 func TestAgentTokenSource_MapsConnectCodes(t *testing.T) {
 	for _, tc := range []struct {
 		code      string

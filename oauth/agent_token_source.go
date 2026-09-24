@@ -236,7 +236,20 @@ func (a *AgentTokenSource) lookup(key string) *TokenResponse {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	entry, ok := a.cached[key]
-	if !ok || time.Now().Add(agentExpiryLeeway).After(entry.expires) {
+	if !ok {
+		return nil
+	}
+	// A zero expiry means the credential has none, not that it expired at the
+	// zero instant. Long-lived API keys arrive this way — the authorization
+	// server returns them with no expires_in at all — and reading that as
+	// "already expired" re-mints on every single call, which is a daemon round
+	// trip and an approval-memo lookup per outbound request. That is the cost
+	// this cache exists to avoid, and it would fall hardest on exactly the
+	// credentials that never need refreshing.
+	if entry.expires.IsZero() {
+		return entry.token
+	}
+	if time.Now().Add(agentExpiryLeeway).After(entry.expires) {
 		return nil
 	}
 	return entry.token
