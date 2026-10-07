@@ -40,7 +40,7 @@ func agentServer(t *testing.T, handler http.HandlerFunc) string {
 	return socket
 }
 
-func writeIssueJWT(w http.ResponseWriter, token string, expiresAt time.Time) {
+func writeIssueToken(w http.ResponseWriter, token string, expiresAt time.Time) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"token":     token,
@@ -57,7 +57,7 @@ func TestAgentTokenSource_RequestShape(t *testing.T) {
 		gotProto = r.Header.Get("Connect-Protocol-Version")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
-		writeIssueJWT(w, "h.p.s", time.Now().Add(time.Hour))
+		writeIssueToken(w, "h.p.s", time.Now().Add(time.Hour))
 	})
 
 	src := NewAgentTokenSource(
@@ -82,7 +82,7 @@ func TestAgentTokenSource_RequestShape(t *testing.T) {
 
 	// The procedure path is the wire contract this package implements by hand
 	// rather than through the generated client, so nothing else pins it.
-	if want := "/keycard.agent.v1.AgentService/IssueJWT"; gotPath != want {
+	if want := "/keycard.agent.v1.AgentService/IssueToken"; gotPath != want {
 		t.Errorf("path: got %q, want %q", gotPath, want)
 	}
 	if gotProto != "1" {
@@ -108,6 +108,73 @@ func TestAgentTokenSource_RequestShape(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_AppID(t *testing.T) {
+	const id = "0123456789abcdefghijklmnop"
+
+	for _, tc := range []struct {
+		name string
+		opts []AgentTokenSourceOption
+		want any
+	}{
+		// Connect's JSON codec keys on the lowerCamelCase field name.
+		{name: "declared", opts: []AgentTokenSourceOption{WithAgentAppID(id)}, want: id},
+		// Left off rather than sent empty, so a server that predates the field
+		// sees exactly the request it already understands.
+		{name: "undeclared", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				writeIssueToken(w, "h.p.s", time.Now().Add(time.Hour))
+			})
+
+			src := NewAgentTokenSource(append(tc.opts, WithAgentSocket(socket))...)
+			if _, err := src.ResourceToken(context.Background(), "https://mcp.example.com"); err != nil {
+				t.Fatalf("ResourceToken: %v", err)
+			}
+			got, present := body["appId"]
+			if tc.want == nil && present {
+				t.Errorf("appId: got %v, want the field absent", got)
+			}
+			if tc.want != nil && got != tc.want {
+				t.Errorf("appId: got %v, want %v", got, tc.want)
+			}
+			if _, ok := body["app_id"]; ok {
+				t.Error("request carries app_id as well as appId")
+			}
+		})
+	}
+}
+
+func TestAgentTokenSource_RejectsControlCharactersInToken(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "line feed", token: "bad\ntoken"},
+		{name: "carriage return", token: "bad\rtoken"},
+		{name: "tab", token: "bad\ttoken"},
+		{name: "null", token: "bad\x00token"},
+		{name: "delete", token: "bad\x7ftoken"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
+				writeIssueToken(w, tc.token, time.Now().Add(time.Hour))
+			})
+
+			src := NewAgentTokenSource(WithAgentSocket(socket))
+			tok, err := src.ResourceToken(context.Background(), "https://mcp.example.com")
+			if err == nil {
+				t.Fatalf("token %q was accepted", tc.token)
+			}
+			if tok != nil {
+				t.Errorf("got a token alongside the error: %#v", tok)
+			}
+		})
+	}
+}
+
 func TestAgentTokenSource_ResourceIsSentUnchanged(t *testing.T) {
 	// The authorization server resolves the indicator the caller chose.
 	// Normalizing it here would be a second opinion about what was requested,
@@ -119,7 +186,7 @@ func TestAgentTokenSource_ResourceIsSentUnchanged(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		got, _ = body["resource"].(string)
-		writeIssueJWT(w, "h.p.s", time.Now().Add(time.Hour))
+		writeIssueToken(w, "h.p.s", time.Now().Add(time.Hour))
 	})
 
 	src := NewAgentTokenSource(WithAgentSocket(socket))
@@ -135,7 +202,7 @@ func TestAgentTokenSource_CachesUntilExpiry(t *testing.T) {
 	var calls atomic.Int32
 	socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		writeIssueJWT(w, "h.p.s", time.Now().Add(time.Hour))
+		writeIssueToken(w, "h.p.s", time.Now().Add(time.Hour))
 	})
 
 	src := NewAgentTokenSource(WithAgentSocket(socket))
@@ -164,7 +231,7 @@ func TestAgentTokenSource_RemintsInsideTheLeeway(t *testing.T) {
 		calls.Add(1)
 		// Inside agentExpiryLeeway: still valid, but not for long enough to
 		// hand to a caller about to make a request with it.
-		writeIssueJWT(w, "h.p.s", time.Now().Add(agentExpiryLeeway/2))
+		writeIssueToken(w, "h.p.s", time.Now().Add(agentExpiryLeeway/2))
 	})
 
 	src := NewAgentTokenSource(WithAgentSocket(socket))
@@ -221,6 +288,8 @@ func TestAgentTokenSource_MapsConnectCodes(t *testing.T) {
 		{code: AgentCodeRateLimited, status: http.StatusTooManyRequests, predicate: IsRateLimited, name: "rate limited"},
 		{code: AgentCodePrompterUnavailable, status: http.StatusPreconditionFailed, predicate: IsPrompterUnavailable, name: "no prompter"},
 		{code: AgentCodeAuthorizationRequired, status: http.StatusUnauthorized, predicate: IsAuthorizationRequired, name: "needs authorization"},
+		{code: AgentCodeApplicationNotFound, status: http.StatusNotFound, predicate: IsApplicationNotFound, name: "application not found"},
+		{code: AgentCodeUnavailable, status: http.StatusServiceUnavailable, predicate: IsUnavailable, name: "unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +336,7 @@ func TestAgentTokenSource_EmptyResourceIsRejectedLocally(t *testing.T) {
 	var calls atomic.Int32
 	socket := agentServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		writeIssueJWT(w, "h.p.s", time.Now().Add(time.Hour))
+		writeIssueToken(w, "h.p.s", time.Now().Add(time.Hour))
 	})
 
 	src := NewAgentTokenSource(WithAgentSocket(socket))

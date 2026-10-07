@@ -21,14 +21,18 @@ import (
 const AgentSocketEnv = "KEYCARD_SOCKET"
 
 const (
-	// agentIssueJWTProcedure is the Connect unary procedure that mints a token.
+	// agentIssueTokenProcedure is the Connect unary procedure that mints a token.
 	//
 	// Spoken as plain HTTP rather than through the generated client. Those stubs
 	// live in github.com/keycardai/cli, which already depends on this module, so
 	// importing them would close a module cycle — and they are published nowhere
 	// else. Connect's unary JSON encoding is a stable wire contract that needs
 	// only net/http, which is what makes this implementable here at all.
-	agentIssueJWTProcedure = "/keycard.agent.v1.AgentService/IssueJWT"
+	//
+	// Connect addresses a procedure by URL path, so this is the one part of the
+	// contract a rename breaks: a CLI that predates IssueToken answers it with
+	// 404, and one that postdates it answers the old IssueJWT path the same way.
+	agentIssueTokenProcedure = "/keycard.agent.v1.AgentService/IssueToken"
 
 	// agentExpiryLeeway is how far before expiry a cached token is discarded.
 	// Sized for the round trip the caller is about to make, not for clock skew:
@@ -83,11 +87,16 @@ const (
 	AgentCodeRateLimited           = "resource_exhausted"
 	AgentCodePrompterUnavailable   = "failed_precondition"
 	AgentCodeAuthorizationRequired = "unauthenticated"
+	AgentCodeInvalidArgument       = "invalid_argument"
+	AgentCodeApplicationNotFound   = "not_found"
+	AgentCodeUnavailable           = "unavailable"
 )
 
-// IsDeclined reports whether the request was refused by the human at the
-// approval prompt, or the prompt expired. Retrying without a change in what is
-// being asked for will be refused again.
+// IsDeclined reports whether issuance was refused: by the human at the
+// approval prompt, by the prompt expiring or failing, or by the authorization
+// server rejecting the exchange. The server reports all of these with one code;
+// [AgentError.Message] says which. Retrying without a change in what is being
+// asked for will be refused again.
 func IsDeclined(err error) bool { return agentCode(err) == AgentCodeDeclined }
 
 // IsRateLimited reports whether the local server is bounding how often it will
@@ -99,10 +108,24 @@ func IsRateLimited(err error) bool { return agentCode(err) == AgentCodeRateLimit
 // application that has another credential should fall back to it.
 func IsPrompterUnavailable(err error) bool { return agentCode(err) == AgentCodePrompterUnavailable }
 
-// IsAuthorizationRequired reports whether the resource needs a one-time
-// interactive grant the server will not initiate on its own. The remedy is
-// `keycard auth resource <uri>`, run by the developer.
+// IsAuthorizationRequired reports whether the developer has to authenticate
+// before the server can issue: the resource needs a one-time interactive grant
+// the server will not initiate on its own, the zone's session or device key is
+// unusable, or a declared app id cannot be checked without a session. The
+// remedy is a keycard command run by the developer, which [AgentError.Message]
+// names; retrying without it fails the same way.
 func IsAuthorizationRequired(err error) bool { return agentCode(err) == AgentCodeAuthorizationRequired }
+
+// IsApplicationNotFound reports whether the id passed to [WithAgentAppID] names
+// no application in the session's zone. The local server checks this before it
+// prompts; an id that passes there but that the authorization server rejects
+// surfaces through [IsDeclined] instead.
+func IsApplicationNotFound(err error) bool { return agentCode(err) == AgentCodeApplicationNotFound }
+
+// IsUnavailable reports whether the server could not reach a service it needed
+// to answer, such as the application directory used to check a declared app
+// id. Unlike the other outcomes this one is transient: retry with backoff.
+func IsUnavailable(err error) bool { return agentCode(err) == AgentCodeUnavailable }
 
 func agentCode(err error) string {
 	var e *AgentError
@@ -123,6 +146,7 @@ func agentCode(err error) string {
 type AgentTokenSource struct {
 	socket     string
 	workload   string
+	appID      string
 	org, zone  string
 	httpClient *http.Client
 
@@ -151,6 +175,23 @@ func WithAgentSocket(path string) AgentTokenSourceOption {
 // the developer recognise this application, not something that claims trust.
 func WithAgentWorkload(name string) AgentTokenSourceOption {
 	return func(a *AgentTokenSource) { a.workload = name }
+}
+
+// WithAgentAppID declares the Keycard application this caller acts for, by its
+// public identifier.
+//
+// Like the workload name, nothing authenticates the claim: any local process
+// can name any application's id, and the server labels it self-asserted in the
+// approval prompt and its audit log. What the server does check is that the id
+// names an application in the session's zone. It shows that application's name
+// beside the id, and forwards the id to the authorization server, which refuses
+// an id that names no application in the zone and records an accepted one on
+// the token as keycard_declared_app_id.
+//
+// The id is sent as given; the server validates it. A changed id is a different
+// approval, so the human is asked again.
+func WithAgentAppID(id string) AgentTokenSourceOption {
+	return func(a *AgentTokenSource) { a.appID = id }
 }
 
 // WithAgentTenant selects the organization and zone. Required when the request
@@ -260,18 +301,22 @@ func (a *AgentTokenSource) mint(ctx context.Context, resource string, scopes []s
 		return nil, time.Time{}, err
 	}
 
-	body, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"resource": resource,
 		"scopes":   scopes,
 		"workload": a.workload,
-	})
+	}
+	if a.appID != "" {
+		fields["appId"] = a.appID
+	}
+	body, err := json.Marshal(fields)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 
 	// The host is ignored by the dialer, but net/http requires one.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"http://keycard-agent"+agentIssueJWTProcedure, bytes.NewReader(body))
+		"http://keycard-agent"+agentIssueTokenProcedure, bytes.NewReader(body))
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -312,6 +357,11 @@ func (a *AgentTokenSource) mint(ctx context.Context, resource string, scopes []s
 	}
 	if out.Token == "" {
 		return nil, time.Time{}, errors.New("keycard agent: empty token in response")
+	}
+	// The token may be an opaque secret from a third-party provider rather than
+	// a JWS the zone signed, and it is headed for an Authorization header.
+	if strings.IndexFunc(out.Token, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return nil, time.Time{}, errors.New("keycard agent: token contains a control character")
 	}
 
 	// ExpiresIn rather than the absolute time, to match every other token this
