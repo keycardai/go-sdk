@@ -117,9 +117,8 @@ func IsPrompterUnavailable(err error) bool { return agentCode(err) == AgentCodeP
 func IsAuthorizationRequired(err error) bool { return agentCode(err) == AgentCodeAuthorizationRequired }
 
 // IsApplicationNotFound reports whether the id passed to [WithAgentAppID] names
-// no application in the session's zone. The local server checks this before it
-// prompts; an id that passes there but that the authorization server rejects
-// surfaces through [IsDeclined] instead.
+// no application in the session's zone, whether the local server found that
+// before prompting or the authorization server refused the id at the mint.
 func IsApplicationNotFound(err error) bool { return agentCode(err) == AgentCodeApplicationNotFound }
 
 // IsUnavailable reports whether the server could not reach a service it needed
@@ -189,7 +188,8 @@ func WithAgentWorkload(name string) AgentTokenSourceOption {
 // the token as keycard_declared_app_id.
 //
 // The id is sent as given; the server validates it. A changed id is a different
-// approval, so the human is asked again.
+// approval, so the human is asked again. A server that mints with application
+// credentials refuses a declared id, since that grant cannot carry it.
 func WithAgentAppID(id string) AgentTokenSourceOption {
 	return func(a *AgentTokenSource) { a.appID = id }
 }
