@@ -17,7 +17,7 @@
 //	KEYCARD_CLIENT_ID      Confidential client ID (required)
 //	KEYCARD_CLIENT_SECRET  Confidential client secret (required)
 //	KEYCARD_USER           Target user identifier, becomes "sub" (required)
-//	KEYCARD_RESOURCE       Target resource URI (optional)
+//	KEYCARD_RESOURCE       Target resource URI (required)
 //	KEYCARD_SCOPES         Space-separated scopes (optional)
 //
 // Setup in Keycard Console:
@@ -52,8 +52,8 @@ func main() {
 	resource := os.Getenv("KEYCARD_RESOURCE")
 	scopesEnv := strings.TrimSpace(os.Getenv("KEYCARD_SCOPES"))
 
-	if zoneURL == "" || clientID == "" || clientSecret == "" || user == "" {
-		log.Fatal("KEYCARD_ZONE_URL, KEYCARD_CLIENT_ID, KEYCARD_CLIENT_SECRET, and KEYCARD_USER are required")
+	if zoneURL == "" || clientID == "" || clientSecret == "" || user == "" || resource == "" {
+		log.Fatal("KEYCARD_ZONE_URL, KEYCARD_CLIENT_ID, KEYCARD_CLIENT_SECRET, KEYCARD_USER, and KEYCARD_RESOURCE are required")
 	}
 
 	var scopes []string
@@ -64,9 +64,7 @@ func main() {
 	fmt.Println("═══ Background Agent (impersonation) ═══")
 	fmt.Println("  Auth:            client_credentials")
 	fmt.Printf("  On behalf of:    %s\n", user)
-	if resource != "" {
-		fmt.Printf("  Access resource: %s\n", resource)
-	}
+	fmt.Printf("  Access resource: %s\n", resource)
 	fmt.Println()
 
 	client := oauth.NewTokenExchangeClient(
