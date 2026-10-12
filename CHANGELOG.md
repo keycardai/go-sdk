@@ -1,3 +1,9 @@
+## v0.23.4 (2026-10-12)
+
+
+- fix(mcp, oauth): RequireBearerAuth answers 503 when the zone's signing keys can't be fetched (SDK-20) (#54)
+- JWTVerifier.Verify keeps a key-resolution failure as the cause of its InvalidTokenError instead of flattening it into the message. RequireBearerAuth checks that cause with errors.As and answers 503 {"error":"temporarily_unavailable"} with no challenge for JWKSFetchError, JWKSDiscoveryError, InvalidMetadataError, and HTTPError. A kid absent from a JWKS that loaded stays 401 invalid_token.
+
 ## v0.23.3 (2026-09-23)
 
 
