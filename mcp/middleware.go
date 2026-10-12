@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -105,6 +106,13 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 
 			authInfo, err := verifier.VerifyAccessToken(r.Context(), token)
 			if err != nil {
+				if keysUnavailable(err) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = w.Write([]byte(`{"error":"temporarily_unavailable"}`))
+					return
+				}
+
 				var errCode, errMsg string
 
 				switch e := err.(type) {
@@ -178,4 +186,18 @@ func protectedResourceMetadataURL(r *http.Request) string {
 		resourcePath = ""
 	}
 	return fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource%s", scheme, r.Host, resourcePath)
+}
+
+// keysUnavailable reports whether verification could not complete because the
+// zone's signing keys or authorization-server metadata could not be fetched.
+// The verifier wraps these as the cause of its InvalidTokenError, so errors.As
+// walks the chain. A kid absent from a JWKS that did load
+// (JWKSKeyNotFoundError) is not in this set: that token is invalid.
+func keysUnavailable(err error) bool {
+	var fetchErr *oauth.JWKSFetchError
+	var discoveryErr *oauth.JWKSDiscoveryError
+	var metadataErr *oauth.InvalidMetadataError
+	var httpErr *oauth.HTTPError
+	return errors.As(err, &fetchErr) || errors.As(err, &discoveryErr) ||
+		errors.As(err, &metadataErr) || errors.As(err, &httpErr)
 }
