@@ -366,7 +366,7 @@ func (v *JWTVerifier) Verify(ctx context.Context, tokenString string) (*JWTClaim
 	// 8. Key resolution for (iss, kid) through the verification keyring.
 	publicKey, err := v.keyring.Key(ctx, issuer, kid)
 	if err != nil {
-		return nil, &InvalidTokenError{Message: fmt.Sprintf("failed to resolve key: %v", err)}
+		return nil, &InvalidTokenError{Message: "failed to resolve key", Err: err}
 	}
 
 	// 5 + 9. Temporal (exp, nbf with leeway) and signature, with alg pinned to the allowlist.
