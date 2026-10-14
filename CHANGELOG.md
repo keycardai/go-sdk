@@ -1,3 +1,32 @@
+## v0.23.5 (2026-10-14)
+
+
+- fix: name the copyright holder correctly and state trademark usage (#55)
+- * fix: name the copyright holder correctly in LICENSE
+- The MIT notice did not name Keycard Labs, Inc. correctly. Across the public
+repositories the holder was written four different ways, including a
+lowercase "inc." and, in one repository, a different entity altogether.
+- Under MIT the copyright notice is the licence's only condition: it "shall be
+included in all copies or substantial portions of the Software". The holder's
+name is therefore the substance of the grant, not decoration, so it is worth
+being exact and consistent about.
+- The notice now reads "Copyright (c) 2026 Keycard Labs, Inc.", matching the
+Apache-2.0 repositories. No other line changes and the permission and warranty
+text is untouched, so the terms are the same as before.
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- * docs: state trademark usage and point the README at it
+- The open source licence covers the copyright in the software and grants no
+rights in the Keycard name or logo. Nothing in these repositories said so.
+- TRADEMARKS.md states what the licence does not grant, what use is permitted
+without asking, and what a fork has to change. It is the same text the
+Apache-2.0 repositories carry, and it is licence-independent: trademark
+rights are unaffected by the choice of MIT or Apache-2.0.
+- The README now points at it alongside LICENSE. Three of these repositories
+did not mention their licence in the README at all.
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
 ## v0.23.4 (2026-10-12)
 
 
