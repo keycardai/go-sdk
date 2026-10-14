@@ -293,3 +293,8 @@ git push origin v0.1.0
 ```bash
 GOPROXY=proxy.golang.org go list -m github.com/keycardai/go-sdk@v0.1.0
 ```
+
+## License
+
+MIT — see [LICENSE](./LICENSE). The Keycard name and logo are trademarks;
+[TRADEMARKS.md](./TRADEMARKS.md) states how they may be used.
