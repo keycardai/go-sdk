@@ -15,6 +15,7 @@ const (
 	deviceCodeGrantType       = "urn:ietf:params:oauth:grant-type:device_code"
 	defaultDevicePollInterval = 5 * time.Second
 	deviceSlowDownIncrement   = 5 * time.Second
+	maxDevicePollInterval     = time.Hour
 )
 
 // Clock supplies the current time and timers. Inject a fake in tests so that
@@ -270,6 +271,8 @@ func (c *DeviceAuthorizationClient) PollToken(ctx context.Context, auth DeviceAu
 //   - It waits Interval before each poll, including the first.
 //   - On authorization_pending it polls again.
 //   - On slow_down it adds 5 seconds to the interval for this and every later poll.
+//   - It never waits longer than one hour between polls, whatever Interval or
+//     slow_down asks for.
 //   - On any other error, including a network error, a 5xx, or a 429, it stops and
 //     returns the error. It does not retry.
 //   - If the next poll would start after ExpiresAt, it stops without sending it and
@@ -286,9 +289,9 @@ func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth Devic
 	if auth.ExpiresAt.IsZero() {
 		return nil, &ConfigurationError{Message: "device authorization has no expires_at"}
 	}
-	interval := time.Duration(auth.Interval) * time.Second
-	if interval <= 0 {
-		interval = defaultDevicePollInterval
+	interval := defaultDevicePollInterval
+	if auth.Interval > 0 {
+		interval = time.Duration(min(int64(auth.Interval), int64(maxDevicePollInterval/time.Second))) * time.Second
 	}
 
 	for {
@@ -318,7 +321,7 @@ func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth Devic
 		switch oauthErr.ErrorCode {
 		case "authorization_pending":
 		case "slow_down":
-			interval += deviceSlowDownIncrement
+			interval = min(interval+deviceSlowDownIncrement, maxDevicePollInterval)
 		default:
 			return nil, err
 		}
