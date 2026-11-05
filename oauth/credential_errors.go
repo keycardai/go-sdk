@@ -60,7 +60,8 @@ func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
 // ClientSecretConfigurationError indicates a ClientSecretCredential was constructed with
 // invalid configuration, such as an empty client_id or client_secret, or an empty
-// multi-zone map.
+// multi-zone map. A multi-zone credential also returns it from ClientAuthentication
+// for a zone it has no credentials for.
 type ClientSecretConfigurationError struct {
 	Message string
 }

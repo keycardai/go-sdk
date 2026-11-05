@@ -117,3 +117,42 @@ func TestFetchAuthorizationServerMetadata_MalformedDocument(t *testing.T) {
 		t.Errorf("JSON cause was dropped: %v", err)
 	}
 }
+
+func TestFetchAuthorizationServerMetadata_DeviceAuthorizationEndpoint(t *testing.T) {
+	cases := map[string]struct {
+		advertised string
+		want       string
+	}{
+		"present": {advertised: "/device/authorize", want: "/device/authorize"},
+		"absent":  {advertised: "", want: ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var serverURL string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				md := map[string]string{"issuer": serverURL}
+				if tc.advertised != "" {
+					md["device_authorization_endpoint"] = serverURL + tc.advertised
+				}
+				_ = json.NewEncoder(w).Encode(md)
+			}))
+			defer server.Close()
+			serverURL = server.URL
+
+			md, err := FetchAuthorizationServerMetadata(context.Background(), server.URL)
+			if err != nil {
+				t.Fatalf("FetchAuthorizationServerMetadata: %v", err)
+			}
+			want := ""
+			if tc.want != "" {
+				want = server.URL + tc.want
+			}
+			if md.DeviceAuthorizationEndpoint != want {
+				t.Errorf("DeviceAuthorizationEndpoint: got %q, want %q", md.DeviceAuthorizationEndpoint, want)
+			}
+			if _, ok := md.Extra["device_authorization_endpoint"]; ok {
+				t.Errorf("device_authorization_endpoint leaked into Extra: %v", md.Extra)
+			}
+		})
+	}
+}
