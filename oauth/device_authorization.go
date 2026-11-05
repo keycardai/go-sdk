@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,7 +16,6 @@ const (
 	deviceCodeGrantType       = "urn:ietf:params:oauth:grant-type:device_code"
 	defaultDevicePollInterval = 5 * time.Second
 	deviceSlowDownIncrement   = 5 * time.Second
-	maxDevicePollInterval     = time.Hour
 )
 
 // Clock supplies the current time and timers. Inject a fake in tests so that
@@ -230,8 +230,17 @@ func (c *DeviceAuthorizationClient) parseDeviceAuthorization(resp *http.Response
 	if da.Interval <= 0 {
 		da.Interval = int(defaultDevicePollInterval / time.Second)
 	}
-	da.ExpiresAt = c.cfg.clock.Now().Add(time.Duration(da.ExpiresIn) * time.Second)
+	da.ExpiresAt = c.cfg.clock.Now().Add(secondsToDuration(da.ExpiresIn))
 	return &da, nil
+}
+
+// secondsToDuration converts a server-supplied count of seconds to a Duration. Values
+// too large for a Duration become the largest Duration.
+func secondsToDuration(s int) time.Duration {
+	if int64(s) > math.MaxInt64/int64(time.Second) {
+		return math.MaxInt64
+	}
+	return time.Duration(s) * time.Second
 }
 
 // PollToken polls the token endpoint once with auth.DeviceCode. It returns the token
@@ -265,37 +274,84 @@ func (c *DeviceAuthorizationClient) PollToken(ctx context.Context, auth DeviceAu
 	return deserializeTokenResponse(resp)
 }
 
+// WaitForTokenOption configures one WaitForToken call.
+type WaitForTokenOption func(*waitForTokenConfig)
+
+type waitForTokenConfig struct {
+	startInterval time.Duration
+}
+
+// WithStartInterval sets the wait before the first poll and the starting interval.
+// Use it to resume with the Interval of a [DevicePollError]. It must not be shorter
+// than the DeviceAuthorization's Interval.
+func WithStartInterval(d time.Duration) WaitForTokenOption {
+	return func(cfg *waitForTokenConfig) { cfg.startInterval = d }
+}
+
+// DevicePollError is the error WaitForToken returns when a poll fails with anything
+// other than an *OAuthError, such as a network error, a 5xx, or a 429. Interval is
+// the wait the loop would have used before its next poll, including every slow_down
+// increase. To resume, call WaitForToken with the same DeviceAuthorization and
+// WithStartInterval(Interval).
+type DevicePollError struct {
+	Interval time.Duration
+	Err      error
+}
+
+func (e *DevicePollError) Error() string {
+	return fmt.Sprintf("device token poll failed (next interval %s): %v", e.Interval, e.Err)
+}
+
+func (e *DevicePollError) Unwrap() error { return e.Err }
+
 // WaitForToken polls until the person approves or denies the request, following
 // RFC 8628 section 3.5:
 //
-//   - It waits Interval before each poll, including the first.
+//   - It waits the interval before each poll, including the first. The interval
+//     starts at auth.Interval, or at WithStartInterval when set.
 //   - On authorization_pending it polls again.
 //   - On slow_down it adds 5 seconds to the interval for this and every later poll.
-//   - It never waits longer than one hour between polls, whatever Interval or
-//     slow_down asks for.
-//   - On any other error, including a network error, a 5xx, or a 429, it stops and
-//     returns the error. It does not retry.
-//   - If the next poll would start after ExpiresAt, it stops without sending it and
-//     returns an *OAuthError with code expired_token.
+//   - On any other *OAuthError it stops and returns it.
+//   - On any other failure, including a network error, a 5xx, or a 429, it stops and
+//     returns a *DevicePollError. It does not poll again.
+//   - If the next poll would start after ExpiresAt, it stops without waiting or
+//     sending it, and returns an *OAuthError with code expired_token.
+//
+// Polling again on authorization_pending and slow_down is the grant itself, not a
+// retry.
 //
 // Cancelling ctx stops the wait or the request in progress and returns ctx.Err().
-// After a failure the caller may call WaitForToken again with the same auth until
-// ExpiresAt. After a connection timeout, the caller MUST wait longer than Interval
-// before it does (RFC 8628 section 3.5).
-func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth DeviceAuthorization) (*TokenResponse, error) {
+// After a *DevicePollError the caller may resume until ExpiresAt. After a connection
+// timeout, the caller MUST wait longer than the error's Interval before it does
+// (RFC 8628 section 3.5).
+//
+// When the device authorization request named more than one resource, the token is
+// not for any one of them. NEVER store it as the token for one resource. To get a
+// token for one resource, refresh with that resource.
+func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth DeviceAuthorization, opts ...WaitForTokenOption) (*TokenResponse, error) {
 	if auth.DeviceCode == "" {
 		return nil, &ConfigurationError{Message: "device authorization has no device_code"}
 	}
 	if auth.ExpiresAt.IsZero() {
 		return nil, &ConfigurationError{Message: "device authorization has no expires_at"}
 	}
+	var cfg waitForTokenConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	interval := defaultDevicePollInterval
 	if auth.Interval > 0 {
-		interval = time.Duration(min(int64(auth.Interval), int64(maxDevicePollInterval/time.Second))) * time.Second
+		interval = secondsToDuration(auth.Interval)
+	}
+	if cfg.startInterval != 0 {
+		if cfg.startInterval < interval {
+			return nil, &ConfigurationError{Message: fmt.Sprintf("start interval %s is shorter than the device authorization interval %s", cfg.startInterval, interval)}
+		}
+		interval = cfg.startInterval
 	}
 
 	for {
-		if c.cfg.clock.Now().Add(interval).After(auth.ExpiresAt) {
+		if interval > auth.ExpiresAt.Sub(c.cfg.clock.Now()) {
 			return nil, &OAuthError{ErrorCode: "expired_token", Message: "the device code expired before the request was approved"}
 		}
 		select {
@@ -316,12 +372,16 @@ func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth Devic
 		}
 		var oauthErr *OAuthError
 		if !errors.As(err, &oauthErr) {
-			return nil, err
+			return nil, &DevicePollError{Interval: interval, Err: err}
 		}
 		switch oauthErr.ErrorCode {
 		case "authorization_pending":
 		case "slow_down":
-			interval = min(interval+deviceSlowDownIncrement, maxDevicePollInterval)
+			if interval > math.MaxInt64-deviceSlowDownIncrement {
+				interval = math.MaxInt64
+			} else {
+				interval += deviceSlowDownIncrement
+			}
 		default:
 			return nil, err
 		}
