@@ -619,6 +619,7 @@ func TestWaitForToken(t *testing.T) {
 	const s = time.Second
 	cases := map[string]struct {
 		steps     []tokenStep
+		interval  int
 		expiresIn int
 		wantWaits []time.Duration
 		wantPolls int
@@ -660,6 +661,20 @@ func TestWaitForToken(t *testing.T) {
 			wantPolls: 1,
 			wantCode:  "invalid_grant",
 		},
+		"interval above one hour waits one hour": {
+			steps:     []tokenStep{stepToken},
+			interval:  7200,
+			expiresIn: 10800,
+			wantWaits: []time.Duration{3600 * s},
+			wantPolls: 1,
+		},
+		"slow_down does not raise the interval above one hour": {
+			steps:     []tokenStep{stepOAuthError("slow_down"), stepToken},
+			interval:  3598,
+			expiresIn: 10800,
+			wantWaits: []time.Duration{3598 * s, 3600 * s},
+			wantPolls: 2,
+		},
 		"429 stops": {
 			steps:     []tokenStep{stepStatus(http.StatusTooManyRequests)},
 			wantWaits: []time.Duration{5 * s},
@@ -677,13 +692,17 @@ func TestWaitForToken(t *testing.T) {
 				WithDevicePublicClient("public-1"),
 				WithDeviceClock(clock))
 
+			interval := tc.interval
+			if interval == 0 {
+				interval = 5
+			}
 			expiresIn := tc.expiresIn
 			if expiresIn == 0 {
 				expiresIn = 600
 			}
 			auth := DeviceAuthorization{
 				DeviceCode: "device-code-1",
-				Interval:   5,
+				Interval:   interval,
 				ExpiresIn:  expiresIn,
 				ExpiresAt:  clock.Now().Add(time.Duration(expiresIn) * time.Second),
 			}
