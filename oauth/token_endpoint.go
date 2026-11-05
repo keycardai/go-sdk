@@ -32,25 +32,25 @@ func sharedFetch(ctx context.Context, g *singleflight.Group, key string, timeout
 	}
 }
 
-type tokenEndpointResolver struct {
-	issuer       string
-	httpClient   *http.Client
+// discoveryCache holds one discovered value for an issuer. A success is kept for
+// discoveryTTL. A deterministic failure is kept for at most negativeTTL, never longer
+// than discoveryTTL. Transient failures are never kept. Concurrent callers on a cold
+// cache share one fetch.
+type discoveryCache[T any] struct {
 	discoveryTTL time.Duration
 	negativeTTL  time.Duration
 	fetchTimeout time.Duration
 	now          func() time.Time
 
 	mu        sync.Mutex
-	endpoint  string
+	value     T
 	err       error
 	expiresAt time.Time
 	group     singleflight.Group
 }
 
-func newTokenEndpointResolver(issuer string, httpClient *http.Client, discoveryTTL, negativeTTL, fetchTimeout time.Duration) tokenEndpointResolver {
-	return tokenEndpointResolver{
-		issuer:       issuer,
-		httpClient:   httpClient,
+func newDiscoveryCache[T any](discoveryTTL, negativeTTL, fetchTimeout time.Duration) discoveryCache[T] {
+	return discoveryCache[T]{
 		discoveryTTL: discoveryTTL,
 		negativeTTL:  negativeTTL,
 		fetchTimeout: fetchTimeout,
@@ -58,19 +58,59 @@ func newTokenEndpointResolver(issuer string, httpClient *http.Client, discoveryT
 	}
 }
 
-func (r *tokenEndpointResolver) Endpoint(ctx context.Context) (string, error) {
-	r.mu.Lock()
-	if r.now().Before(r.expiresAt) {
-		ep, err := r.endpoint, r.err
-		r.mu.Unlock()
-		return ep, err
+func (c *discoveryCache[T]) get(ctx context.Context, fetch func(context.Context) (T, error)) (T, error) {
+	c.mu.Lock()
+	if c.now().Before(c.expiresAt) {
+		v, err := c.value, c.err
+		c.mu.Unlock()
+		return v, err
 	}
-	r.mu.Unlock()
+	c.mu.Unlock()
 
-	v, err := sharedFetch(ctx, &r.group, "", r.fetchTimeout, func(fetchCtx context.Context) (any, error) {
-		ep, err := resolveTokenEndpoint(fetchCtx, r.issuer, r.httpClient)
-		r.store(ep, err)
-		return ep, err
+	var zero T
+	v, err := sharedFetch(ctx, &c.group, "", c.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+		v, err := fetch(fetchCtx)
+		c.store(v, err)
+		return v, err
+	})
+	if err != nil {
+		return zero, err
+	}
+	return v.(T), nil
+}
+
+func (c *discoveryCache[T]) store(value T, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var zero T
+	switch {
+	case err == nil:
+		c.value, c.err = value, nil
+		c.expiresAt = c.now().Add(c.discoveryTTL)
+	case c.negativeTTL > 0 && isDeterministicDiscoveryFailure(err):
+		c.value, c.err = zero, err
+		c.expiresAt = c.now().Add(min(c.negativeTTL, c.discoveryTTL))
+	}
+}
+
+type tokenEndpointResolver struct {
+	issuer     string
+	httpClient *http.Client
+	discoveryCache[string]
+}
+
+func newTokenEndpointResolver(issuer string, httpClient *http.Client, discoveryTTL, negativeTTL, fetchTimeout time.Duration) tokenEndpointResolver {
+	return tokenEndpointResolver{
+		issuer:         issuer,
+		httpClient:     httpClient,
+		discoveryCache: newDiscoveryCache[string](discoveryTTL, negativeTTL, fetchTimeout),
+	}
+}
+
+func (r *tokenEndpointResolver) Endpoint(ctx context.Context) (string, error) {
+	ep, err := r.get(ctx, func(fetchCtx context.Context) (string, error) {
+		return resolveTokenEndpoint(fetchCtx, r.issuer, r.httpClient)
 	})
 	if err != nil {
 		var disc *TokenEndpointDiscoveryError
@@ -79,21 +119,7 @@ func (r *tokenEndpointResolver) Endpoint(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	return v.(string), nil
-}
-
-func (r *tokenEndpointResolver) store(endpoint string, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	switch {
-	case err == nil:
-		r.endpoint, r.err = endpoint, nil
-		r.expiresAt = r.now().Add(r.discoveryTTL)
-	case r.negativeTTL > 0 && isDeterministicDiscoveryFailure(err):
-		r.endpoint, r.err = "", err
-		r.expiresAt = r.now().Add(min(r.negativeTTL, r.discoveryTTL))
-	}
+	return ep, nil
 }
 
 // Transport errors, timeouts, 5xx and 429 are transient and never cached.
