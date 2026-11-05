@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -617,14 +618,29 @@ func TestPollToken_Request(t *testing.T) {
 
 func TestWaitForToken(t *testing.T) {
 	const s = time.Second
+	stepTokenWithResource := tokenStep{status: http.StatusOK, body: map[string]any{
+		"access_token":  "access-1",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"refresh_token": "refresh-1",
+		"id_token":      "header.claims.signature",
+		"scope":         "openid",
+		"resource":      "https://api-1.example.com",
+	}}
 	cases := map[string]struct {
 		steps     []tokenStep
 		interval  int
 		expiresIn int
+		start     time.Duration
 		wantWaits []time.Duration
 		wantPolls int
-		wantCode  string
-		wantHTTP  int
+		// Exactly one of the following describes a failure. All zero means a token.
+		wantCode    string
+		wantHTTP    int
+		wantNetwork bool
+		wantConfig  bool
+		// wantPollInterval, when set, is the Interval of the expected *DevicePollError.
+		wantPollInterval time.Duration
 	}{
 		"pending twice, then a token": {
 			steps:     []tokenStep{stepOAuthError("authorization_pending"), stepOAuthError("authorization_pending"), stepToken},
@@ -661,25 +677,50 @@ func TestWaitForToken(t *testing.T) {
 			wantPolls: 1,
 			wantCode:  "invalid_grant",
 		},
-		"interval above one hour waits one hour": {
+		"interval longer than the time left stops without waiting": {
 			steps:     []tokenStep{stepToken},
-			interval:  7200,
-			expiresIn: 10800,
-			wantWaits: []time.Duration{3600 * s},
-			wantPolls: 1,
+			interval:  700,
+			wantPolls: 0,
+			wantCode:  "expired_token",
 		},
-		"slow_down does not raise the interval above one hour": {
-			steps:     []tokenStep{stepOAuthError("slow_down"), stepToken},
-			interval:  3598,
-			expiresIn: 10800,
-			wantWaits: []time.Duration{3598 * s, 3600 * s},
+		"interval too large for a Duration stops without waiting": {
+			steps:     []tokenStep{stepToken},
+			interval:  math.MaxInt,
+			wantPolls: 0,
+			wantCode:  "expired_token",
+		},
+		"429 stops and reports the interval": {
+			steps:            []tokenStep{stepStatus(http.StatusTooManyRequests)},
+			wantWaits:        []time.Duration{5 * s},
+			wantPolls:        1,
+			wantHTTP:         http.StatusTooManyRequests,
+			wantPollInterval: 5 * s,
+		},
+		"slow_down, then a network error reports the raised interval": {
+			steps:            []tokenStep{stepOAuthError("slow_down"), stepNetwork},
+			wantWaits:        []time.Duration{5 * s, 10 * s},
+			wantPolls:        2,
+			wantNetwork:      true,
+			wantPollInterval: 10 * s,
+		},
+		"start interval sets the first wait": {
+			steps:     []tokenStep{stepOAuthError("authorization_pending"), stepToken},
+			start:     10 * s,
+			wantWaits: []time.Duration{10 * s, 10 * s},
 			wantPolls: 2,
 		},
-		"429 stops": {
-			steps:     []tokenStep{stepStatus(http.StatusTooManyRequests)},
+		"start interval below the authorization's interval": {
+			steps:      []tokenStep{stepToken},
+			start:      3 * s,
+			wantPolls:  0,
+			wantConfig: true,
+		},
+		// The SDK does not associate the token with a resource, so a resource field in
+		// the response does not appear in the result.
+		"token response with a resource field": {
+			steps:     []tokenStep{stepTokenWithResource},
 			wantWaits: []time.Duration{5 * s},
 			wantPolls: 1,
-			wantHTTP:  http.StatusTooManyRequests,
 		},
 	}
 	for name, tc := range cases {
@@ -706,13 +747,26 @@ func TestWaitForToken(t *testing.T) {
 				ExpiresIn:  expiresIn,
 				ExpiresAt:  clock.Now().Add(time.Duration(expiresIn) * time.Second),
 			}
-			token, err := client.WaitForToken(context.Background(), auth)
+			var opts []WaitForTokenOption
+			if tc.start != 0 {
+				opts = append(opts, WithStartInterval(tc.start))
+			}
+			token, err := client.WaitForToken(context.Background(), auth, opts...)
 
 			switch {
 			case tc.wantCode != "":
 				wantOAuthError(t, err, tc.wantCode)
 			case tc.wantHTTP != 0:
 				wantHTTPError(t, err, tc.wantHTTP)
+			case tc.wantNetwork:
+				if !errors.Is(err, errNetwork) {
+					t.Fatalf("error: got %v, want the transport error", err)
+				}
+			case tc.wantConfig:
+				var cfgErr *ConfigurationError
+				if !errors.As(err, &cfgErr) {
+					t.Fatalf("error: got %v (%T), want *ConfigurationError", err, err)
+				}
 			default:
 				if err != nil {
 					t.Fatalf("WaitForToken: %v", err)
@@ -728,6 +782,16 @@ func TestWaitForToken(t *testing.T) {
 				if !reflect.DeepEqual(token, want) {
 					t.Errorf("token: got %+v, want %+v", token, want)
 				}
+			}
+			var pollErr *DevicePollError
+			isPollErr := errors.As(err, &pollErr)
+			switch {
+			case tc.wantPollInterval != 0 && !isPollErr:
+				t.Errorf("error: got %v (%T), want *DevicePollError", err, err)
+			case tc.wantPollInterval != 0 && pollErr.Interval != tc.wantPollInterval:
+				t.Errorf("DevicePollError.Interval: got %v, want %v", pollErr.Interval, tc.wantPollInterval)
+			case tc.wantPollInterval == 0 && isPollErr:
+				t.Errorf("error: got *DevicePollError %v, want no DevicePollError", err)
 			}
 			if got := len(zone.tokenCalls()); got != tc.wantPolls {
 				t.Errorf("polls: got %d, want %d", got, tc.wantPolls)
@@ -755,14 +819,99 @@ func TestWaitForToken_TransportAndServerFailuresStop(t *testing.T) {
 	if !errors.Is(err, errNetwork) {
 		t.Fatalf("first call: got %v, want the transport error", err)
 	}
+	var pollErr *DevicePollError
+	if !errors.As(err, &pollErr) || pollErr.Interval != 5*time.Second {
+		t.Errorf("first call: got %v (%T), want *DevicePollError with Interval 5s", err, err)
+	}
 	if got := len(zone.tokenCalls()); got != 1 {
 		t.Fatalf("polls after first call: got %d, want 1", got)
 	}
 
 	_, err = client.WaitForToken(context.Background(), auth)
 	wantHTTPError(t, err, http.StatusServiceUnavailable)
+	if !errors.As(err, &pollErr) || pollErr.Interval != 5*time.Second {
+		t.Errorf("second call: got %v (%T), want *DevicePollError with Interval 5s", err, err)
+	}
 	if got := len(zone.tokenCalls()); got != 2 {
 		t.Errorf("polls after second call: got %d, want 2", got)
+	}
+}
+
+// Resuming with the Interval from a DevicePollError keeps the slow_down increase, so
+// the resumed loop does not poll faster than the server asked.
+func TestWaitForToken_ResumeAfterSlowDown(t *testing.T) {
+	zone := newDeviceZone(t)
+	zone.script(stepOAuthError("slow_down"), stepNetwork, stepToken)
+	clock := newFakeDeviceClock()
+	client := mustDeviceClient(t, zone.URL,
+		WithDeviceHTTPClient(zone.httpClient()),
+		WithDevicePublicClient("public-1"),
+		WithDeviceClock(clock))
+	auth := DeviceAuthorization{DeviceCode: "device-code-1", Interval: 5, ExpiresIn: 600, ExpiresAt: clock.Now().Add(600 * time.Second)}
+
+	_, err := client.WaitForToken(context.Background(), auth)
+	var pollErr *DevicePollError
+	if !errors.As(err, &pollErr) {
+		t.Fatalf("first call: got %v (%T), want *DevicePollError", err, err)
+	}
+
+	if _, err := client.WaitForToken(context.Background(), auth, WithStartInterval(pollErr.Interval)); err != nil {
+		t.Fatalf("resumed call: %v", err)
+	}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Second}
+	if got := clock.recordedWaits(); !reflect.DeepEqual(got, want) {
+		t.Errorf("waits: got %v, want %v", got, want)
+	}
+	if got := len(zone.tokenCalls()); got != 3 {
+		t.Errorf("polls: got %d, want 3", got)
+	}
+}
+
+// Each request in one flow signs its own assertion for the endpoint it goes to.
+// Reusing the device authorization assertion for a poll would send the wrong aud.
+func TestDeviceFlow_WebIdentityAssertionPerRequest(t *testing.T) {
+	zone := newDeviceZone(t)
+	zone.script(stepOAuthError("authorization_pending"), stepToken)
+	clock := newFakeDeviceClock()
+	cred := NewWebIdentity(WithClientID("client-a"), WithStorageDir(t.TempDir()))
+	client := mustDeviceClient(t, zone.URL,
+		WithDeviceHTTPClient(zone.httpClient()),
+		WithDeviceCredential(cred),
+		WithDeviceClock(clock))
+
+	auth, err := client.RequestDeviceAuthorization(context.Background(), DeviceAuthorizationRequest{})
+	if err != nil {
+		t.Fatalf("RequestDeviceAuthorization: %v", err)
+	}
+	if _, err := client.WaitForToken(context.Background(), *auth); err != nil {
+		t.Fatalf("WaitForToken: %v", err)
+	}
+
+	type sent struct {
+		form    url.Values
+		wantAud string
+	}
+	var requests []sent
+	for _, c := range zone.deviceCalls() {
+		requests = append(requests, sent{c.form, zone.URL + "/device/authorize"})
+	}
+	for _, c := range zone.tokenCalls() {
+		requests = append(requests, sent{c.form, zone.URL + "/token"})
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests: got %d, want 1 device authorization and 2 polls", len(requests))
+	}
+	jtis := map[string]bool{}
+	for i, r := range requests {
+		claims := assertionClaims(t, r.form.Get("client_assertion"))
+		if claims["aud"] != r.wantAud {
+			t.Errorf("request %d aud: got %v, want %q", i, claims["aud"], r.wantAud)
+		}
+		jti, _ := claims["jti"].(string)
+		if jti == "" || jtis[jti] {
+			t.Errorf("request %d jti: got %q, want a new non-empty jti", i, jti)
+		}
+		jtis[jti] = true
 	}
 }
 
