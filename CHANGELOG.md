@@ -1,3 +1,11 @@
+## v0.23.6 (2026-11-06)
+
+
+- fix(oauth): throttle JWKS refetches for unknown key ids, and time out zone requests by default (#56)
+- JWKSOAuthKeyring keeps the last key set per jwks_uri for the key TTL, looks a kid up there before fetching, refetches for a missing kid at most once per WithJWKSRefetchCooldown (default 30s, 0 fetches per miss), runs the singleflight per jwks_uri so distinct kids share one fetch, and drops the set in Invalidate. Every client wraps a context with no deadline in a default 10s timeout (WithCCRequestTimeout, WithTokenExchangeRequestTimeout, WithAuthCodeRequestTimeout, WithAuthenticateRequestTimeout, WithDiscoveryRequestTimeout, WithRegistrationRequestTimeout, WithUserInfoRequestTimeout); http.Client.Timeout is untouched so a caller's longer deadline wins, and errors.Is(err, context.DeadlineExceeded) holds. Follows typescript-sdk #309 and #310. SDK-93.
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.23.5 (2026-10-14)
 
 
