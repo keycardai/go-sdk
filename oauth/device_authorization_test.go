@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -256,9 +257,14 @@ func (c *fakeDeviceClock) recordedWaits() []time.Duration {
 // authentication and records each call.
 type fakeAuthenticator struct {
 	noClientAuthentication
-	mu    sync.Mutex
-	calls [][2]string // issuer, endpoint
+	// failOn, when set, makes client authentication for that endpoint path fail with
+	// errClientAuthentication.
+	failOn string
+	mu     sync.Mutex
+	calls  [][2]string // issuer, endpoint
 }
+
+var errClientAuthentication = errors.New("identity token source unavailable")
 
 // noClientAuthentication is an ApplicationCredential that does not implement
 // ClientAuthenticator.
@@ -274,6 +280,9 @@ func (f *fakeAuthenticator) ClientAuthentication(_ context.Context, issuer, endp
 	f.mu.Lock()
 	f.calls = append(f.calls, [2]string{issuer, endpoint})
 	f.mu.Unlock()
+	if f.failOn != "" && strings.HasSuffix(endpoint, f.failOn) {
+		return nil, errClientAuthentication
+	}
 	return &ClientAuthentication{
 		Header: http.Header{"Authorization": {"Basic Y2xpZW50OnNlY3JldA=="}},
 		Form:   url.Values{"client_assertion": {"assertion-1"}, "client_assertion_type": {clientAssertionTypeJWTBearer}},
@@ -512,6 +521,11 @@ func TestRequestDeviceAuthorization_Response(t *testing.T) {
 		delete(m, field)
 		return m
 	}
+	with := func(field string, value any) map[string]any {
+		m := full()
+		m[field] = value
+		return m
+	}
 	clockStart := newFakeDeviceClock().Now()
 
 	cases := map[string]struct {
@@ -552,6 +566,9 @@ func TestRequestDeviceAuthorization_Response(t *testing.T) {
 		"missing verification_uri":   {status: http.StatusOK, body: without("verification_uri"), wantCode: "invalid_response"},
 		"missing expires_in":         {status: http.StatusOK, body: without("expires_in"), wantCode: "invalid_response"},
 		"body is not an object":      {status: http.StatusOK, body: "not an object", wantCode: "invalid_response"},
+		"interval 0":                 {status: http.StatusOK, body: with("interval", 0), wantCode: "invalid_response"},
+		"interval -1":                {status: http.StatusOK, body: with("interval", -1), wantCode: "invalid_response"},
+		"interval as a string":       {status: http.StatusOK, body: with("interval", "5"), wantCode: "invalid_response"},
 		"invalid_target":             {status: http.StatusBadRequest, body: map[string]string{"error": "invalid_target"}, wantCode: "invalid_target"},
 		"invalid_client":             {status: http.StatusUnauthorized, body: map[string]string{"error": "invalid_client"}, wantCode: "invalid_client"},
 		"503 without an OAuth error": {status: http.StatusServiceUnavailable, body: "unavailable", wantHTTP: http.StatusServiceUnavailable},
@@ -734,6 +751,19 @@ func TestWaitForToken(t *testing.T) {
 			wantPolls:        1,
 			wantHTTP:         http.StatusTooManyRequests,
 			wantPollInterval: 5 * s,
+		},
+		"503 with an OAuth error body stops and reports the interval": {
+			steps:            []tokenStep{{status: http.StatusServiceUnavailable, body: map[string]string{"error": "temporarily_unavailable"}}},
+			wantWaits:        []time.Duration{5 * s},
+			wantPolls:        1,
+			wantCode:         "temporarily_unavailable",
+			wantPollInterval: 5 * s,
+		},
+		"400 without an OAuth error body stops without an interval": {
+			steps:     []tokenStep{stepStatus(http.StatusBadRequest)},
+			wantWaits: []time.Duration{5 * s},
+			wantPolls: 1,
+			wantHTTP:  http.StatusBadRequest,
 		},
 		"slow_down, then a network error reports the raised interval": {
 			steps:            []tokenStep{stepOAuthError("slow_down"), stepNetwork},
@@ -1125,15 +1155,26 @@ func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
 			wantTimeout:      true,
 			wantPollInterval: 5 * time.Second,
 		},
-		"a caller deadline replaces the request timeout": {
+		"a later caller deadline does not replace the timeout of a poll": {
 			run: func(ctx context.Context, c *DeviceAuthorizationClient, auth DeviceAuthorization) error {
 				_, err := c.WaitForToken(ctx, auth)
 				return err
 			},
-			zoneDelay:  4 * timeout,
-			ctxTimeout: time.Minute,
-			steps:      []tokenStep{stepToken},
-			wantPolls:  1,
+			zoneDelay:        time.Second,
+			ctxTimeout:       time.Minute,
+			steps:            []tokenStep{stepToken},
+			wantPolls:        1,
+			wantTimeout:      true,
+			wantPollInterval: 5 * time.Second,
+		},
+		"a later caller deadline does not replace the timeout of the device authorization request": {
+			run: func(ctx context.Context, c *DeviceAuthorizationClient, _ DeviceAuthorization) error {
+				_, err := c.RequestDeviceAuthorization(ctx, DeviceAuthorizationRequest{})
+				return err
+			},
+			zoneDelay:   time.Second,
+			ctxTimeout:  time.Minute,
+			wantTimeout: true,
 		},
 		"the wait between polls is not bounded by the request timeout": {
 			run: func(ctx context.Context, c *DeviceAuthorizationClient, auth DeviceAuthorization) error {
@@ -1191,5 +1232,36 @@ func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
 				t.Errorf("polls: got %d, want %d", got, tc.wantPolls)
 			}
 		})
+	}
+}
+
+// A credential whose client authentication fails on a poll stops the loop. The
+// credential's error comes back as is, without an interval.
+func TestWaitForToken_ClientAuthenticationFails(t *testing.T) {
+	zone := newDeviceZone(t)
+	zone.script(stepToken)
+	clock := newFakeDeviceClock()
+	cred := &fakeAuthenticator{failOn: "/token"}
+	client := mustDeviceClient(t, zone.URL,
+		WithDeviceHTTPClient(zone.httpClient()),
+		WithDeviceCredential(cred),
+		WithDeviceClock(clock))
+	auth := DeviceAuthorization{DeviceCode: "device-code-1", Interval: 5, ExpiresIn: 600, ExpiresAt: clock.Now().Add(600 * time.Second)}
+
+	_, err := client.WaitForToken(context.Background(), auth)
+
+	if !errors.Is(err, errClientAuthentication) {
+		t.Fatalf("error: got %v, want the credential's error", err)
+	}
+	var pollErr *DevicePollError
+	if errors.As(err, &pollErr) {
+		t.Errorf("error: got *DevicePollError %v, want the credential's error without an interval", err)
+	}
+	if got := len(zone.tokenCalls()); got != 0 {
+		t.Errorf("polls: got %d, want 0", got)
+	}
+	want := [][2]string{{zone.URL, zone.URL + "/token"}}
+	if got := cred.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("credential calls: got %v, want %v", got, want)
 	}
 }

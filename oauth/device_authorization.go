@@ -108,10 +108,11 @@ func WithDeviceClock(c Clock) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.clock = c }
 }
 
-// WithDeviceRequestTimeout bounds each request to the authorization server when the
-// caller's context has no deadline of its own: discovery, the device authorization
-// request, and each poll. It does not bound the wait between polls or the whole
-// WaitForToken loop. Default: 10 seconds.
+// WithDeviceRequestTimeout bounds each request to the authorization server: discovery,
+// the device authorization request, and each poll. It applies even when the caller's
+// context has a deadline. A caller deadline that ends sooner still applies. It does
+// not bound the wait between polls or the whole WaitForToken loop. Default: 10
+// seconds.
 func WithDeviceRequestTimeout(d time.Duration) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.requestTimeout = d }
 }
@@ -208,9 +209,13 @@ func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Conte
 		form.Add("resource", r)
 	}
 
-	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	ctx, cancel := c.withRequestTimeout(ctx)
 	defer cancel()
-	resp, err := c.post(ctx, endpoint, form)
+	header := http.Header{}
+	if err := c.authenticate(ctx, endpoint, header, form); err != nil {
+		return nil, err
+	}
+	resp, err := postForm(ctx, c.cfg.httpClient, endpoint, header, form)
 	if err != nil {
 		return nil, fmt.Errorf("device authorization request failed: %w", err)
 	}
@@ -223,10 +228,15 @@ func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Conte
 }
 
 func (c *DeviceAuthorizationClient) parseDeviceAuthorization(resp *http.Response) (*DeviceAuthorization, error) {
-	var da DeviceAuthorization
-	if err := json.NewDecoder(resp.Body).Decode(&da); err != nil {
+	// Interval is a pointer so that an absent interval and an interval of 0 differ.
+	var body struct {
+		DeviceAuthorization
+		Interval *int `json:"interval"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "decoding device authorization response", Err: err}
 	}
+	da := body.DeviceAuthorization
 	var missing []string
 	if da.DeviceCode == "" {
 		missing = append(missing, "device_code")
@@ -243,8 +253,13 @@ func (c *DeviceAuthorizationClient) parseDeviceAuthorization(resp *http.Response
 	if len(missing) > 0 {
 		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "device authorization response is missing " + strings.Join(missing, ", ")}
 	}
-	if da.Interval <= 0 {
+	switch {
+	case body.Interval == nil:
 		da.Interval = int(defaultDevicePollInterval / time.Second)
+	case *body.Interval <= 0:
+		return nil, &OAuthError{ErrorCode: "invalid_response", Message: fmt.Sprintf("device authorization response has interval %d, want a positive integer", *body.Interval)}
+	default:
+		da.Interval = *body.Interval
 	}
 	da.ExpiresAt = c.cfg.clock.Now().Add(secondsToDuration(da.ExpiresIn))
 	return &da, nil
@@ -263,33 +278,46 @@ func secondsToDuration(s int) time.Duration {
 // when the person has approved. Otherwise it returns an *OAuthError with the server's
 // code, including authorization_pending and slow_down.
 func (c *DeviceAuthorizationClient) PollToken(ctx context.Context, auth DeviceAuthorization) (*TokenResponse, error) {
+	token, _, err := c.pollToken(ctx, auth)
+	return token, err
+}
+
+// pollToken is PollToken. transient is true when the poll failed with a network error,
+// including a request timeout, or with a 5xx or 429 response.
+func (c *DeviceAuthorizationClient) pollToken(ctx context.Context, auth DeviceAuthorization) (token *TokenResponse, transient bool, err error) {
 	if auth.DeviceCode == "" {
-		return nil, &ConfigurationError{Message: "device authorization has no device_code"}
+		return nil, false, &ConfigurationError{Message: "device authorization has no device_code"}
 	}
 	md, err := c.resolveMetadata(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if md.TokenEndpoint == "" {
-		return nil, &TokenEndpointDiscoveryError{Message: fmt.Sprintf("authorization server %q does not advertise a token_endpoint", c.issuer)}
+		return nil, false, &TokenEndpointDiscoveryError{Message: fmt.Sprintf("authorization server %q does not advertise a token_endpoint", c.issuer)}
 	}
 
 	form := url.Values{}
 	form.Set("grant_type", deviceCodeGrantType)
 	form.Set("device_code", auth.DeviceCode)
 
-	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	ctx, cancel := c.withRequestTimeout(ctx)
 	defer cancel()
-	resp, err := c.post(ctx, md.TokenEndpoint, form)
+	header := http.Header{}
+	if err := c.authenticate(ctx, md.TokenEndpoint, header, form); err != nil {
+		return nil, false, err
+	}
+	resp, err := postForm(ctx, c.cfg.httpClient, md.TokenEndpoint, header, form)
 	if err != nil {
-		return nil, fmt.Errorf("device token request failed: %w", err)
+		return nil, true, fmt.Errorf("device token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if !isSuccess(resp.StatusCode) {
-		return nil, errorFromResponse(resp, "token endpoint")
+		transient := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		return nil, transient, errorFromResponse(resp, "token endpoint")
 	}
-	return deserializeTokenResponse(resp)
+	token, err = deserializeTokenResponse(resp)
+	return token, false, err
 }
 
 // WaitForTokenOption configures one WaitForToken call.
@@ -306,11 +334,12 @@ func WithStartInterval(d time.Duration) WaitForTokenOption {
 	return func(cfg *waitForTokenConfig) { cfg.startInterval = d }
 }
 
-// DevicePollError is the error WaitForToken returns when a poll fails with anything
-// other than an *OAuthError, such as a network error, a 5xx, or a 429. Interval is
-// the wait the loop would have used before its next poll, including every slow_down
-// increase. To resume, call WaitForToken with the same DeviceAuthorization and
-// WithStartInterval(Interval).
+// DevicePollError is the error WaitForToken returns when a poll fails with a network
+// error, including a request timeout, or with a 5xx or 429 response. Err is the
+// original failure: the transport error, an *HTTPError, or the *OAuthError from a 5xx
+// or 429 with an OAuth error body. Interval is the wait the loop would have used
+// before its next poll, including every slow_down increase. To resume, call
+// WaitForToken with the same DeviceAuthorization and WithStartInterval(Interval).
 type DevicePollError struct {
 	Interval time.Duration
 	Err      error
@@ -329,15 +358,19 @@ func (e *DevicePollError) Unwrap() error { return e.Err }
 //     starts at auth.Interval, or at WithStartInterval when set.
 //   - On authorization_pending it polls again.
 //   - On slow_down it adds 5 seconds to the interval for this and every later poll.
+//   - On a network error, a 5xx, or a 429, it stops and returns a *DevicePollError,
+//     also when the response has an OAuth error body. It does not poll again.
 //   - On any other *OAuthError it stops and returns it.
-//   - On any other failure, including a network error, a 5xx, or a 429, it stops and
-//     returns a *DevicePollError. It does not poll again.
+//   - On any other failure, such as a client authentication error from the
+//     credential or a 4xx without an OAuth error body, it stops and returns the
+//     error as is.
 //   - If the next poll would start after ExpiresAt, it stops without waiting or
 //     sending it, and returns an *OAuthError with code expired_token.
 //
-// The request timeout set with WithDeviceRequestTimeout bounds each poll. It does not
-// bound the wait between polls or the whole loop. A poll that times out is a
-// *DevicePollError, and errors.Is(err, context.DeadlineExceeded) holds.
+// The request timeout set with WithDeviceRequestTimeout bounds each poll, also when
+// ctx has a later deadline. It does not bound the wait between polls or the whole
+// loop. A poll that times out is a *DevicePollError, and
+// errors.Is(err, context.DeadlineExceeded) holds.
 //
 // Polling again on authorization_pending and slow_down is the grant itself, not a
 // retry.
@@ -388,16 +421,19 @@ func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth Devic
 			return nil, &OAuthError{ErrorCode: "expired_token", Message: "the device code expired before the request was approved"}
 		}
 
-		token, err := c.PollToken(ctx, auth)
+		token, transient, err := c.pollToken(ctx, auth)
 		if err == nil {
 			return token, nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		if transient {
+			return nil, &DevicePollError{Interval: interval, Err: err}
+		}
 		var oauthErr *OAuthError
 		if !errors.As(err, &oauthErr) {
-			return nil, &DevicePollError{Interval: interval, Err: err}
+			return nil, err
 		}
 		switch oauthErr.ErrorCode {
 		case "authorization_pending":
@@ -426,17 +462,22 @@ func (c *DeviceAuthorizationClient) resolveMetadata(ctx context.Context) (*Autho
 	return md, nil
 }
 
-// post sends form to endpoint with the client authentication added.
-func (c *DeviceAuthorizationClient) post(ctx context.Context, endpoint string, form url.Values) (*http.Response, error) {
-	header := http.Header{}
-	if c.authenticator != nil {
-		if err := addClientAuthentication(ctx, c.authenticator, c.issuer, endpoint, header, form); err != nil {
-			return nil, err
-		}
-	} else {
+// authenticate adds the client authentication for a request to endpoint.
+func (c *DeviceAuthorizationClient) authenticate(ctx context.Context, endpoint string, header http.Header, form url.Values) error {
+	if c.authenticator == nil {
 		form.Set("client_id", c.cfg.clientID)
+		return nil
 	}
-	return postForm(ctx, c.cfg.httpClient, endpoint, header, form)
+	return addClientAuthentication(ctx, c.authenticator, c.issuer, endpoint, header, form)
+}
+
+// withRequestTimeout bounds one request by the request timeout, even when ctx has a
+// deadline. A deadline on ctx that ends sooner still applies.
+func (c *DeviceAuthorizationClient) withRequestTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.cfg.requestTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.cfg.requestTimeout)
 }
 
 // postForm sends form to endpoint with header and asks for a JSON response.
