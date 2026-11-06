@@ -163,21 +163,14 @@ func NewDeviceAuthorizationClient(issuer string, opts ...DeviceAuthorizationOpti
 		return nil, &ConfigurationError{Message: "device authorization requires exactly one of WithDeviceCredential and WithDevicePublicClient"}
 	}
 	var authenticator ClientAuthenticator
+	var err error
 	if hasCredential {
-		var err error
 		if authenticator, err = clientAuthenticator(cfg.credential); err != nil {
 			return nil, err
 		}
 	}
-	if cfg.metadata != nil {
-		if issuer == "" {
-			issuer = cfg.metadata.Issuer
-		} else if strings.TrimRight(issuer, "/") != strings.TrimRight(cfg.metadata.Issuer, "/") {
-			return nil, &ConfigurationError{Message: fmt.Sprintf("issuer %q does not match the metadata issuer %q", issuer, cfg.metadata.Issuer)}
-		}
-	}
-	if issuer == "" {
-		return nil, &ConfigurationError{Message: "device authorization requires an issuer or metadata"}
+	if issuer, err = issuerOrMetadata(issuer, cfg.metadata); err != nil {
+		return nil, err
 	}
 
 	c := &DeviceAuthorizationClient{
@@ -356,7 +349,7 @@ func (e *DevicePollError) Unwrap() error { return e.Err }
 //
 // When the device authorization request named more than one resource, the token is
 // not for any one of them. NEVER store it as the token for one resource. To get a
-// token for one resource, refresh with that resource.
+// token for one resource, call [RefreshAuthorization] with that resource.
 func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth DeviceAuthorization, opts ...WaitForTokenOption) (*TokenResponse, error) {
 	if auth.DeviceCode == "" {
 		return nil, &ConfigurationError{Message: "device authorization has no device_code"}
@@ -443,7 +436,11 @@ func (c *DeviceAuthorizationClient) post(ctx context.Context, endpoint string, f
 	} else {
 		form.Set("client_id", c.cfg.clientID)
 	}
+	return postForm(ctx, c.cfg.httpClient, endpoint, header, form)
+}
 
+// postForm sends form to endpoint with header and asks for a JSON response.
+func postForm(ctx context.Context, httpClient *http.Client, endpoint string, header http.Header, form url.Values) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
@@ -451,7 +448,24 @@ func (c *DeviceAuthorizationClient) post(ctx context.Context, endpoint string, f
 	req.Header = header
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	return c.cfg.httpClient.Do(req)
+	return httpClient.Do(req)
+}
+
+// issuerOrMetadata returns issuer, or the metadata's issuer when issuer is empty. It
+// returns a ConfigurationError when both are empty, or when they differ by more than a
+// trailing slash.
+func issuerOrMetadata(issuer string, md *AuthorizationServerMetadata) (string, error) {
+	if md != nil {
+		if issuer == "" {
+			issuer = md.Issuer
+		} else if strings.TrimRight(issuer, "/") != strings.TrimRight(md.Issuer, "/") {
+			return "", &ConfigurationError{Message: fmt.Sprintf("issuer %q does not match the metadata issuer %q", issuer, md.Issuer)}
+		}
+	}
+	if issuer == "" {
+		return "", &ConfigurationError{Message: "an issuer or metadata is required"}
+	}
+	return issuer, nil
 }
 
 func isSuccess(status int) bool { return status >= 200 && status < 300 }

@@ -10,7 +10,8 @@
 //   - Optional: KEYCARD_SCOPES, space-separated (default "openid"). With openid, the
 //     zone adds its userinfo resource, so policy must allow it for this client.
 //   - Optional: KEYCARD_RESOURCES, space-separated resource URLs. Each must be a
-//     Resource in the zone, or the request fails with invalid_target.
+//     Resource in the zone, or the request fails with invalid_target. With more than
+//     one, the example refreshes the token for the first resource.
 //
 // Run:
 //
@@ -41,15 +42,19 @@ func main() {
 	}
 	resources := strings.Fields(os.Getenv("KEYCARD_RESOURCES"))
 
+	// The refresh authenticates the same way as the device authorization request.
 	var auth oauth.DeviceAuthorizationOption
+	refresh := oauth.RefreshAuthorizationRequest{}
 	if secret := os.Getenv("KEYCARD_CLIENT_SECRET"); secret != "" {
 		cred, err := oauth.NewClientSecret(clientID, secret)
 		if err != nil {
 			log.Fatalf("client secret credential: %v", err)
 		}
 		auth = oauth.WithDeviceCredential(cred)
+		refresh.Credential = cred
 	} else {
 		auth = oauth.WithDevicePublicClient(clientID)
+		refresh.ClientID = clientID
 	}
 
 	client, err := oauth.NewDeviceAuthorizationClient(zoneURL, auth)
@@ -93,4 +98,17 @@ func main() {
 	fmt.Printf("Approved. Token type %s, expires in %ds, scopes %v.\n", token.TokenType, token.ExpiresIn, token.Scope)
 	fmt.Printf("refresh_token returned: %t\n", token.RefreshToken != "")
 	fmt.Printf("id_token returned: %t\n", token.IDToken != "")
+
+	// With more than one resource, the token is not for any one of them. Refresh with
+	// one resource to get a token for it.
+	if len(resources) < 2 || token.RefreshToken == "" {
+		return
+	}
+	refresh.RefreshToken = token.RefreshToken
+	refresh.Resources = resources[:1]
+	narrowed, err := oauth.RefreshAuthorization(ctx, zoneURL, refresh)
+	if err != nil {
+		log.Fatalf("refresh for %s failed: %v", resources[0], err)
+	}
+	fmt.Printf("Token for %s: expires in %ds.\n", resources[0], narrowed.ExpiresIn)
 }

@@ -75,8 +75,14 @@ func (c *ClientSecretCredential) ClientAuthentication(_ context.Context, issuer,
 		return nil, &ClientSecretConfigurationError{Message: fmt.Sprintf("no client credentials configured for zone %q", issuer)}
 	}
 	h := http.Header{}
-	h.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(auth.ClientID+":"+auth.ClientSecret)))
+	h.Set("Authorization", "Basic "+basicCredentials(auth.ClientID, auth.ClientSecret))
 	return &ClientAuthentication{Header: h, Form: url.Values{}}, nil
+}
+
+// basicCredentials returns the base64 user-pass value of an HTTP Basic Authorization
+// header, as http.Request.SetBasicAuth builds it.
+func basicCredentials(clientID, clientSecret string) string {
+	return base64.StdEncoding.EncodeToString([]byte(clientID + ":" + clientSecret))
 }
 
 // ClientAuthentication returns a newly signed client_assertion and its
