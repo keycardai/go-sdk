@@ -66,18 +66,20 @@ type DeviceAuthorization struct {
 type DeviceAuthorizationOption func(*deviceAuthorizationConfig)
 
 type deviceAuthorizationConfig struct {
-	credential   ClientAuthenticator
-	clientID     string
-	metadata     *AuthorizationServerMetadata
-	httpClient   *http.Client
-	clock        Clock
-	discoveryTTL time.Duration
-	negativeTTL  time.Duration
+	credential     ApplicationCredential
+	clientID       string
+	metadata       *AuthorizationServerMetadata
+	httpClient     *http.Client
+	clock          Clock
+	discoveryTTL   time.Duration
+	negativeTTL    time.Duration
+	requestTimeout time.Duration
 }
 
 // WithDeviceCredential authenticates every request with the credential's client
-// authentication. Set exactly one of WithDeviceCredential and WithDevicePublicClient.
-func WithDeviceCredential(c ClientAuthenticator) DeviceAuthorizationOption {
+// authentication. The credential must implement [ClientAuthenticator]. Set exactly one
+// of WithDeviceCredential and WithDevicePublicClient.
+func WithDeviceCredential(c ApplicationCredential) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.credential = c }
 }
 
@@ -106,6 +108,14 @@ func WithDeviceClock(c Clock) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.clock = c }
 }
 
+// WithDeviceRequestTimeout bounds each request to the authorization server when the
+// caller's context has no deadline of its own: discovery, the device authorization
+// request, and each poll. It does not bound the wait between polls or the whole
+// WaitForToken loop. Default: 10 seconds.
+func WithDeviceRequestTimeout(d time.Duration) DeviceAuthorizationOption {
+	return func(cfg *deviceAuthorizationConfig) { cfg.requestTimeout = d }
+}
+
 // WithDeviceDiscoveryTTL sets how long discovered metadata is cached. Default: 1 hour.
 func WithDeviceDiscoveryTTL(d time.Duration) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.discoveryTTL = d }
@@ -124,22 +134,25 @@ func WithDeviceNegativeTTL(d time.Duration) DeviceAuthorizationOption {
 // from discovery, or from metadata set with WithDeviceMetadata. It does not keep
 // state between operations.
 type DeviceAuthorizationClient struct {
-	issuer   string
-	cfg      deviceAuthorizationConfig
-	metadata discoveryCache[*AuthorizationServerMetadata]
+	issuer        string
+	cfg           deviceAuthorizationConfig
+	authenticator ClientAuthenticator
+	metadata      discoveryCache[*AuthorizationServerMetadata]
 }
 
 // NewDeviceAuthorizationClient creates a DeviceAuthorizationClient for issuer. With
 // WithDeviceMetadata, issuer may be empty and defaults to the metadata's issuer. It
 // returns a ConfigurationError when the client authentication is not exactly one of
-// WithDeviceCredential and WithDevicePublicClient, when there is no issuer, or when
-// issuer and the metadata's issuer differ.
+// WithDeviceCredential and WithDevicePublicClient, when the credential does not
+// implement [ClientAuthenticator], when there is no issuer, or when issuer and the
+// metadata's issuer differ.
 func NewDeviceAuthorizationClient(issuer string, opts ...DeviceAuthorizationOption) (*DeviceAuthorizationClient, error) {
 	cfg := deviceAuthorizationConfig{
-		httpClient:   http.DefaultClient,
-		clock:        systemClock{},
-		discoveryTTL: defaultDiscoveryTTL,
-		negativeTTL:  defaultNegativeTTL,
+		httpClient:     http.DefaultClient,
+		clock:          systemClock{},
+		discoveryTTL:   defaultDiscoveryTTL,
+		negativeTTL:    defaultNegativeTTL,
+		requestTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -148,6 +161,13 @@ func NewDeviceAuthorizationClient(issuer string, opts ...DeviceAuthorizationOpti
 	hasCredential, hasClientID := cfg.credential != nil, cfg.clientID != ""
 	if hasCredential == hasClientID {
 		return nil, &ConfigurationError{Message: "device authorization requires exactly one of WithDeviceCredential and WithDevicePublicClient"}
+	}
+	var authenticator ClientAuthenticator
+	if hasCredential {
+		var err error
+		if authenticator, err = clientAuthenticator(cfg.credential); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.metadata != nil {
 		if issuer == "" {
@@ -161,9 +181,10 @@ func NewDeviceAuthorizationClient(issuer string, opts ...DeviceAuthorizationOpti
 	}
 
 	c := &DeviceAuthorizationClient{
-		issuer:   issuer,
-		cfg:      cfg,
-		metadata: newDiscoveryCache[*AuthorizationServerMetadata](cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
+		issuer:        issuer,
+		cfg:           cfg,
+		authenticator: authenticator,
+		metadata:      newDiscoveryCache[*AuthorizationServerMetadata](cfg.discoveryTTL, cfg.negativeTTL, cfg.requestTimeout),
 	}
 	c.metadata.now = cfg.clock.Now
 	return c, nil
@@ -194,6 +215,8 @@ func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Conte
 		form.Add("resource", r)
 	}
 
+	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	defer cancel()
 	resp, err := c.post(ctx, endpoint, form)
 	if err != nil {
 		return nil, fmt.Errorf("device authorization request failed: %w", err)
@@ -262,6 +285,8 @@ func (c *DeviceAuthorizationClient) PollToken(ctx context.Context, auth DeviceAu
 	form.Set("grant_type", deviceCodeGrantType)
 	form.Set("device_code", auth.DeviceCode)
 
+	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	defer cancel()
 	resp, err := c.post(ctx, md.TokenEndpoint, form)
 	if err != nil {
 		return nil, fmt.Errorf("device token request failed: %w", err)
@@ -317,6 +342,10 @@ func (e *DevicePollError) Unwrap() error { return e.Err }
 //   - If the next poll would start after ExpiresAt, it stops without waiting or
 //     sending it, and returns an *OAuthError with code expired_token.
 //
+// The request timeout set with WithDeviceRequestTimeout bounds each poll. It does not
+// bound the wait between polls or the whole loop. A poll that times out is a
+// *DevicePollError, and errors.Is(err, context.DeadlineExceeded) holds.
+//
 // Polling again on authorization_pending and slow_down is the grant itself, not a
 // retry.
 //
@@ -362,6 +391,9 @@ func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth Devic
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if c.cfg.clock.Now().After(auth.ExpiresAt) {
+			return nil, &OAuthError{ErrorCode: "expired_token", Message: "the device code expired before the request was approved"}
+		}
 
 		token, err := c.PollToken(ctx, auth)
 		if err == nil {
@@ -404,20 +436,9 @@ func (c *DeviceAuthorizationClient) resolveMetadata(ctx context.Context) (*Autho
 // post sends form to endpoint with the client authentication added.
 func (c *DeviceAuthorizationClient) post(ctx context.Context, endpoint string, form url.Values) (*http.Response, error) {
 	header := http.Header{}
-	if c.cfg.credential != nil {
-		auth, err := c.cfg.credential.ClientAuthentication(ctx, c.issuer, endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("client authentication: %w", err)
-		}
-		for k, vs := range auth.Form {
-			for _, v := range vs {
-				form.Add(k, v)
-			}
-		}
-		for k, vs := range auth.Header {
-			for _, v := range vs {
-				header.Add(k, v)
-			}
+	if c.authenticator != nil {
+		if err := addClientAuthentication(ctx, c.authenticator, c.issuer, endpoint, header, form); err != nil {
+			return nil, err
 		}
 	} else {
 		form.Set("client_id", c.cfg.clientID)

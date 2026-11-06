@@ -66,6 +66,9 @@ type deviceZone struct {
 	tokenSteps     []tokenStep
 	tokenRequests  []recordedRequest
 	onToken        func(r *http.Request)
+	// delay holds each device authorization and token response back this long, or
+	// until the client gives up on the request.
+	delay time.Duration
 }
 
 func newDeviceZone(t *testing.T) *deviceZone {
@@ -92,6 +95,9 @@ func newDeviceZone(t *testing.T) *deviceZone {
 		z.deviceRequests = append(z.deviceRequests, rec)
 		status, body := z.deviceStatus, z.deviceBody
 		z.mu.Unlock()
+		if !z.wait(r) {
+			return
+		}
 		writeJSON(w, status, body)
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +111,27 @@ func newDeviceZone(t *testing.T) *deviceZone {
 			onToken(r)
 			return
 		}
+		if !z.wait(r) {
+			return
+		}
 		writeJSON(w, step.status, step.body)
 	})
 	z.Server = httptest.NewServer(mux)
 	t.Cleanup(z.Close)
 	return z
+}
+
+// wait sleeps for z.delay. It returns false when the client gave up first.
+func (z *deviceZone) wait(r *http.Request) bool {
+	if z.delay == 0 {
+		return true
+	}
+	select {
+	case <-time.After(z.delay):
+		return true
+	case <-r.Context().Done():
+		return false
+	}
 }
 
 func (z *deviceZone) metadata() *AuthorizationServerMetadata {
@@ -230,10 +252,22 @@ func (c *fakeDeviceClock) recordedWaits() []time.Duration {
 	return append([]time.Duration(nil), c.waits...)
 }
 
-// fakeAuthenticator returns fixed client authentication and records each call.
+// fakeAuthenticator is an ApplicationCredential that returns fixed client
+// authentication and records each call.
 type fakeAuthenticator struct {
+	noClientAuthentication
 	mu    sync.Mutex
 	calls [][2]string // issuer, endpoint
+}
+
+// noClientAuthentication is an ApplicationCredential that does not implement
+// ClientAuthenticator.
+type noClientAuthentication struct{}
+
+func (noClientAuthentication) Auth(string) *ClientAuth { return nil }
+
+func (noClientAuthentication) PrepareTokenExchangeRequest(context.Context, string, string, *PrepareOptions) (*TokenExchangeRequest, error) {
+	return nil, errors.New("not used")
 }
 
 func (f *fakeAuthenticator) ClientAuthentication(_ context.Context, issuer, endpoint string) (*ClientAuthentication, error) {
@@ -309,6 +343,11 @@ func TestNewDeviceAuthorizationClient_Configuration(t *testing.T) {
 		},
 		"neither credential nor client id": {
 			issuer:  "https://zone.example.com",
+			wantErr: true,
+		},
+		"credential without client authentication": {
+			issuer:  "https://zone.example.com",
+			opts:    []DeviceAuthorizationOption{WithDeviceCredential(noClientAuthentication{})},
 			wantErr: true,
 		},
 		"no issuer and no metadata": {
@@ -1018,6 +1057,138 @@ func TestWaitForToken_IncompleteDeviceAuthorization(t *testing.T) {
 			}
 			if got := len(zone.tokenCalls()); got != 0 {
 				t.Errorf("polls: got %d, want 0", got)
+			}
+		})
+	}
+}
+
+// The clock can move further than the interval during a wait, as after a system
+// sleep. The loop then ends without sending the poll.
+func TestWaitForToken_ClockPassesExpiryDuringWait(t *testing.T) {
+	zone := newDeviceZone(t)
+	zone.script(stepOAuthError("authorization_pending"))
+	clock := newFakeDeviceClock()
+	auth := DeviceAuthorization{DeviceCode: "device-code-1", Interval: 5, ExpiresIn: 600, ExpiresAt: clock.Now().Add(600 * time.Second)}
+	clock.onAfter = func(time.Duration) <-chan time.Time {
+		clock.mu.Lock()
+		clock.now = auth.ExpiresAt.Add(time.Second)
+		clock.mu.Unlock()
+		ch := make(chan time.Time, 1)
+		ch <- clock.Now()
+		return ch
+	}
+	client := mustDeviceClient(t, zone.URL,
+		WithDeviceHTTPClient(zone.httpClient()),
+		WithDevicePublicClient("public-1"),
+		WithDeviceClock(clock))
+
+	_, err := client.WaitForToken(context.Background(), auth)
+	wantOAuthError(t, err, "expired_token")
+	if got := len(zone.tokenCalls()); got != 0 {
+		t.Errorf("polls: got %d, want 0", got)
+	}
+}
+
+// The request timeout bounds each request on its own. A caller deadline replaces it,
+// and the wait between polls does not count against it.
+func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
+	const timeout = 20 * time.Millisecond
+	cases := map[string]struct {
+		run func(ctx context.Context, client *DeviceAuthorizationClient, auth DeviceAuthorization) error
+		// zoneDelay holds each device authorization and token response back.
+		zoneDelay time.Duration
+		// realWait makes each wait between polls take this much real time.
+		realWait   time.Duration
+		ctxTimeout time.Duration
+		steps      []tokenStep
+		wantPolls  int
+		// wantTimeout is true when the call fails with context.DeadlineExceeded.
+		wantTimeout      bool
+		wantPollInterval time.Duration
+	}{
+		"device authorization request times out": {
+			run: func(ctx context.Context, c *DeviceAuthorizationClient, _ DeviceAuthorization) error {
+				_, err := c.RequestDeviceAuthorization(ctx, DeviceAuthorizationRequest{})
+				return err
+			},
+			zoneDelay:   time.Second,
+			wantTimeout: true,
+		},
+		"a poll that times out stops the loop with a DevicePollError": {
+			run: func(ctx context.Context, c *DeviceAuthorizationClient, auth DeviceAuthorization) error {
+				_, err := c.WaitForToken(ctx, auth)
+				return err
+			},
+			zoneDelay:        time.Second,
+			steps:            []tokenStep{stepToken},
+			wantPolls:        1,
+			wantTimeout:      true,
+			wantPollInterval: 5 * time.Second,
+		},
+		"a caller deadline replaces the request timeout": {
+			run: func(ctx context.Context, c *DeviceAuthorizationClient, auth DeviceAuthorization) error {
+				_, err := c.WaitForToken(ctx, auth)
+				return err
+			},
+			zoneDelay:  4 * timeout,
+			ctxTimeout: time.Minute,
+			steps:      []tokenStep{stepToken},
+			wantPolls:  1,
+		},
+		"the wait between polls is not bounded by the request timeout": {
+			run: func(ctx context.Context, c *DeviceAuthorizationClient, auth DeviceAuthorization) error {
+				_, err := c.WaitForToken(ctx, auth)
+				return err
+			},
+			realWait:  4 * timeout,
+			steps:     []tokenStep{stepOAuthError("authorization_pending"), stepToken},
+			wantPolls: 2,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			zone := newDeviceZone(t)
+			zone.delay = tc.zoneDelay
+			zone.script(tc.steps...)
+			clock := newFakeDeviceClock()
+			if tc.realWait != 0 {
+				clock.onAfter = func(time.Duration) <-chan time.Time { return time.After(tc.realWait) }
+			}
+			client := mustDeviceClient(t, zone.URL,
+				WithDeviceHTTPClient(zone.httpClient()),
+				WithDevicePublicClient("public-1"),
+				WithDeviceMetadata(zone.metadata()),
+				WithDeviceClock(clock),
+				WithDeviceRequestTimeout(timeout))
+			ctx := context.Background()
+			if tc.ctxTimeout != 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.ctxTimeout)
+				defer cancel()
+			}
+			auth := DeviceAuthorization{DeviceCode: "device-code-1", Interval: 5, ExpiresIn: 600, ExpiresAt: clock.Now().Add(600 * time.Second)}
+
+			err := tc.run(ctx, client, auth)
+
+			if tc.wantTimeout {
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("error: got %v, want context.DeadlineExceeded", err)
+				}
+			} else if err != nil {
+				t.Fatalf("got %v, want success", err)
+			}
+			var pollErr *DevicePollError
+			isPollErr := errors.As(err, &pollErr)
+			switch {
+			case tc.wantPollInterval != 0 && !isPollErr:
+				t.Errorf("error: got %v (%T), want *DevicePollError", err, err)
+			case tc.wantPollInterval != 0 && pollErr.Interval != tc.wantPollInterval:
+				t.Errorf("DevicePollError.Interval: got %v, want %v", pollErr.Interval, tc.wantPollInterval)
+			case tc.wantPollInterval == 0 && isPollErr:
+				t.Errorf("error: got *DevicePollError %v, want none", err)
+			}
+			if got := len(zone.tokenCalls()); got != tc.wantPolls {
+				t.Errorf("polls: got %d, want %d", got, tc.wantPolls)
 			}
 		})
 	}

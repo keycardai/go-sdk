@@ -20,12 +20,44 @@ type ClientAuthentication struct {
 
 // ClientAuthenticator is implemented by credentials that authenticate requests to the
 // authorization server other than token exchange, such as the device authorization
-// grant. [ClientSecretCredential], [WebIdentityCredential], and
+// grant. It is separate from [ApplicationCredential], so a credential implemented
+// outside this package does not have to provide it. Operations that need it check for
+// it with a type assertion. [ClientSecretCredential], [WebIdentityCredential], and
 // [WorkloadIdentityCredential] implement it.
 type ClientAuthenticator interface {
 	// ClientAuthentication returns the headers and form fields that authenticate the
 	// client to the zone identified by issuer, for a request sent to endpoint.
 	ClientAuthentication(ctx context.Context, issuer, endpoint string) (*ClientAuthentication, error)
+}
+
+// clientAuthenticator returns cred as a ClientAuthenticator, or a ConfigurationError
+// when cred does not implement it.
+func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error) {
+	ca, ok := cred.(ClientAuthenticator)
+	if !ok {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
+	}
+	return ca, nil
+}
+
+// addClientAuthentication adds the headers and form fields from ca for a request to
+// endpoint.
+func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer, endpoint string, header http.Header, form url.Values) error {
+	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
+	if err != nil {
+		return fmt.Errorf("client authentication: %w", err)
+	}
+	for k, vs := range auth.Form {
+		for _, v := range vs {
+			form.Add(k, v)
+		}
+	}
+	for k, vs := range auth.Header {
+		for _, v := range vs {
+			header.Add(k, v)
+		}
+	}
+	return nil
 }
 
 var (
