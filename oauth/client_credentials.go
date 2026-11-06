@@ -21,11 +21,12 @@ type ClientCredentialsRequest struct {
 type ClientCredentialsClientOption func(*clientCredentialsConfig)
 
 type clientCredentialsConfig struct {
-	clientID     string
-	clientSecret string
-	httpClient   *http.Client
-	discoveryTTL time.Duration
-	negativeTTL  time.Duration
+	clientID       string
+	clientSecret   string
+	httpClient     *http.Client
+	discoveryTTL   time.Duration
+	negativeTTL    time.Duration
+	requestTimeout time.Duration
 }
 
 // WithCCBasicAuth sets the client ID and secret for HTTP basic auth.
@@ -41,6 +42,12 @@ func WithCCHTTPClient(c *http.Client) ClientCredentialsClientOption {
 	return func(cfg *clientCredentialsConfig) {
 		cfg.httpClient = c
 	}
+}
+
+// WithCCRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithCCRequestTimeout(d time.Duration) ClientCredentialsClientOption {
+	return func(cfg *clientCredentialsConfig) { cfg.requestTimeout = d }
 }
 
 // WithCCDiscoveryTTL sets how long a discovered token endpoint is cached. Default: 1 hour.
@@ -69,9 +76,10 @@ type ClientCredentialsClient struct {
 // NewClientCredentialsClient creates a new ClientCredentialsClient for the given issuer.
 func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClientOption) *ClientCredentialsClient {
 	cfg := clientCredentialsConfig{
-		httpClient:   http.DefaultClient,
-		discoveryTTL: defaultDiscoveryTTL,
-		negativeTTL:  defaultNegativeTTL,
+		httpClient:     http.DefaultClient,
+		discoveryTTL:   defaultDiscoveryTTL,
+		negativeTTL:    defaultNegativeTTL,
+		requestTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -80,7 +88,7 @@ func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClien
 	return &ClientCredentialsClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
-		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
+		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, cfg.requestTimeout),
 	}
 }
 
@@ -98,6 +106,9 @@ func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCr
 	}
 
 	body := serializeClientCredentialsRequest(req)
+
+	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(body.Encode()))
 	if err != nil {

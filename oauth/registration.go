@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // RegistrationRequest is RFC 7591 §2 client metadata. Every field is optional; only the
@@ -48,11 +49,18 @@ type RegisterOption func(*registrationConfig)
 type registrationConfig struct {
 	httpClient         *http.Client
 	initialAccessToken string
+	requestTimeout     time.Duration
 }
 
 // WithRegistrationHTTPClient sets the HTTP client used for discovery and registration.
 func WithRegistrationHTTPClient(c *http.Client) RegisterOption {
 	return func(cfg *registrationConfig) { cfg.httpClient = c }
+}
+
+// WithRegistrationRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithRegistrationRequestTimeout(d time.Duration) RegisterOption {
+	return func(cfg *registrationConfig) { cfg.requestTimeout = d }
 }
 
 // WithInitialAccessToken authenticates the registration request with a Bearer initial
@@ -64,7 +72,7 @@ func WithInitialAccessToken(token string) RegisterOption {
 // RegisterClient registers a new OAuth client at the issuer's registration endpoint
 // (resolved by discovery) and returns the issued credentials (RFC 7591).
 func RegisterClient(ctx context.Context, issuer string, req RegistrationRequest, opts ...RegisterOption) (*RegistrationResponse, error) {
-	cfg := registrationConfig{httpClient: http.DefaultClient}
+	cfg := registrationConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -81,6 +89,9 @@ func RegisterClient(ctx context.Context, issuer string, req RegistrationRequest,
 	if err != nil {
 		return nil, fmt.Errorf("encoding registration request: %w", err)
 	}
+
+	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
+	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, metadata.RegistrationEndpoint, bytes.NewReader(payload))
 	if err != nil {

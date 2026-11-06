@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // UserInfoResponse holds the signed-in user's identity claims as returned by the
@@ -23,13 +24,20 @@ type UserInfoResponse struct {
 type UserInfoOption func(*userInfoConfig)
 
 type userInfoConfig struct {
-	httpClient *http.Client
-	metadata   *AuthorizationServerMetadata
+	httpClient     *http.Client
+	metadata       *AuthorizationServerMetadata
+	requestTimeout time.Duration
 }
 
 // WithUserInfoHTTPClient sets the HTTP client used for discovery and the UserInfo request.
 func WithUserInfoHTTPClient(c *http.Client) UserInfoOption {
 	return func(cfg *userInfoConfig) { cfg.httpClient = c }
+}
+
+// WithUserInfoRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithUserInfoRequestTimeout(d time.Duration) UserInfoOption {
+	return func(cfg *userInfoConfig) { cfg.requestTimeout = d }
 }
 
 // WithUserInfoMetadata supplies pre-discovered authorization server metadata, so no
@@ -82,7 +90,7 @@ func ResolveUserInfoEndpoint(metadata *AuthorizationServerMetadata) (string, err
 // token is the caller's concern, since claims such as group membership change
 // server-side.
 func FetchUserInfo(ctx context.Context, issuer, accessToken string, opts ...UserInfoOption) (*UserInfoResponse, error) {
-	cfg := userInfoConfig{httpClient: http.DefaultClient}
+	cfg := userInfoConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -107,6 +115,9 @@ func FetchUserInfo(ctx context.Context, issuer, accessToken string, opts ...User
 	if err != nil {
 		return nil, err
 	}
+
+	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // AuthorizationServerMetadata represents OAuth 2.0 Authorization Server Metadata (RFC 8414).
@@ -53,7 +54,8 @@ var knownASMetadataFields = []string{
 type DiscoveryOption func(*discoveryConfig)
 
 type discoveryConfig struct {
-	httpClient *http.Client
+	httpClient     *http.Client
+	requestTimeout time.Duration
 }
 
 // WithDiscoveryHTTPClient sets the HTTP client used for discovery requests.
@@ -63,11 +65,18 @@ func WithDiscoveryHTTPClient(c *http.Client) DiscoveryOption {
 	}
 }
 
+// WithDiscoveryRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithDiscoveryRequestTimeout(d time.Duration) DiscoveryOption {
+	return func(cfg *discoveryConfig) { cfg.requestTimeout = d }
+}
+
 // FetchAuthorizationServerMetadata fetches OAuth authorization server metadata
 // from the well-known endpoint for the given issuer (RFC 8414).
 func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts ...DiscoveryOption) (*AuthorizationServerMetadata, error) {
 	cfg := &discoveryConfig{
-		httpClient: http.DefaultClient,
+		httpClient:     http.DefaultClient,
+		requestTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -75,6 +84,9 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 
 	issuer = strings.TrimRight(issuer, "/")
 	url := issuer + "/.well-known/oauth-authorization-server"
+
+	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
