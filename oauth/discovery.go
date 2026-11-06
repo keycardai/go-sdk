@@ -31,6 +31,9 @@ type AuthorizationServerMetadata struct {
 	// (OpenID Connect RP-Initiated Logout 1.0 section 2.1). Empty when the server does
 	// not advertise it.
 	EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
+	// DeviceAuthorizationEndpoint is where device authorization requests are sent
+	// (RFC 8628 section 4). Empty when the server does not advertise it.
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
 
 	SubjectTypesSupported            []string `json:"subject_types_supported,omitempty"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported,omitempty"`
@@ -47,6 +50,7 @@ var knownASMetadataFields = []string{
 	"registration_endpoint", "scopes_supported", "response_types_supported",
 	"grant_types_supported", "token_endpoint_auth_methods_supported",
 	"code_challenge_methods_supported", "userinfo_endpoint", "end_session_endpoint",
+	"device_authorization_endpoint",
 	"subject_types_supported", "id_token_signing_alg_values_supported", "claims_supported",
 }
 
