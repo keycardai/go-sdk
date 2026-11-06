@@ -73,12 +73,17 @@ func (r *PEMPrivateKeyring) Key(_ context.Context, _ string) (IdentifiableKey, e
 type JWKSOAuthKeyringOption func(*jwksKeyringConfig)
 
 type jwksKeyringConfig struct {
-	keyTTL       time.Duration
-	discoveryTTL time.Duration
-	fetchTimeout time.Duration
-	maxKeyCache  int
-	httpClient   *http.Client
+	keyTTL          time.Duration
+	discoveryTTL    time.Duration
+	fetchTimeout    time.Duration
+	refetchCooldown time.Duration
+	maxKeyCache     int
+	httpClient      *http.Client
 }
+
+// DefaultJWKSRefetchCooldown is the shortest interval between two JWKS fetches for
+// one jwks_uri caused by a kid the cached key set does not hold.
+const DefaultJWKSRefetchCooldown = 30 * time.Second
 
 // WithKeyTTL sets the TTL for cached public keys. Default: 5 minutes.
 func WithKeyTTL(d time.Duration) JWKSOAuthKeyringOption {
@@ -93,6 +98,15 @@ func WithDiscoveryTTL(d time.Duration) JWKSOAuthKeyringOption {
 // WithFetchTimeout sets the timeout for both discovery and JWKS fetch requests. Default: 10 seconds.
 func WithFetchTimeout(d time.Duration) JWKSOAuthKeyringOption {
 	return func(cfg *jwksKeyringConfig) { cfg.fetchTimeout = d }
+}
+
+// WithJWKSRefetchCooldown sets how long the keyring waits before fetching the JWKS
+// again for a kid its cached key set does not hold. The checks before the key lookup
+// read the unsigned token, so a forged token can name any kid; without a cooldown
+// each one costs a fetch from the zone. A key that rotated in is found once the
+// cooldown has passed. Zero fetches on every miss. Default: 30 seconds.
+func WithJWKSRefetchCooldown(d time.Duration) JWKSOAuthKeyringOption {
+	return func(cfg *jwksKeyringConfig) { cfg.refetchCooldown = d }
 }
 
 // WithKeyringHTTPClient sets the HTTP client used for JWKS fetches.
@@ -112,6 +126,13 @@ type cacheEntry[T any] struct {
 	expiresAt time.Time
 }
 
+// jwksSetEntry is the last key set fetched from one jwks_uri.
+type jwksSetEntry struct {
+	keys      []jwkJSON
+	fetchedAt time.Time
+	expiresAt time.Time
+}
+
 // JWKSOAuthKeyring implements OAuthKeyring with two-level caching:
 //  1. Discovery cache: issuer → jwks_uri (default TTL: 1 hour)
 //  2. Key cache: issuer::kid → public key (default TTL: 5 minutes)
@@ -124,19 +145,21 @@ type JWKSOAuthKeyring struct {
 	mu             sync.Mutex
 	discoveryCache map[string]cacheEntry[string]
 	keyCache       map[string]cacheEntry[crypto.PublicKey]
+	jwksCache      map[string]jwksSetEntry // jwks_uri -> last fetched key set
 
 	discoveryGroup singleflight.Group
-	keyGroup       singleflight.Group
+	jwksGroup      singleflight.Group // keyed by jwks_uri, whatever kid each caller wants
 }
 
 // NewJWKSOAuthKeyring creates a new JWKSOAuthKeyring with optional configuration.
 func NewJWKSOAuthKeyring(opts ...JWKSOAuthKeyringOption) *JWKSOAuthKeyring {
 	cfg := jwksKeyringConfig{
-		keyTTL:       5 * time.Minute,
-		discoveryTTL: 1 * time.Hour,
-		fetchTimeout: 10 * time.Second,
-		maxKeyCache:  256,
-		httpClient:   http.DefaultClient,
+		keyTTL:          5 * time.Minute,
+		discoveryTTL:    1 * time.Hour,
+		fetchTimeout:    10 * time.Second,
+		refetchCooldown: DefaultJWKSRefetchCooldown,
+		maxKeyCache:     256,
+		httpClient:      http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -146,6 +169,7 @@ func NewJWKSOAuthKeyring(opts ...JWKSOAuthKeyringOption) *JWKSOAuthKeyring {
 		cfg:            cfg,
 		discoveryCache: make(map[string]cacheEntry[string]),
 		keyCache:       make(map[string]cacheEntry[crypto.PublicKey]),
+		jwksCache:      make(map[string]jwksSetEntry),
 	}
 }
 
@@ -174,6 +198,9 @@ func (k *JWKSOAuthKeyring) Invalidate(issuer, kid string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	delete(k.keyCache, cacheKey)
+	if uri, ok := k.discoveryCache[issuer]; ok {
+		delete(k.jwksCache, uri.value)
+	}
 	delete(k.discoveryCache, issuer)
 }
 
@@ -218,7 +245,25 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 }
 
 func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI, cacheKey string) (crypto.PublicKey, error) {
-	result, err := sharedFetch(ctx, &k.keyGroup, cacheKey, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+	// The cached key set first: a kid it holds imports with no fetch, and a kid it
+	// lacks refetches at most once per cooldown.
+	k.mu.Lock()
+	set, ok := k.jwksCache[jwksURI]
+	if ok && time.Now().After(set.expiresAt) {
+		delete(k.jwksCache, jwksURI)
+		ok = false
+	}
+	k.mu.Unlock()
+	if ok {
+		if jwk, err := findKey(set.keys, kid); err == nil {
+			return k.importAndCache(jwk, kid, cacheKey)
+		}
+		if time.Since(set.fetchedAt) < k.cfg.refetchCooldown {
+			return nil, &JWKSKeyNotFoundError{Message: fmt.Sprintf("key %q not found for issuer %q", kid, issuer)}
+		}
+	}
+
+	result, err := sharedFetch(ctx, &k.jwksGroup, jwksURI, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
 		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, jwksURI, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating JWKS request: %w", err)
@@ -239,39 +284,11 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 			return nil, &JWKSFetchError{Message: fmt.Sprintf("decoding JWKS from %q", jwksURI), Err: err}
 		}
 
-		jwk, err := findKey(jwkSet.Keys, kid)
-		if err != nil {
-			return nil, &JWKSKeyNotFoundError{Message: fmt.Sprintf("key %q not found for issuer %q", kid, issuer)}
-		}
-
-		pubKey, err := importJWK(jwk)
-		if err != nil {
-			return nil, fmt.Errorf("importing JWK %q: %w", kid, err)
-		}
-
+		now := time.Now()
 		k.mu.Lock()
-		k.keyCache[cacheKey] = cacheEntry[crypto.PublicKey]{
-			value:     pubKey,
-			expiresAt: time.Now().Add(k.cfg.keyTTL),
-		}
-		// Bound the key cache: once over the configured size, evict entries other than
-		// the one just inserted. Eviction order is unspecified (the spec permits this).
-		for k.cfg.maxKeyCache > 0 && len(k.keyCache) > k.cfg.maxKeyCache {
-			evicted := false
-			for old := range k.keyCache {
-				if old != cacheKey {
-					delete(k.keyCache, old)
-					evicted = true
-					break
-				}
-			}
-			if !evicted {
-				break
-			}
-		}
+		k.jwksCache[jwksURI] = jwksSetEntry{keys: jwkSet.Keys, fetchedAt: now, expiresAt: now.Add(k.cfg.keyTTL)}
 		k.mu.Unlock()
-
-		return pubKey, nil
+		return jwkSet.Keys, nil
 	})
 	if err != nil {
 		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
@@ -280,7 +297,41 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 		return nil, err
 	}
 
-	return result.(crypto.PublicKey), nil
+	jwk, err := findKey(result.([]jwkJSON), kid)
+	if err != nil {
+		return nil, &JWKSKeyNotFoundError{Message: fmt.Sprintf("key %q not found for issuer %q", kid, issuer)}
+	}
+	return k.importAndCache(jwk, kid, cacheKey)
+}
+
+func (k *JWKSOAuthKeyring) importAndCache(jwk *jwkJSON, kid, cacheKey string) (crypto.PublicKey, error) {
+	pubKey, err := importJWK(jwk)
+	if err != nil {
+		return nil, fmt.Errorf("importing JWK %q: %w", kid, err)
+	}
+
+	k.mu.Lock()
+	k.keyCache[cacheKey] = cacheEntry[crypto.PublicKey]{
+		value:     pubKey,
+		expiresAt: time.Now().Add(k.cfg.keyTTL),
+	}
+	// Bound the key cache: once over the configured size, evict entries other than
+	// the one just inserted. Eviction order is unspecified (the spec permits this).
+	for k.cfg.maxKeyCache > 0 && len(k.keyCache) > k.cfg.maxKeyCache {
+		evicted := false
+		for old := range k.keyCache {
+			if old != cacheKey {
+				delete(k.keyCache, old)
+				evicted = true
+				break
+			}
+		}
+		if !evicted {
+			break
+		}
+	}
+	k.mu.Unlock()
+	return pubKey, nil
 }
 
 // getCached looks up a value in the appropriate cache. isKey=true for key cache, false for discovery.

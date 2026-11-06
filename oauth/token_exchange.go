@@ -46,11 +46,12 @@ type TokenResponse struct {
 type TokenExchangeClientOption func(*tokenExchangeConfig)
 
 type tokenExchangeConfig struct {
-	clientID     string
-	clientSecret string
-	httpClient   *http.Client
-	discoveryTTL time.Duration
-	negativeTTL  time.Duration
+	clientID       string
+	clientSecret   string
+	httpClient     *http.Client
+	discoveryTTL   time.Duration
+	negativeTTL    time.Duration
+	requestTimeout time.Duration
 }
 
 // WithClientCredentials sets the client ID and secret for HTTP basic auth.
@@ -66,6 +67,12 @@ func WithTokenExchangeHTTPClient(c *http.Client) TokenExchangeClientOption {
 	return func(cfg *tokenExchangeConfig) {
 		cfg.httpClient = c
 	}
+}
+
+// WithTokenExchangeRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithTokenExchangeRequestTimeout(d time.Duration) TokenExchangeClientOption {
+	return func(cfg *tokenExchangeConfig) { cfg.requestTimeout = d }
 }
 
 // WithTokenExchangeDiscoveryTTL sets how long a discovered token endpoint is cached. Default: 1 hour.
@@ -93,9 +100,10 @@ type TokenExchangeClient struct {
 // NewTokenExchangeClient creates a new TokenExchangeClient for the given issuer.
 func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption) *TokenExchangeClient {
 	cfg := tokenExchangeConfig{
-		httpClient:   http.DefaultClient,
-		discoveryTTL: defaultDiscoveryTTL,
-		negativeTTL:  defaultNegativeTTL,
+		httpClient:     http.DefaultClient,
+		discoveryTTL:   defaultDiscoveryTTL,
+		negativeTTL:    defaultNegativeTTL,
+		requestTimeout: defaultFetchTimeout,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -104,7 +112,7 @@ func NewTokenExchangeClient(issuerURL string, opts ...TokenExchangeClientOption)
 	return &TokenExchangeClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
-		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, defaultFetchTimeout),
+		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, cfg.requestTimeout),
 	}
 }
 
@@ -122,6 +130,9 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	}
 
 	body := serializeTokenExchangeRequest(req)
+
+	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(body.Encode()))
 	if err != nil {

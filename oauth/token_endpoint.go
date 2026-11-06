@@ -18,6 +18,15 @@ const (
 )
 
 // Detached from the caller's cancellation so one caller cannot poison the shared fetch.
+// withDefaultTimeout bounds ctx by d when the caller set no deadline of its own, so a
+// request to the zone cannot wait forever while a caller's longer deadline still wins.
+func withDefaultTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok || d <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
 func sharedFetch(ctx context.Context, g *singleflight.Group, key string, timeout time.Duration, fn func(context.Context) (any, error)) (any, error) {
 	ch := g.DoChan(key, func() (any, error) {
 		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)

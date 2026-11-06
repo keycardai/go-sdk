@@ -81,7 +81,8 @@ type AuthorizationCodeExchangeRequest struct {
 type AuthCodeExchangeOption func(*authCodeExchangeConfig)
 
 type authCodeExchangeConfig struct {
-	httpClient *http.Client
+	httpClient     *http.Client
+	requestTimeout time.Duration
 }
 
 // WithAuthCodeHTTPClient sets the HTTP client used for discovery and code exchange.
@@ -89,14 +90,23 @@ func WithAuthCodeHTTPClient(c *http.Client) AuthCodeExchangeOption {
 	return func(cfg *authCodeExchangeConfig) { cfg.httpClient = c }
 }
 
+// WithAuthCodeRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithAuthCodeRequestTimeout(d time.Duration) AuthCodeExchangeOption {
+	return func(cfg *authCodeExchangeConfig) { cfg.requestTimeout = d }
+}
+
 // ExchangeAuthorizationCode exchanges an authorization code at the issuer's token
 // endpoint (resolved by discovery) for a token. The response has the same shape as
 // Token Exchange.
 func ExchangeAuthorizationCode(ctx context.Context, issuer string, req AuthorizationCodeExchangeRequest, opts ...AuthCodeExchangeOption) (*TokenResponse, error) {
-	cfg := authCodeExchangeConfig{httpClient: http.DefaultClient}
+	cfg := authCodeExchangeConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+
+	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
+	defer cancel()
 
 	tokenEndpoint, err := resolveTokenEndpoint(ctx, issuer, cfg.httpClient)
 	if err != nil {
@@ -172,13 +182,20 @@ type AuthenticateRequest struct {
 type AuthenticateOption func(*authenticateConfig)
 
 type authenticateConfig struct {
-	httpClient  *http.Client
-	openBrowser func(rawURL string) error
+	httpClient     *http.Client
+	openBrowser    func(rawURL string) error
+	requestTimeout time.Duration
 }
 
 // WithAuthenticateHTTPClient sets the HTTP client used for discovery and code exchange.
 func WithAuthenticateHTTPClient(c *http.Client) AuthenticateOption {
 	return func(cfg *authenticateConfig) { cfg.httpClient = c }
+}
+
+// WithAuthenticateRequestTimeout bounds each request this call makes to the authorization server when the
+// caller's context has no deadline of its own. Default: 10 seconds.
+func WithAuthenticateRequestTimeout(d time.Duration) AuthenticateOption {
+	return func(cfg *authenticateConfig) { cfg.requestTimeout = d }
 }
 
 // WithBrowserOpener overrides how the authorize URL is opened. The default launches
@@ -192,7 +209,7 @@ func WithBrowserOpener(open func(rawURL string) error) AuthenticateOption {
 // to receive the redirect, validates the returned state, and exchanges the code for a
 // token. The issuer's endpoints are resolved by discovery.
 func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, opts ...AuthenticateOption) (*TokenResponse, error) {
-	cfg := authenticateConfig{httpClient: http.DefaultClient, openBrowser: openBrowser}
+	cfg := authenticateConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout, openBrowser: openBrowser}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -285,10 +302,13 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 // AuthenticateFromChallenge resolves the issuer from an RFC 9728 WWW-Authenticate
 // challenge, then runs Authenticate against it.
 func AuthenticateFromChallenge(ctx context.Context, wwwAuthenticateHeader string, req AuthenticateRequest, opts ...AuthenticateOption) (*TokenResponse, error) {
-	cfg := authenticateConfig{httpClient: http.DefaultClient}
+	cfg := authenticateConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
+	defer cancel()
+
 	issuer, err := ResolveIssuerFromChallenge(ctx, wwwAuthenticateHeader, cfg.httpClient)
 	if err != nil {
 		return nil, err
