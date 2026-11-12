@@ -21,10 +21,12 @@ const (
 	// defaultDevicePollInterval is the poll interval, in seconds, when the device
 	// authorization response omits interval (RFC 8628 section 3.2).
 	defaultDevicePollInterval = 5
+	deviceSlowDownIncrement   = 5 * time.Second
 )
 
 // DeviceClock supplies the current time and timers to a DeviceAuthorizationClient.
-// Inject a fake in tests so that expiry does not depend on real time.
+// Inject a fake in tests so that expiry and the waits between polls do not depend on
+// real time.
 type DeviceClock interface {
 	Now() time.Time
 	// After returns a channel that receives the time after d, as time.After.
@@ -120,8 +122,8 @@ func WithDeviceHTTPClient(c *http.Client) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.httpClient = c }
 }
 
-// WithDeviceClock sets the clock used for ExpiresAt and the discovery cache. Default:
-// the system clock.
+// WithDeviceClock sets the clock used for ExpiresAt, the waits between polls, and the
+// discovery cache. Default: the system clock.
 func WithDeviceClock(c DeviceClock) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.clock = c }
 }
@@ -320,10 +322,25 @@ func (c *DeviceAuthorizationClient) PollToken(ctx context.Context, auth DeviceAu
 	if err != nil {
 		return nil, err
 	}
-	return c.poll(ctx, md, auth)
+	token, _, err := c.poll(ctx, md, auth)
+	return token, err
 }
 
-func (c *DeviceAuthorizationClient) poll(ctx context.Context, md *AuthorizationServerMetadata, auth DeviceAuthorization) (*TokenResponse, error) {
+// pollFailure is the kind of failure a poll ended with. WaitForToken stops with a
+// *DevicePollError for pollNetwork and pollServer.
+type pollFailure int
+
+const (
+	// pollOther is every other outcome, including success and an OAuth error on a
+	// 4xx.
+	pollOther pollFailure = iota
+	// pollNetwork is a transport failure, including a request timeout.
+	pollNetwork
+	// pollServer is a 5xx or 429 response, with or without an OAuth error body.
+	pollServer
+)
+
+func (c *DeviceAuthorizationClient) poll(ctx context.Context, md *AuthorizationServerMetadata, auth DeviceAuthorization) (*TokenResponse, pollFailure, error) {
 	form := url.Values{}
 	form.Set("grant_type", deviceCodeGrantType)
 	form.Set("device_code", auth.DeviceCode)
@@ -332,21 +349,177 @@ func (c *DeviceAuthorizationClient) poll(ctx context.Context, md *AuthorizationS
 	defer cancel()
 	header := http.Header{}
 	if err := c.authenticate(ctx, md.TokenEndpoint, header, form); err != nil {
-		return nil, err
+		return nil, pollOther, err
 	}
-	resp, _, err := c.postForm(ctx, md.TokenEndpoint, header, form)
+	resp, network, err := c.postForm(ctx, md.TokenEndpoint, header, form)
 	if err != nil {
-		return nil, fmt.Errorf("device token request failed: %w", err)
+		failure := pollOther
+		if network {
+			failure = pollNetwork
+		}
+		return nil, failure, fmt.Errorf("device token request failed: %w", err)
 	}
 
 	if !isSuccess(resp.StatusCode) {
-		return nil, errorFromResponse(resp, "token endpoint")
+		failure := pollOther
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			failure = pollServer
+		}
+		return nil, failure, errorFromResponse(resp, "token endpoint")
 	}
 	token, err := deserializeTokenResponse(resp)
 	if err != nil {
-		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "invalid token response", Err: err}
+		return nil, pollOther, &OAuthError{ErrorCode: "invalid_response", Message: "invalid token response", Err: err}
 	}
-	return token, nil
+	return token, pollOther, nil
+}
+
+// WaitForTokenOption configures one WaitForToken call.
+type WaitForTokenOption func(*waitForTokenConfig)
+
+type waitForTokenConfig struct {
+	startInterval time.Duration
+}
+
+// WithStartInterval sets the wait before the first poll and the starting interval.
+// Use it to resume with the Interval of a [DevicePollError]. It must not be shorter
+// than the DeviceAuthorization's Interval. 0 means unset.
+func WithStartInterval(d time.Duration) WaitForTokenOption {
+	return func(cfg *waitForTokenConfig) { cfg.startInterval = d }
+}
+
+// DevicePollError is the error WaitForToken returns when a poll fails with a network
+// error, including a request timeout, or with a 5xx or 429 response. Err is the
+// original failure: the transport error, an *HTTPError, or the *OAuthError from a 5xx
+// or 429 with an OAuth error body.
+//
+// Interval is the wait the loop would have used before its next poll, including every
+// slow_down increase. WaitForToken doubles it after a network error or a request
+// timeout (RFC 8628 section 3.5). To
+// resume, call WaitForToken with the same DeviceAuthorization and
+// WithStartInterval(Interval), any time before ExpiresAt.
+type DevicePollError struct {
+	Interval time.Duration
+	Err      error
+}
+
+func (e *DevicePollError) Error() string {
+	return fmt.Sprintf("device token poll failed (next interval %s): %v", e.Interval, e.Err)
+}
+
+func (e *DevicePollError) Unwrap() error { return e.Err }
+func (*DevicePollError) keycardError()   {}
+
+// WaitForToken polls until the person approves or denies the request, following
+// RFC 8628 section 3.5:
+//
+//   - It waits the interval before each poll, including the first. The interval
+//     starts at auth.Interval, or at WithStartInterval when set.
+//   - On authorization_pending it polls again.
+//   - On slow_down it adds 5 seconds to the interval for this and every later poll.
+//   - On a network error, a 5xx, or a 429, it stops and returns a *DevicePollError,
+//     also when the response has an OAuth error body. It does not poll again.
+//   - On any other *OAuthError it stops and returns it.
+//   - On any other failure, such as a client authentication error from the
+//     credential or a 4xx without an OAuth error body, it stops and returns the
+//     error as is.
+//   - If the next poll would start after ExpiresAt, it stops without waiting or
+//     sending it, and returns an *OAuthError with code expired_token.
+//
+// It resolves the metadata once, before the first wait. It returns the same discovery
+// and configuration errors as RequestDeviceAuthorization, before the first wait.
+//
+// A poll that times out is a *DevicePollError, and
+// errors.Is(err, context.DeadlineExceeded) holds. Cancelling ctx stops the wait or the
+// request in progress and returns ctx.Err().
+//
+// It returns a ConfigurationError, without sending a request, when auth has no
+// DeviceCode or ExpiresAt, when auth.Interval is negative, or when the start interval
+// is shorter than auth.Interval. An auth.Interval of 0 means 5 seconds.
+//
+// When the device authorization request named more than one resource, the token is
+// not for any one of them. NEVER store it as the token for one resource. To get a
+// token for one resource, call [RefreshAuthorization] with that resource.
+func (c *DeviceAuthorizationClient) WaitForToken(ctx context.Context, auth DeviceAuthorization, opts ...WaitForTokenOption) (*TokenResponse, error) {
+	if auth.DeviceCode == "" {
+		return nil, &ConfigurationError{Message: "device authorization has no device_code"}
+	}
+	if auth.ExpiresAt.IsZero() {
+		return nil, &ConfigurationError{Message: "device authorization has no expires_at"}
+	}
+	if auth.Interval < 0 {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("device authorization has interval %d, want a positive integer", auth.Interval)}
+	}
+	var cfg waitForTokenConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	interval := secondsToDuration(defaultDevicePollInterval)
+	if auth.Interval > 0 {
+		interval = secondsToDuration(auth.Interval)
+	}
+	if cfg.startInterval != 0 {
+		if cfg.startInterval < interval {
+			return nil, &ConfigurationError{Message: fmt.Sprintf("start interval %s is shorter than the device authorization interval %s", cfg.startInterval, interval)}
+		}
+		interval = cfg.startInterval
+	}
+
+	md, err := c.resolveMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if interval > auth.ExpiresAt.Sub(c.cfg.clock.Now()) {
+			return nil, &OAuthError{ErrorCode: "expired_token", Message: "the device code expired before the request was approved"}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.cfg.clock.After(interval):
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if c.cfg.clock.Now().After(auth.ExpiresAt) {
+			return nil, &OAuthError{ErrorCode: "expired_token", Message: "the device code expired before the request was approved"}
+		}
+
+		token, failure, err := c.poll(ctx, md, auth)
+		if err == nil {
+			return token, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		switch failure {
+		case pollNetwork:
+			return nil, &DevicePollError{Interval: saturatingAdd(interval, interval), Err: err}
+		case pollServer:
+			return nil, &DevicePollError{Interval: interval, Err: err}
+		}
+		var oauthErr *OAuthError
+		if !errors.As(err, &oauthErr) {
+			return nil, err
+		}
+		switch oauthErr.ErrorCode {
+		case "authorization_pending":
+		case "slow_down":
+			interval = saturatingAdd(interval, deviceSlowDownIncrement)
+		default:
+			return nil, err
+		}
+	}
+}
+
+// saturatingAdd returns a + b for non-negative durations, or the largest Duration when
+// the sum overflows.
+func saturatingAdd(a, b time.Duration) time.Duration {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 // resolveMetadata returns the metadata set with WithDeviceMetadata, or the discovered
