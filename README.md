@@ -1,5 +1,7 @@
 # Keycard Go SDK
 
+[![GoDoc](https://pkg.go.dev/badge/github.com/keycardai/go-sdk.svg)](https://pkg.go.dev/github.com/keycardai/go-sdk)
+
 Go SDK for [Keycard](https://keycard.cloud): OAuth 2.0 and MCP authentication.
 
 ## Installation
