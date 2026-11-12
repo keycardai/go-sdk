@@ -60,6 +60,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		want bool
 	}{
 		{"ConfigurationError", &ConfigurationError{Message: "bad config"}, true},
+		{"DeviceAuthorizationDiscoveryError", &DeviceAuthorizationDiscoveryError{Message: "discovery", Err: errors.New("reset")}, true},
 		{"HTTPError", &HTTPError{Message: "not found", Status: 404}, true},
 		{"OAuthError", &OAuthError{ErrorCode: "invalid_grant", Message: "expired"}, true},
 		{"InvalidTokenError", &InvalidTokenError{Message: "bad signature"}, true},
