@@ -92,3 +92,34 @@ func (w *WorkloadIdentityCredential) ClientAuthentication(ctx context.Context, _
 	}
 	return &ClientAuthentication{Header: http.Header{}, Form: form}, nil
 }
+
+// clientAuthenticator returns cred as a ClientAuthenticator, or a ConfigurationError
+// when cred does not implement it.
+func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error) {
+	ca, ok := cred.(ClientAuthenticator)
+	if !ok {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
+	}
+	return ca, nil
+}
+
+// addClientAuthentication gets the client authentication from the client
+// authenticator and adds its headers and form fields to header and form.
+// endpoint must be the URL the request is sent to.
+func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer, endpoint string, header http.Header, form url.Values) error {
+	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
+	if err != nil {
+		return fmt.Errorf("client authentication: %w", err)
+	}
+	for k, vs := range auth.Form {
+		for _, v := range vs {
+			form.Add(k, v)
+		}
+	}
+	for k, vs := range auth.Header {
+		for _, v := range vs {
+			header.Add(k, v)
+		}
+	}
+	return nil
+}

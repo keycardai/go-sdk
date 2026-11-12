@@ -216,10 +216,10 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 
 	accessToken, _ := raw["access_token"].(string)
 	if accessToken == "" {
-		return nil, fmt.Errorf("token exchange response missing access_token")
+		return nil, fmt.Errorf("token response missing access_token")
 	}
 	if strings.IndexFunc(accessToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
-		return nil, fmt.Errorf("token exchange response access_token contains a control character")
+		return nil, fmt.Errorf("token response access_token contains a control character")
 	}
 
 	tokenType, _ := raw["token_type"].(string)
