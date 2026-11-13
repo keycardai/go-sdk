@@ -136,7 +136,7 @@ func exchangeCodeAtEndpoint(ctx context.Context, tokenEndpoint string, req Autho
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if confidential {
-		httpReq.SetBasicAuth(req.ClientID, req.ClientSecret)
+		setBasicAuth(httpReq.Header, req.ClientID, req.ClientSecret)
 	}
 
 	resp, err := httpClient.Do(httpReq)

@@ -117,7 +117,7 @@ func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCr
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	if c.cfg.clientID != "" && c.cfg.clientSecret != "" {
-		httpReq.SetBasicAuth(c.cfg.clientID, c.cfg.clientSecret)
+		setBasicAuth(httpReq.Header, c.cfg.clientID, c.cfg.clientSecret)
 	}
 
 	resp, err := c.cfg.httpClient.Do(httpReq)
