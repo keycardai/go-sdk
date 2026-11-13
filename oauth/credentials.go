@@ -171,9 +171,9 @@ func WithClientID(clientID string) WebIdentityOption {
 	return func(cfg *webIdentityConfig) { cfg.clientID = clientID }
 }
 
-// WithAudienceConfig overrides the assertion audience. When unset, the audience is the
-// authorization server's token endpoint. (The per-zone audience map is part of the
-// multi-zone effort; this is the single-audience override.)
+// WithAudienceConfig overrides the audience of the token exchange assertion. When
+// unset, the audience is the authorization server's token endpoint. It does not apply
+// to ClientAuthentication, which always uses the endpoint the request goes to.
 func WithAudienceConfig(audience string) WebIdentityOption {
 	return func(cfg *webIdentityConfig) { cfg.audienceConfig = audience }
 }

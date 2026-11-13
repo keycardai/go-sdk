@@ -58,9 +58,9 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// ClientSecretConfigurationError indicates a ClientSecretCredential was constructed with
-// invalid configuration, such as an empty client_id or client_secret, or an empty
-// multi-zone map.
+// ClientSecretConfigurationError means a ClientSecretCredential is misconfigured.
+// Returned by constructors when client_id, client_secret or zone map are empty.
+// Returned by ClientAuthentication when the issuer has no entry in the multi-zone map.
 type ClientSecretConfigurationError struct {
 	Message string
 }
