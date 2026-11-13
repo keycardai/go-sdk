@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHTTPError(t *testing.T) {
@@ -70,6 +71,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		{"JWKSKeyNotFoundError", &JWKSKeyNotFoundError{Message: "no key"}, true},
 		{"TokenEndpointDiscoveryError", &TokenEndpointDiscoveryError{Message: "no endpoint"}, true},
 		{"InvalidMetadataError", &InvalidMetadataError{Message: "bad json"}, true},
+		{"DevicePollError", &DevicePollError{Interval: time.Second, Err: errors.New("reset")}, true},
 		{"generic error", errors.New("some other error"), false},
 	}
 

@@ -60,6 +60,10 @@ type fakeZone struct {
 	// discoveryStatus, when set, is the status of every discovery response, with no
 	// body.
 	discoveryStatus atomic.Int32
+	// delay holds each discovery, device authorization, and token response back this
+	// long, or until the client gives up on the request. Set it before the first
+	// request. mu does not guard it.
+	delay time.Duration
 
 	mu             sync.Mutex
 	deviceBody     any
@@ -67,9 +71,9 @@ type fakeZone struct {
 	deviceRequests []recordedRequest
 	tokenSteps     []tokenStep
 	tokenRequests  []recordedRequest
-	// delay holds each discovery, device authorization, and token response back this
-	// long, or until the client gives up on the request.
-	delay time.Duration
+	// onToken, when set, writes the response to each token request. The request
+	// still uses up a scripted step.
+	onToken func(w http.ResponseWriter, r *http.Request)
 }
 
 func newFakeZone(t *testing.T) *fakeZone {
@@ -112,8 +116,13 @@ func newFakeZone(t *testing.T) *fakeZone {
 		rec := z.record(r)
 		z.mu.Lock()
 		z.tokenRequests = append(z.tokenRequests, rec)
+		onToken := z.onToken
 		step := z.nextStep()
 		z.mu.Unlock()
+		if onToken != nil {
+			onToken(w, r)
+			return
+		}
 		if !z.wait(r) {
 			return
 		}
