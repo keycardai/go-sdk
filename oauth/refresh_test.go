@@ -345,6 +345,58 @@ func TestRefreshAuthorization_Configuration(t *testing.T) {
 	}
 }
 
+// nilAuthenticator is a ClientAuthenticator that returns no result and no error.
+type nilAuthenticator struct{ noClientAuthentication }
+
+func (nilAuthenticator) ClientAuthentication(context.Context, string, string) (*ClientAuthentication, error) {
+	return nil, nil
+}
+
+// A credential whose client authentication fails stops the refresh before the request
+// is sent. The credential runs after discovery, because it needs the token endpoint.
+func TestRefreshAuthorization_ClientAuthenticationFails(t *testing.T) {
+	cases := map[string]struct {
+		credential ApplicationCredential
+		// check verifies the returned error.
+		check func(t *testing.T, err error)
+	}{
+		"credential returns an error": {
+			credential: &fakeAuthenticator{failOn: "/token"},
+			check: func(t *testing.T, err error) {
+				if !errors.Is(err, errClientAuthentication) {
+					t.Fatalf("error: got %v, want the credential's error", err)
+				}
+			},
+		},
+		"credential returns no result and no error": {
+			credential: nilAuthenticator{},
+			check: func(t *testing.T, err error) {
+				const want = "client authentication: oauth.nilAuthenticator returned no result and no error"
+				if err == nil || err.Error() != want {
+					t.Fatalf("error: got %v, want %q", err, want)
+				}
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			zone := newFakeZone(t)
+
+			token, err := RefreshAuthorization(context.Background(), zone.URL,
+				RefreshAuthorizationRequest{RefreshToken: "refresh-0", Credential: tc.credential},
+				WithRefreshHTTPClient(zone.httpClient()))
+
+			if token != nil {
+				t.Errorf("token: got %+v, want nil", token)
+			}
+			tc.check(t, err)
+			if got := len(zone.tokenCalls()); got != 0 {
+				t.Errorf("token requests: got %d, want 0", got)
+			}
+		})
+	}
+}
+
 // A token endpoint that discovery cannot find is a *TokenEndpointDiscoveryError. The
 // refresh request is not sent.
 func TestRefreshAuthorization_NoTokenEndpoint(t *testing.T) {

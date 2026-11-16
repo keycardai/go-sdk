@@ -25,7 +25,7 @@ type ClientAuthentication struct {
 type ClientAuthenticator interface {
 	// ClientAuthentication returns the headers and form fields that authenticate the
 	// client to the zone identified by issuer, for a request sent to endpoint. Call it
-	// once per request.
+	// once per request. When the error is nil, the result must not be nil.
 	ClientAuthentication(ctx context.Context, issuer, endpoint string) (*ClientAuthentication, error)
 }
 
@@ -110,6 +110,9 @@ func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer
 	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
 	if err != nil {
 		return fmt.Errorf("client authentication: %w", err)
+	}
+	if auth == nil {
+		return fmt.Errorf("client authentication: %T returned no result and no error", ca)
 	}
 	for k, vs := range auth.Form {
 		for _, v := range vs {
