@@ -153,6 +153,30 @@ func TestRefreshAuthorization(t *testing.T) {
 			wantDiscovery: 1,
 			wantCode:      "invalid_grant",
 		},
+		"2xx without access_token": {
+			req:  RefreshAuthorizationRequest{RefreshToken: "refresh-0", ClientID: "public-1"},
+			step: tokenStep{status: http.StatusOK, body: map[string]any{"token_type": "Bearer"}},
+			wantForm: url.Values{
+				"grant_type":    {"refresh_token"},
+				"refresh_token": {"refresh-0"},
+				"client_id":     {"public-1"},
+			},
+			wantHeader:    formHeader,
+			wantDiscovery: 1,
+			wantCode:      "invalid_response",
+		},
+		"2xx that is not a JSON object": {
+			req:  RefreshAuthorizationRequest{RefreshToken: "refresh-0", ClientID: "public-1"},
+			step: tokenStep{status: http.StatusOK, body: "access-1"},
+			wantForm: url.Values{
+				"grant_type":    {"refresh_token"},
+				"refresh_token": {"refresh-0"},
+				"client_id":     {"public-1"},
+			},
+			wantHeader:    formHeader,
+			wantDiscovery: 1,
+			wantCode:      "invalid_response",
+		},
 		"503 without an OAuth error": {
 			req:  RefreshAuthorizationRequest{RefreshToken: "refresh-0", ClientID: "public-1"},
 			step: stepStatus(http.StatusServiceUnavailable),
