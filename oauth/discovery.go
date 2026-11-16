@@ -39,7 +39,8 @@ type AuthorizationServerMetadata struct {
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported,omitempty"`
 	ClaimsSupported                  []string `json:"claims_supported,omitempty"`
 
-	// Extra holds any fields beyond the standard set, preserved for forward compatibility.
+	// Extra holds the fields of the discovery response that have no typed field above.
+	// A field with a typed field is not in Extra.
 	Extra map[string]any `json:"-"`
 }
 
