@@ -43,7 +43,7 @@ type MultiZoneCredential interface {
 }
 
 // ClientSecretCredential implements ApplicationCredential using client_id/client_secret
-// basic auth. It is single-zone by default; NewMultiZoneClientSecret makes it carry
+// basic auth. It is single-zone by default. NewMultiZoneClientSecret makes it hold
 // per-zone credentials keyed by zone issuer URL.
 type ClientSecretCredential struct {
 	clientID     string
@@ -53,9 +53,8 @@ type ClientSecretCredential struct {
 
 // NewClientSecret creates a single-zone ClientSecretCredential. It returns a
 // ClientSecretConfigurationError if the client_id or client_secret is empty (or only
-// whitespace). The values are used verbatim for HTTP basic auth, so callers should pass
-// them without surrounding whitespace; a padded client_id otherwise produces an opaque
-// invalid_client at the token endpoint.
+// whitespace). It does not trim the values. Pass them without surrounding whitespace:
+// a padded client_id fails at the token endpoint with invalid_client.
 func NewClientSecret(clientID, clientSecret string) (*ClientSecretCredential, error) {
 	if strings.TrimSpace(clientID) == "" {
 		return nil, &ClientSecretConfigurationError{Message: "client_id must not be empty"}
