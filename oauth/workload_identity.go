@@ -29,9 +29,9 @@ func (f IdentityTokenFunc) IdentityToken(ctx context.Context) (string, error) { 
 
 // WorkloadIdentityCredential implements ApplicationCredential using a
 // platform-signed OIDC token obtained from a IdentityTokenSource. On every
-// token exchange it fetches the current token from the source and attaches it
-// as a jwt-bearer client assertion. It holds no shared secret and never
-// caches the token across requests.
+// token request, token exchange or any other grant, it fetches the current
+// token from the source and attaches it as a jwt-bearer client assertion. It
+// holds no shared secret and never caches the token across requests.
 type WorkloadIdentityCredential struct {
 	source   IdentityTokenSource
 	clientID string
@@ -40,11 +40,13 @@ type WorkloadIdentityCredential struct {
 // WorkloadIdentityOption configures a WorkloadIdentityCredential.
 type WorkloadIdentityOption func(*WorkloadIdentityCredential)
 
-// WithWorkloadClientID sets the ID of the Keycard application credential this
-// workload authenticates as. It is sent as the client_id form parameter
-// alongside the client assertion. Token-federation application credentials
-// are resolved by this ID, so they require it; legacy token credentials are
-// resolved by the assertion's subject and ignore it.
+// WithWorkloadClientID sets the public ID of the Keycard application credential
+// this workload authenticates as. Every token request and client authentication
+// sends it as the client_id form parameter alongside the client assertion. A v2
+// token credential is resolved by this ID and requires it; a v1 token
+// credential (deprecated) is resolved by the assertion's issuer and subject and
+// rejects it. Interactive grants (authorization code, device authorization) need
+// a v2 credential, so they need it.
 func WithWorkloadClientID(clientID string) WorkloadIdentityOption {
 	return func(w *WorkloadIdentityCredential) { w.clientID = clientID }
 }

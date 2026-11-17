@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -147,6 +148,55 @@ func TestClientCredentialsClient_ClientAssertion(t *testing.T) {
 	}
 	if receivedAssertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
 		t.Errorf("client_assertion_type: got %q", receivedAssertionType)
+	}
+}
+
+func TestClientCredentialsClient_ClientAssertionWithClientID(t *testing.T) {
+	var form url.Values
+	var basicAuth bool
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]string{
+				"issuer":         "http://" + r.Host,
+				"token_endpoint": "http://" + r.Host + "/token",
+			})
+		case "/token":
+			r.ParseForm()
+			form = r.PostForm
+			_, _, basicAuth = r.BasicAuth()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "token", "token_type": "bearer"})
+		}
+	}))
+	defer tokenServer.Close()
+
+	req := ClientCredentialsRequest{
+		ClientAssertion:     "platform-token",
+		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+		ClientID:            "acr_123",
+	}
+
+	if _, err := NewClientCredentialsClient(tokenServer.URL).RequestToken(context.Background(), req); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if form.Get("client_assertion") != "platform-token" ||
+		form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" ||
+		form.Get("client_id") != "acr_123" {
+		t.Errorf("body should carry client_assertion, client_assertion_type, and client_id, got %v", form)
+	}
+	if basicAuth {
+		t.Error("assertion request should not send HTTP Basic auth")
+	}
+
+	// client_id is never sent with HTTP Basic.
+	client := NewClientCredentialsClient(tokenServer.URL, WithCCBasicAuth("my-client", "my-secret"))
+	if _, err := client.RequestToken(context.Background(), ClientCredentialsRequest{ClientID: "acr_123"}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, ok := form["client_id"]; ok {
+		t.Errorf("client_id should not be in the body with HTTP Basic, got %q", form.Get("client_id"))
 	}
 }
 

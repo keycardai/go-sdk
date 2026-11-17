@@ -243,7 +243,7 @@ Both examples live in their own Go modules; the root module stays free of MCP fr
 
 `WorkloadIdentity` takes a pluggable token source: `FileTokenSource` (projected token files: EKS, AKS, any Kubernetes projected service-account token), `GCPMetadataTokenSource` (GKE, GCE, Cloud Run), `FlyTokenSource` (Fly Machines), or any `IdentityTokenFunc`:
 
-When the zone-side application credential is resolved by ID (a token-federation credential), pass that ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion.
+For a v2 token credential, pass its public ID with `WithWorkloadClientID`; it is sent as the `client_id` form parameter alongside the assertion on every grant. Omit it for a deprecated v1 credential. With a client ID, the credential is a keyless confidential client: pass it as `Credential` to `ExchangeAuthorizationCode` or `Authenticate`, with the same ID as `Authenticate`'s `ClientID`.
 
 ```go
 source, _ := oauth.NewFileTokenSource() // discovers the projected token file from env
