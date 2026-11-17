@@ -77,25 +77,36 @@ func (w *WorkloadIdentityCredential) Auth(_ string) *ClientAuth {
 // other source error is wrapped in a WorkloadIdentityRuntimeError with
 // Source "custom".
 func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, _ *PrepareOptions) (*TokenExchangeRequest, error) {
-	assertion, err := w.source.IdentityToken(ctx)
+	assertion, err := w.identityToken(ctx)
 	if err != nil {
-		var cfgErr *WorkloadIdentityConfigurationError
-		var runtimeErr *WorkloadIdentityRuntimeError
-		if errors.As(err, &runtimeErr) || errors.As(err, &cfgErr) {
-			return nil, err
-		}
-		return nil, &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "fetching identity token", Err: err}
-	}
-	if strings.TrimSpace(assertion) == "" {
-		return nil, &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "identity token source returned an empty token"}
+		return nil, err
 	}
 
 	return &TokenExchangeRequest{
 		SubjectToken:        subjectToken,
 		Resource:            resource,
 		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
-		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+		ClientAssertionType: clientAssertionTypeJWTBearer,
 		ClientAssertion:     assertion,
 		ClientID:            w.clientID,
 	}, nil
+}
+
+// identityToken fetches the current token from the source. A source error that is
+// not one of this package's typed errors is wrapped in a WorkloadIdentityRuntimeError
+// with Source "custom".
+func (w *WorkloadIdentityCredential) identityToken(ctx context.Context) (string, error) {
+	token, err := w.source.IdentityToken(ctx)
+	if err != nil {
+		var cfgErr *WorkloadIdentityConfigurationError
+		var runtimeErr *WorkloadIdentityRuntimeError
+		if errors.As(err, &runtimeErr) || errors.As(err, &cfgErr) {
+			return "", err
+		}
+		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "fetching identity token", Err: err}
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "identity token source returned an empty token"}
+	}
+	return token, nil
 }

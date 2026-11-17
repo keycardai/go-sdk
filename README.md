@@ -29,7 +29,7 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **Token exchange**: `TokenExchangeClient` (RFC 8693)
 - **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including the OIDC `userinfo_endpoint` and `end_session_endpoint`
 - **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
-- **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`
+- **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`. Each implements `ClientAuthenticator` for requests other than token exchange.
 
 ### `mcp`: MCP OAuth Integration
 
