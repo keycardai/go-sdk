@@ -1,3 +1,28 @@
+## v0.24.0 (2026-11-17)
+
+
+- feat(oauth): client authentication on credentials (#60)
+- ClientAuthenticator returns the headers and form fields that
+authenticate one request to the zone. It is a separate interface from
+ApplicationCredential, so credentials implemented outside this package
+still compile.
+- ClientSecretCredential returns an HTTP Basic header for the zone named
+by the issuer. A multi-zone credential fails for a zone it has no
+credentials for. WebIdentityCredential signs a new client_assertion
+with aud set to the endpoint, and requires WithClientID.
+WorkloadIdentityCredential returns the platform token as
+client_assertion, and client_id when configured.
+- Refresh with a credential and the device authorization grant use it.
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+- fix(oauth): percent-encode the client ID and secret in HTTP Basic (#59)
+- RFC 6749 section 2.3.1 requires the client ID and secret to be encoded
+before they go into the HTTP Basic credential. The authorization code,
+client credentials, and token exchange grants encode each half with
+url.QueryEscape and write a space as %20.
+- Keycard zones percent-decode each half and keep + as is. A client ID
+with a colon reaches the zone intact.
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
 ## v0.23.6 (2026-11-06)
 
 
