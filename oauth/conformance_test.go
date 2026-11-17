@@ -97,6 +97,33 @@ func TestDeserializeTokenResponse_ExplicitTokenTypePreserved(t *testing.T) {
 	}
 }
 
+func TestDeserializeTokenResponse_ExpiresIn(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *int
+	}{
+		{"absent is nil", `{"access_token":"at"}`, nil},
+		{"zero is kept", `{"access_token":"at","expires_in":0}`, func() *int { v := 0; return &v }()},
+		{"present", `{"access_token":"at","expires_in":3600}`, func() *int { v := 3600; return &v }()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tt.body))}
+			tr, err := deserializeTokenResponse(resp)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			switch {
+			case tt.want == nil && tr.ExpiresIn != nil:
+				t.Errorf("expires_in: got %d, want nil", *tr.ExpiresIn)
+			case tt.want != nil && (tr.ExpiresIn == nil || *tr.ExpiresIn != *tt.want):
+				t.Errorf("expires_in: got %v, want %d", tr.ExpiresIn, *tt.want)
+			}
+		})
+	}
+}
+
 // --- JWKS keyring: bounded cache + typed errors ---
 
 // b1RSAJWKS returns an httptest server that serves discovery metadata plus a JWKS
