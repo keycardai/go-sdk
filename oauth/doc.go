@@ -10,5 +10,7 @@
 //   - OAuth authorization server metadata discovery ([FetchAuthorizationServerMetadata])
 //   - Application credentials ([ClientSecretCredential], [WebIdentityCredential],
 //     [WorkloadIdentityCredential] with pluggable [IdentityTokenSource] implementations)
+//   - Resource tokens from the local Keycard agent with no application credential
+//     ([AgentTokenSource], [ResourceTransport])
 //   - Custom error types for OAuth error handling
 package oauth
