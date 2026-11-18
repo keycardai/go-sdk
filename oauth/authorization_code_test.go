@@ -522,6 +522,27 @@ func TestExchangeAuthorizationCode_CredentialErrorReturnedAsIs(t *testing.T) {
 	}
 }
 
+// A credential that returns no client authentication and no error fails the exchange
+// before the token request is sent.
+func TestExchangeAuthorizationCode_CredentialReturnsNoResult(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	_, err := ExchangeAuthorizationCode(context.Background(), as.URL, AuthorizationCodeExchangeRequest{
+		Code:         "auth-code",
+		CodeVerifier: "verifier",
+		RedirectURI:  "http://127.0.0.1:8765/callback",
+		Credential:   nilAuthenticator{},
+	}, WithAuthCodeHTTPClient(as.Client()))
+	const want = "client authentication: oauth.nilAuthenticator returned no result and no error"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error: got %v, want %q", err, want)
+	}
+	if as.lastForm != nil {
+		t.Error("no token request should be sent")
+	}
+}
+
 func TestAuthenticate_WorkloadIdentityCredential(t *testing.T) {
 	as := newAuthServer()
 	defer as.Close()

@@ -74,7 +74,7 @@ func WithRefreshRequestTimeout(d time.Duration) RefreshOption {
 // empty, when the client authentication is not one of the forms listed on
 // [RefreshAuthorizationRequest], when the Credential does not implement
 // [ClientAuthenticator], or when there is no issuer. An error from the credential's
-// client authentication is returned wrapped, and no request is sent. An OAuth error
+// client authentication is returned as is, and no request is sent. An OAuth error
 // response is an *OAuthError. invalid_grant means the refresh token is expired,
 // revoked, or was issued to another client, and the only recovery is to run the
 // authorization flow again. Any other non-2xx response is an *HTTPError. A 2xx

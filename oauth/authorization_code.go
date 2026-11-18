@@ -114,7 +114,7 @@ func ExchangeAuthorizationCode(ctx context.Context, issuer string, req Authoriza
 		if req.ClientID != "" || req.ClientSecret != "" {
 			return nil, &ConfigurationError{Message: "code exchange: set Credential or ClientID/ClientSecret, not both"}
 		}
-		if err := requireClientAuthenticator(req.Credential); err != nil {
+		if _, err := clientAuthenticator(req.Credential); err != nil {
 			return nil, err
 		}
 	}
@@ -129,25 +129,7 @@ func ExchangeAuthorizationCode(ctx context.Context, issuer string, req Authoriza
 	return exchangeCodeAtEndpoint(ctx, issuer, tokenEndpoint, req, cfg.httpClient)
 }
 
-// requireClientAuthenticator returns a ConfigurationError when cred does not provide
-// client authentication.
-func requireClientAuthenticator(cred ApplicationCredential) error {
-	if _, ok := cred.(ClientAuthenticator); !ok {
-		return &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
-	}
-	return nil
-}
-
 func exchangeCodeAtEndpoint(ctx context.Context, issuer, tokenEndpoint string, req AuthorizationCodeExchangeRequest, httpClient *http.Client) (*TokenResponse, error) {
-	var clientAuth *ClientAuthentication
-	if req.Credential != nil {
-		var err error
-		clientAuth, err = req.Credential.(ClientAuthenticator).ClientAuthentication(ctx, issuer, tokenEndpoint)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")
 	body.Set("code", req.Code)
@@ -161,9 +143,17 @@ func exchangeCodeAtEndpoint(ctx context.Context, issuer, tokenEndpoint string, r
 	if !confidential && req.ClientID != "" {
 		body.Set("client_id", req.ClientID)
 	}
-	if clientAuth != nil {
-		for k, v := range clientAuth.Form {
-			body[k] = v
+	header := http.Header{}
+	if confidential {
+		setBasicAuth(header, req.ClientID, req.ClientSecret)
+	}
+	if req.Credential != nil {
+		ca, err := clientAuthenticator(req.Credential)
+		if err != nil {
+			return nil, err
+		}
+		if err := addClientAuthentication(ctx, ca, issuer, tokenEndpoint, header, body); err != nil {
+			return nil, err
 		}
 	}
 
@@ -171,15 +161,8 @@ func exchangeCodeAtEndpoint(ctx context.Context, issuer, tokenEndpoint string, r
 	if err != nil {
 		return nil, fmt.Errorf("creating code exchange request: %w", err)
 	}
+	httpReq.Header = header
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if confidential {
-		setBasicAuth(httpReq.Header, req.ClientID, req.ClientSecret)
-	}
-	if clientAuth != nil {
-		for k, v := range clientAuth.Header {
-			httpReq.Header[k] = v
-		}
-	}
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -267,7 +250,7 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 		if req.ClientID == "" {
 			return nil, &ConfigurationError{Message: "authenticate: ClientID is required with Credential; set it to the client the credential authenticates as"}
 		}
-		if err := requireClientAuthenticator(req.Credential); err != nil {
+		if _, err := clientAuthenticator(req.Credential); err != nil {
 			return nil, err
 		}
 	}

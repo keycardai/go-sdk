@@ -363,8 +363,8 @@ func TestRefreshAuthorization_ClientAuthenticationFails(t *testing.T) {
 		"credential returns an error": {
 			credential: &fakeAuthenticator{failOn: "/token"},
 			check: func(t *testing.T, err error) {
-				if !errors.Is(err, errClientAuthentication) {
-					t.Fatalf("error: got %v, want the credential's error", err)
+				if err != errClientAuthentication {
+					t.Fatalf("error: got %v, want the credential's error as is", err)
 				}
 			},
 		},
