@@ -130,8 +130,9 @@ func WithDeviceClock(c DeviceClock) DeviceAuthorizationOption {
 
 // WithDeviceRequestTimeout bounds each request to the authorization server: discovery,
 // the device authorization request, and each poll. It applies even when the caller's
-// context has a later deadline. A caller deadline that ends sooner still applies. It
-// also covers the credential's client authentication for that request. It must be
+// context has a later deadline, because a deadline on WaitForToken bounds the whole
+// wait, not each poll. A caller deadline that ends sooner still applies. It also
+// covers the credential's client authentication for that request. It must be
 // positive. Default: 10 seconds.
 func WithDeviceRequestTimeout(d time.Duration) DeviceAuthorizationOption {
 	return func(cfg *deviceAuthorizationConfig) { cfg.requestTimeout = d }

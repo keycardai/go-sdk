@@ -917,13 +917,13 @@ func TestWaitForToken(t *testing.T) {
 			wantPolls: 1,
 			wantHTTP:  http.StatusBadRequest,
 		},
-		"2xx with a body that does not decompress stops without an interval": {
+		"row 31: 2xx with a body that does not decompress stops without an interval": {
 			steps:     []tokenStep{{status: http.StatusOK, body: corruptGzip{}}},
 			wantWaits: []time.Duration{5 * s},
 			wantPolls: 1,
 			wantCode:  "invalid_response",
 		},
-		"503 with a body that does not decompress reports the interval, not doubled": {
+		"row 32: 503 with a body that does not decompress reports the interval, not doubled": {
 			steps:            []tokenStep{{status: http.StatusServiceUnavailable, body: corruptGzip{}}},
 			wantWaits:        []time.Duration{5 * s},
 			wantPolls:        1,
@@ -1055,7 +1055,7 @@ func TestWaitForToken_ResumeAfterSlowDown(t *testing.T) {
 	}
 }
 
-// Spec rows 14 and 20. The client authenticates with a credential, which the loop
+// Spec rows 14, 20 and 33. The client authenticates with a credential, which the loop
 // calls once per poll. Its calls show whether a poll started, also when the request is
 // not sent.
 func TestWaitForToken_Cancellation(t *testing.T) {
@@ -1073,7 +1073,7 @@ func TestWaitForToken_Cancellation(t *testing.T) {
 			},
 			wantPolls: 0,
 		},
-		"as the wait ends": {
+		"row 33: as the wait ends": {
 			setup: func(_ *fakeZone, clock *fakeDeviceClock, cancel context.CancelFunc) {
 				clock.onAfter = func(time.Duration) <-chan time.Time {
 					cancel()
@@ -1094,8 +1094,8 @@ func TestWaitForToken_Cancellation(t *testing.T) {
 			wantPolls: 1,
 		},
 	}
-	// In "as the wait ends", the wait's select has two ready cases and picks one at
-	// random. Each case runs this many times, so that both picks happen.
+	// In "row 33: as the wait ends", the wait's select has two ready cases and picks
+	// one at random. Each case runs this many times, so that both picks happen.
 	const rounds = 32
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
