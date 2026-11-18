@@ -25,7 +25,7 @@ type ClientAuthentication struct {
 type ClientAuthenticator interface {
 	// ClientAuthentication returns the headers and form fields that authenticate the
 	// client to the zone identified by issuer, for a request sent to endpoint. Call it
-	// once per request.
+	// once per request. When the error is nil, the result must not be nil.
 	ClientAuthentication(ctx context.Context, issuer, endpoint string) (*ClientAuthentication, error)
 }
 
@@ -91,4 +91,42 @@ func (w *WorkloadIdentityCredential) ClientAuthentication(ctx context.Context, _
 		form.Set("client_id", w.clientID)
 	}
 	return &ClientAuthentication{Header: http.Header{}, Form: form}, nil
+}
+
+// clientAuthenticator returns cred as a ClientAuthenticator, or a ConfigurationError
+// when cred does not implement it.
+func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error) {
+	ca, ok := cred.(ClientAuthenticator)
+	if !ok {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
+	}
+	return ca, nil
+}
+
+// addClientAuthentication gets the client authentication from the client
+// authenticator and sets its headers and form fields in header and form. A field
+// it sets replaces the values already there, so the request does not send it
+// twice. endpoint must be the URL the request is sent to. It returns an error from
+// the client authenticator as is.
+func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer, endpoint string, header http.Header, form url.Values) error {
+	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
+	if err != nil {
+		return err
+	}
+	if auth == nil {
+		return fmt.Errorf("client authentication: %T returned no result and no error", ca)
+	}
+	for k, vs := range auth.Form {
+		form.Del(k)
+		for _, v := range vs {
+			form.Add(k, v)
+		}
+	}
+	for k, vs := range auth.Header {
+		header.Del(k)
+		for _, v := range vs {
+			header.Add(k, v)
+		}
+	}
+	return nil
 }

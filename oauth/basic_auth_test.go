@@ -115,6 +115,12 @@ func TestBasicAuth_Grants(t *testing.T) {
 				ExchangeToken(ctx, TokenExchangeRequest{SubjectToken: "st", Resource: "urn:r"})
 			return err
 		}},
+		{"refresh", func() error {
+			_, err := RefreshAuthorization(ctx, srv.URL, RefreshAuthorizationRequest{
+				RefreshToken: "rt", ClientID: clientID, ClientSecret: secret,
+			})
+			return err
+		}},
 	}
 	for _, g := range grants {
 		t.Run(g.name, func(t *testing.T) {

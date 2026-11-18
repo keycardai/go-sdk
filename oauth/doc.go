@@ -5,6 +5,7 @@
 //   - JWT signing and verification ([JWTSigner], [JWTVerifier])
 //   - JWKS key discovery with two-level caching ([JWKSOAuthKeyring])
 //   - RFC 8693 token exchange ([TokenExchangeClient])
+//   - Refresh token redemption ([RefreshAuthorization])
 //   - OAuth authorization server metadata discovery ([FetchAuthorizationServerMetadata])
 //   - Application credentials ([ClientSecretCredential], [WebIdentityCredential],
 //     [WorkloadIdentityCredential] with pluggable [IdentityTokenSource] implementations)
