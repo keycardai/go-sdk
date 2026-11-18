@@ -596,6 +596,21 @@ func TestAuthenticate_CredentialWithClientSecretRejected(t *testing.T) {
 	}
 }
 
+func TestAuthenticate_CredentialWithoutClientIDRejected(t *testing.T) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	_, err = Authenticate(context.Background(), "https://zone.example.com", AuthenticateRequest{
+		Credential: cred,
+	}, WithBrowserOpener(func(string) error { t.Error("browser should not open"); return nil }))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+}
+
 func TestAuthenticate_DefaultCallbackPortIsUnchanged(t *testing.T) {
 	if defaultCallbackPort != 8765 {
 		t.Fatalf("default callback port: got %d, want 8765", defaultCallbackPort)

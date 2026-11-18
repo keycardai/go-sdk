@@ -218,8 +218,8 @@ type AuthenticateRequest struct {
 	CallbackTimeout time.Duration // default 300s
 	ClientSecret    string        // set for a confidential client
 	// Credential authenticates the code exchange of a confidential client in place of
-	// ClientSecret; ClientID then goes on the authorize URL only. It must implement
-	// ClientAuthenticator.
+	// ClientSecret; ClientID is still required and goes on the authorize URL only. It
+	// must implement ClientAuthenticator.
 	Credential ApplicationCredential
 	Resource   string // optional RFC 8707 resource indicator
 }
@@ -263,6 +263,9 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 	if req.Credential != nil {
 		if req.ClientSecret != "" {
 			return nil, &ConfigurationError{Message: "authenticate: set Credential or ClientSecret, not both"}
+		}
+		if req.ClientID == "" {
+			return nil, &ConfigurationError{Message: "authenticate: ClientID is required with Credential; set it to the client the credential authenticates as"}
 		}
 		if err := requireClientAuthenticator(req.Credential); err != nil {
 			return nil, err
