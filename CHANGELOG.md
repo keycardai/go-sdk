@@ -1,3 +1,10 @@
+## v0.25.0 (2026-11-18)
+
+
+- feat(oauth): workload identity client_id on client credentials and code exchange (#66)
+- * Workload Identity: pass client_id and support auth code grants
+- * Add client id validation
+
 ## v0.24.0 (2026-11-17)
 
 
