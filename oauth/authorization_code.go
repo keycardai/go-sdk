@@ -67,14 +67,19 @@ func BuildAuthorizeURL(authorizationEndpoint string, params AuthorizeURLParams) 
 // AuthorizationCodeExchangeRequest exchanges an authorization code for a token.
 // A public client sets ClientID (sent in the body); a confidential client sets
 // ClientSecret as well and is authenticated with HTTP Basic, with ClientID omitted
-// from the body.
+// from the body, or sets Credential instead of both.
 type AuthorizationCodeExchangeRequest struct {
 	Code         string
 	CodeVerifier string
 	RedirectURI  string
 	ClientID     string
 	ClientSecret string
-	Resource     string // optional RFC 8707 resource indicator
+	// Credential authenticates the exchange with its client authentication, in place
+	// of ClientID and ClientSecret. It must implement ClientAuthenticator. The code is
+	// bound to the authorize URL's client_id, so the credential must authenticate as
+	// that client; the zone rejects a mismatch with invalid_grant.
+	Credential ApplicationCredential
+	Resource   string // optional RFC 8707 resource indicator
 }
 
 // AuthCodeExchangeOption configures ExchangeAuthorizationCode.
@@ -105,6 +110,15 @@ func ExchangeAuthorizationCode(ctx context.Context, issuer string, req Authoriza
 		opt(&cfg)
 	}
 
+	if req.Credential != nil {
+		if req.ClientID != "" || req.ClientSecret != "" {
+			return nil, &ConfigurationError{Message: "code exchange: set Credential or ClientID/ClientSecret, not both"}
+		}
+		if err := requireClientAuthenticator(req.Credential); err != nil {
+			return nil, err
+		}
+	}
+
 	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
 	defer cancel()
 
@@ -112,10 +126,28 @@ func ExchangeAuthorizationCode(ctx context.Context, issuer string, req Authoriza
 	if err != nil {
 		return nil, err
 	}
-	return exchangeCodeAtEndpoint(ctx, tokenEndpoint, req, cfg.httpClient)
+	return exchangeCodeAtEndpoint(ctx, issuer, tokenEndpoint, req, cfg.httpClient)
 }
 
-func exchangeCodeAtEndpoint(ctx context.Context, tokenEndpoint string, req AuthorizationCodeExchangeRequest, httpClient *http.Client) (*TokenResponse, error) {
+// requireClientAuthenticator returns a ConfigurationError when cred does not provide
+// client authentication.
+func requireClientAuthenticator(cred ApplicationCredential) error {
+	if _, ok := cred.(ClientAuthenticator); !ok {
+		return &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
+	}
+	return nil
+}
+
+func exchangeCodeAtEndpoint(ctx context.Context, issuer, tokenEndpoint string, req AuthorizationCodeExchangeRequest, httpClient *http.Client) (*TokenResponse, error) {
+	var clientAuth *ClientAuthentication
+	if req.Credential != nil {
+		var err error
+		clientAuth, err = req.Credential.(ClientAuthenticator).ClientAuthentication(ctx, issuer, tokenEndpoint)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")
 	body.Set("code", req.Code)
@@ -129,6 +161,11 @@ func exchangeCodeAtEndpoint(ctx context.Context, tokenEndpoint string, req Autho
 	if !confidential && req.ClientID != "" {
 		body.Set("client_id", req.ClientID)
 	}
+	if clientAuth != nil {
+		for k, v := range clientAuth.Form {
+			body[k] = v
+		}
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(body.Encode()))
 	if err != nil {
@@ -137,6 +174,11 @@ func exchangeCodeAtEndpoint(ctx context.Context, tokenEndpoint string, req Autho
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if confidential {
 		setBasicAuth(httpReq.Header, req.ClientID, req.ClientSecret)
+	}
+	if clientAuth != nil {
+		for k, v := range clientAuth.Header {
+			httpReq.Header[k] = v
+		}
 	}
 
 	resp, err := httpClient.Do(httpReq)
@@ -175,7 +217,11 @@ type AuthenticateRequest struct {
 	CallbackPort    int           // default 8765; EphemeralCallbackPort picks a free port
 	CallbackTimeout time.Duration // default 300s
 	ClientSecret    string        // set for a confidential client
-	Resource        string        // optional RFC 8707 resource indicator
+	// Credential authenticates the code exchange of a confidential client in place of
+	// ClientSecret; ClientID is still required and goes on the authorize URL only. It
+	// must implement ClientAuthenticator.
+	Credential ApplicationCredential
+	Resource   string // optional RFC 8707 resource indicator
 }
 
 // AuthenticateOption configures the transport and browser launcher of the high-level flow.
@@ -212,6 +258,18 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 	cfg := authenticateConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout, openBrowser: openBrowser}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+
+	if req.Credential != nil {
+		if req.ClientSecret != "" {
+			return nil, &ConfigurationError{Message: "authenticate: set Credential or ClientSecret, not both"}
+		}
+		if req.ClientID == "" {
+			return nil, &ConfigurationError{Message: "authenticate: ClientID is required with Credential; set it to the client the credential authenticates as"}
+		}
+		if err := requireClientAuthenticator(req.Credential); err != nil {
+			return nil, err
+		}
 	}
 
 	timeout := req.CallbackTimeout
@@ -289,14 +347,19 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 		return nil, err
 	}
 
-	return exchangeCodeAtEndpoint(ctx, metadata.TokenEndpoint, AuthorizationCodeExchangeRequest{
+	exchange := AuthorizationCodeExchangeRequest{
 		Code:         code,
 		CodeVerifier: pkce.CodeVerifier,
 		RedirectURI:  redirectURI,
 		ClientID:     req.ClientID,
 		ClientSecret: req.ClientSecret,
+		Credential:   req.Credential,
 		Resource:     req.Resource,
-	}, cfg.httpClient)
+	}
+	if req.Credential != nil {
+		exchange.ClientID = ""
+	}
+	return exchangeCodeAtEndpoint(ctx, issuer, metadata.TokenEndpoint, exchange, cfg.httpClient)
 }
 
 // AuthenticateFromChallenge resolves the issuer from an RFC 9728 WWW-Authenticate

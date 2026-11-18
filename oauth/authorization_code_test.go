@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -363,6 +364,250 @@ func TestAuthenticate_ExplicitRedirectURIListensOnItsHost(t *testing.T) {
 	}
 	if seen != redirectURI || as.lastForm.Get("redirect_uri") != redirectURI {
 		t.Errorf("explicit redirect URI must be used verbatim: authorize=%q exchanged=%q", seen, as.lastForm.Get("redirect_uri"))
+	}
+}
+
+// basicOnlyCredential is an ApplicationCredential without client authentication.
+type basicOnlyCredential struct{}
+
+func (basicOnlyCredential) Auth(string) *ClientAuth {
+	return &ClientAuth{ClientID: "id", ClientSecret: "secret"}
+}
+
+func (basicOnlyCredential) PrepareTokenExchangeRequest(context.Context, string, string, *PrepareOptions) (*TokenExchangeRequest, error) {
+	return &TokenExchangeRequest{}, nil
+}
+
+func TestExchangeAuthorizationCode_WorkloadIdentityCredential(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+
+	_, err = ExchangeAuthorizationCode(context.Background(), as.URL, AuthorizationCodeExchangeRequest{
+		Code:         "auth-code",
+		CodeVerifier: "verifier",
+		RedirectURI:  "http://127.0.0.1:8765/callback",
+		Credential:   cred,
+	}, WithAuthCodeHTTPClient(as.Client()))
+	if err != nil {
+		t.Fatalf("ExchangeAuthorizationCode: %v", err)
+	}
+
+	want := map[string]string{
+		"grant_type":            "authorization_code",
+		"code":                  "auth-code",
+		"code_verifier":         "verifier",
+		"redirect_uri":          "http://127.0.0.1:8765/callback",
+		"client_assertion":      "platform-token",
+		"client_assertion_type": clientAssertionTypeJWTBearer,
+		"client_id":             "acr_123",
+	}
+	for k, v := range want {
+		if got := as.lastForm.Get(k); got != v {
+			t.Errorf("%s: got %q, want %q", k, got, v)
+		}
+	}
+	if _, ok := as.lastForm["subject_token_type"]; ok {
+		t.Error("code exchange should never send subject_token_type")
+	}
+	if as.lastAuthOK {
+		t.Error("credential exchange should not send HTTP Basic auth")
+	}
+}
+
+func TestExchangeAuthorizationCode_ClientSecretCredential(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	cred, err := NewClientSecret("confidential-client", "secret")
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	_, err = ExchangeAuthorizationCode(context.Background(), as.URL, AuthorizationCodeExchangeRequest{
+		Code:         "auth-code",
+		CodeVerifier: "verifier",
+		RedirectURI:  "http://127.0.0.1:8765/callback",
+		Credential:   cred,
+	}, WithAuthCodeHTTPClient(as.Client()))
+	if err != nil {
+		t.Fatalf("ExchangeAuthorizationCode: %v", err)
+	}
+	if !as.lastAuthOK || as.lastAuthUser != "confidential-client" {
+		t.Errorf("credential's Basic header should be sent, got user %q ok=%v", as.lastAuthUser, as.lastAuthOK)
+	}
+	if as.lastForm.Get("client_id") != "" {
+		t.Errorf("client_id should not be in the body, got %q", as.lastForm.Get("client_id"))
+	}
+}
+
+func TestExchangeAuthorizationCode_WebIdentityCredential(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	cred := NewWebIdentity(WithClientID("client-a"), WithStorageDir(t.TempDir()))
+	_, err := ExchangeAuthorizationCode(context.Background(), as.URL, AuthorizationCodeExchangeRequest{
+		Code:         "auth-code",
+		CodeVerifier: "verifier",
+		RedirectURI:  "http://127.0.0.1:8765/callback",
+		Credential:   cred,
+	}, WithAuthCodeHTTPClient(as.Client()))
+	if err != nil {
+		t.Fatalf("ExchangeAuthorizationCode: %v", err)
+	}
+	if as.lastAuthOK {
+		t.Error("WebIdentity exchange should not send HTTP Basic auth")
+	}
+	claims := assertionClaims(t, as.lastForm.Get("client_assertion"))
+	if claims["aud"] != as.URL+"/token" {
+		t.Errorf("aud: got %v, want the token endpoint", claims["aud"])
+	}
+}
+
+func TestExchangeAuthorizationCode_CredentialConfigurationErrors(t *testing.T) {
+	wi, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		req  AuthorizationCodeExchangeRequest
+	}{
+		{name: "credential with client id", req: AuthorizationCodeExchangeRequest{Credential: wi, ClientID: "c"}},
+		{name: "credential with client secret", req: AuthorizationCodeExchangeRequest{Credential: wi, ClientSecret: "s"}},
+		{name: "credential without client authentication", req: AuthorizationCodeExchangeRequest{Credential: basicOnlyCredential{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as := newAuthServer()
+			defer as.Close()
+			tc.req.Code, tc.req.CodeVerifier, tc.req.RedirectURI = "auth-code", "verifier", "http://127.0.0.1:8765/callback"
+
+			_, err := ExchangeAuthorizationCode(context.Background(), as.URL, tc.req, WithAuthCodeHTTPClient(as.Client()))
+			var cfgErr *ConfigurationError
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("error: got %v, want ConfigurationError", err)
+			}
+			if as.lastForm != nil {
+				t.Error("no token request should be sent")
+			}
+		})
+	}
+}
+
+func TestExchangeAuthorizationCode_CredentialErrorReturnedAsIs(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceFile, Message: "token file is empty"}
+	}))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	_, err = ExchangeAuthorizationCode(context.Background(), as.URL, AuthorizationCodeExchangeRequest{
+		Code:         "auth-code",
+		CodeVerifier: "verifier",
+		RedirectURI:  "http://127.0.0.1:8765/callback",
+		Credential:   cred,
+	}, WithAuthCodeHTTPClient(as.Client()))
+	if runtimeErr, ok := err.(*WorkloadIdentityRuntimeError); !ok || runtimeErr.Source != WorkloadIdentitySourceFile {
+		t.Fatalf("error: got %T %v, want the credential's WorkloadIdentityRuntimeError as is", err, err)
+	}
+	if as.lastForm != nil {
+		t.Error("no token request should be sent")
+	}
+}
+
+func TestAuthenticate_WorkloadIdentityCredential(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+
+	var authorize url.Values
+	opener := func(rawURL string) error {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return err
+		}
+		authorize = u.Query()
+		cb, err := url.Parse(authorize.Get("redirect_uri"))
+		if err != nil {
+			return err
+		}
+		cb.RawQuery = url.Values{"code": {"loopback-code"}, "state": {authorize.Get("state")}}.Encode()
+		go func() {
+			resp, err := http.Get(cb.String())
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+
+	_, err = Authenticate(context.Background(), as.URL, AuthenticateRequest{
+		ClientID:     "acr_123",
+		CallbackPort: EphemeralCallbackPort,
+		Credential:   cred,
+	}, WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(opener))
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+
+	if authorize.Get("client_id") != "acr_123" {
+		t.Errorf("authorize client_id: got %q, want acr_123", authorize.Get("client_id"))
+	}
+	if _, ok := authorize["client_assertion"]; ok {
+		t.Error("authorize URL should carry no assertion")
+	}
+	if as.lastForm.Get("client_id") != "acr_123" || as.lastForm.Get("client_assertion") != "platform-token" {
+		t.Errorf("token request: client_id %q, client_assertion %q; want acr_123 and the platform token",
+			as.lastForm.Get("client_id"), as.lastForm.Get("client_assertion"))
+	}
+	if len(as.lastForm["client_id"]) != 1 {
+		t.Errorf("client_id should be sent once, got %v", as.lastForm["client_id"])
+	}
+	if as.lastAuthOK {
+		t.Error("credential exchange should not send HTTP Basic auth")
+	}
+}
+
+func TestAuthenticate_CredentialWithClientSecretRejected(t *testing.T) {
+	cred, err := NewClientSecret("c", "s")
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	_, err = Authenticate(context.Background(), "https://zone.example.com", AuthenticateRequest{
+		ClientID:     "c",
+		ClientSecret: "s",
+		Credential:   cred,
+	}, WithBrowserOpener(func(string) error { t.Error("browser should not open"); return nil }))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+}
+
+func TestAuthenticate_CredentialWithoutClientIDRejected(t *testing.T) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	_, err = Authenticate(context.Background(), "https://zone.example.com", AuthenticateRequest{
+		Credential: cred,
+	}, WithBrowserOpener(func(string) error { t.Error("browser should not open"); return nil }))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
 	}
 }
 

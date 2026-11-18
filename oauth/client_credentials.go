@@ -15,6 +15,10 @@ type ClientCredentialsRequest struct {
 	Scope               string
 	ClientAssertion     string
 	ClientAssertionType string
+	// ClientID names the application credential the client authenticates as,
+	// sent as the client_id form parameter beside ClientAssertion. It is never
+	// sent when the client uses HTTP Basic.
+	ClientID string
 }
 
 // ClientCredentialsClientOption configures a ClientCredentialsClient.
@@ -105,6 +109,10 @@ func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCr
 		return nil, err
 	}
 
+	basicAuth := c.cfg.clientID != "" && c.cfg.clientSecret != ""
+	if basicAuth {
+		req.ClientID = ""
+	}
 	body := serializeClientCredentialsRequest(req)
 
 	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
@@ -116,7 +124,7 @@ func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCr
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	if c.cfg.clientID != "" && c.cfg.clientSecret != "" {
+	if basicAuth {
 		setBasicAuth(httpReq.Header, c.cfg.clientID, c.cfg.clientSecret)
 	}
 
@@ -151,6 +159,9 @@ func serializeClientCredentialsRequest(req ClientCredentialsRequest) url.Values 
 	}
 	if req.ClientAssertionType != "" {
 		params.Set("client_assertion_type", req.ClientAssertionType)
+	}
+	if req.ClientID != "" {
+		params.Set("client_id", req.ClientID)
 	}
 
 	return params
