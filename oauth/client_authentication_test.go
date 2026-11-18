@@ -267,3 +267,69 @@ func TestWebIdentityClientAuthentication_NoClientIDCreatesNoKey(t *testing.T) {
 		t.Errorf("public JWKS: got %v, want nil before bootstrap", cred.PublicJWKS())
 	}
 }
+
+// staticAuthenticator returns the same client authentication for every request.
+type staticAuthenticator struct{ auth *ClientAuthentication }
+
+func (s staticAuthenticator) ClientAuthentication(context.Context, string, string) (*ClientAuthentication, error) {
+	return s.auth, nil
+}
+
+// A field the client authentication sets replaces the grant's value for it, so the
+// request does not send the field twice.
+func TestAddClientAuthentication(t *testing.T) {
+	cases := map[string]struct {
+		auth       ClientAuthentication
+		header     http.Header
+		form       url.Values
+		wantHeader http.Header
+		wantForm   url.Values
+	}{
+		"fields the grant did not set are added": {
+			auth: ClientAuthentication{
+				Header: http.Header{"Authorization": {"Basic new"}},
+				Form:   url.Values{"client_id": {"app-cred-1"}},
+			},
+			header:     http.Header{"Content-Type": {"application/x-www-form-urlencoded"}},
+			form:       url.Values{"grant_type": {"refresh_token"}},
+			wantHeader: http.Header{"Content-Type": {"application/x-www-form-urlencoded"}, "Authorization": {"Basic new"}},
+			wantForm:   url.Values{"grant_type": {"refresh_token"}, "client_id": {"app-cred-1"}},
+		},
+		"a form field the grant set is replaced": {
+			auth:       ClientAuthentication{Form: url.Values{"client_id": {"app-cred-1"}}},
+			header:     http.Header{},
+			form:       url.Values{"grant_type": {"refresh_token"}, "client_id": {"public-1"}},
+			wantHeader: http.Header{},
+			wantForm:   url.Values{"grant_type": {"refresh_token"}, "client_id": {"app-cred-1"}},
+		},
+		"a header the grant set is replaced": {
+			auth:       ClientAuthentication{Header: http.Header{"Authorization": {"Basic new"}}},
+			header:     http.Header{"Authorization": {"Basic old"}},
+			form:       url.Values{},
+			wantHeader: http.Header{"Authorization": {"Basic new"}},
+			wantForm:   url.Values{},
+		},
+		"a field with several values keeps all of them": {
+			auth:       ClientAuthentication{Form: url.Values{"resource": {"urn:a", "urn:b"}}},
+			header:     http.Header{},
+			form:       url.Values{"resource": {"urn:old"}},
+			wantHeader: http.Header{},
+			wantForm:   url.Values{"resource": {"urn:a", "urn:b"}},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := addClientAuthentication(context.Background(), staticAuthenticator{&tc.auth},
+				"https://zone-a.example.com", "https://zone-a.example.com/token", tc.header, tc.form)
+			if err != nil {
+				t.Fatalf("addClientAuthentication: %v", err)
+			}
+			if !reflect.DeepEqual(tc.header, tc.wantHeader) {
+				t.Errorf("header: got %v, want %v", tc.header, tc.wantHeader)
+			}
+			if !reflect.DeepEqual(tc.form, tc.wantForm) {
+				t.Errorf("form: got %v, want %v", tc.form, tc.wantForm)
+			}
+		})
+	}
+}

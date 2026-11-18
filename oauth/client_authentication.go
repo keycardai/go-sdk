@@ -104,8 +104,9 @@ func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error
 }
 
 // addClientAuthentication gets the client authentication from the client
-// authenticator and adds its headers and form fields to header and form.
-// endpoint must be the URL the request is sent to.
+// authenticator and sets its headers and form fields in header and form. A field
+// it sets replaces the values already there, so the request does not send it
+// twice. endpoint must be the URL the request is sent to.
 func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer, endpoint string, header http.Header, form url.Values) error {
 	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
 	if err != nil {
@@ -115,11 +116,13 @@ func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer
 		return fmt.Errorf("client authentication: %T returned no result and no error", ca)
 	}
 	for k, vs := range auth.Form {
+		form.Del(k)
 		for _, v := range vs {
 			form.Add(k, v)
 		}
 	}
 	for k, vs := range auth.Header {
+		header.Del(k)
 		for _, v := range vs {
 			header.Add(k, v)
 		}
