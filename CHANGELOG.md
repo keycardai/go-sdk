@@ -1,3 +1,117 @@
+## v0.26.0 (2026-11-18)
+
+
+- feat(oauth): poll until done for the device grant (#63)
+- * feat(oauth): poll until done for the device grant
+- WaitForToken polls until the person approves or denies the request,
+following RFC 8628 section 3.5. It waits the interval before each poll,
+including the first. On authorization_pending it polls again, and on
+slow_down it adds 5 seconds to the interval for this poll and every
+later one.
+- A network error, a request timeout, a 5xx, or a 429 stops the loop with
+a *DevicePollError. Its Interval is the wait the loop would have used
+next, doubled after a network error or a timeout. Its Err is the
+original failure. To resume, call WaitForToken again with
+WithStartInterval(Interval). Any other failure comes back as is.
+- When the next poll would start after ExpiresAt, WaitForToken returns an
+expired_token *OAuthError without waiting or sending that poll.
+- WaitForToken resolves the metadata once, before the first wait. A
+failure while reading the response body is a network error. A gzip body
+that does not decompress is a malformed response, not a network error.
+- Adds examples/device-authorization.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * test(oauth): label poll until done tests with spec rows 31 to 33
+- The two TestWaitForToken cases with a body that does not decompress
+cover rows 31 and 32 of keycard-sdk-spec #108, and the cancellation case
+when the wait ends covers row 33.
+- WithDeviceRequestTimeout says why it applies under a later caller
+deadline: a deadline on WaitForToken bounds the whole wait, not each
+poll. Base gives Go's other request timeouts the opposite rule.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+- feat(oauth): device authorization request and single poll (#62)
+- * feat(oauth): device authorization request and single poll
+- Adds the device side of the RFC 8628 device authorization grant.
+RequestDeviceAuthorization asks the zone for a device code and a user
+code, and returns a DeviceAuthorization whose ExpiresAt comes from the
+injected DeviceClock. PollToken polls the token endpoint once.
+- Both authenticate with a credential's client authentication, or as a
+public client with client_id in the body.
+- The client caches the discovered metadata. If device_authorization_endpoint
+or token_endpoint is missing or is not an http or https URL, the result
+is a ConfigurationError, cached for the negative TTL like other
+deterministic discovery failures. A failed fetch is a
+DeviceAuthorizationDiscoveryError.
+- WithDeviceRequestTimeout bounds discovery, the device authorization
+request, and each poll, also under a later caller deadline. It must be
+positive.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * docs(oauth): a metadata field with a typed field is not in Extra
+- device_authorization_endpoint is now a typed field, so it is no longer
+in AuthorizationServerMetadata.Extra.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * test(oauth): label device tests with spec rows 30 to 32
+- TestRequestDeviceAuthorization_BadMetadata covers row 30, and the two
+TestPollToken_Response cases with a body that does not decompress cover
+rows 31 and 32 of keycard-sdk-spec #108.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+- feat(oauth): add RefreshAuthorization (#61)
+- * feat(oauth): add RefreshAuthorization
+- RefreshAuthorization redeems a refresh token at the token endpoint
+(RFC 6749 section 6). It authenticates as a public client with
+client_id in the body, as a confidential client with HTTP Basic, or with
+a credential's client authentication. It sends one resource per entry
+and a space-joined scope, and never sends subject_token_type. A device
+uses it to get a token for one of the resources it was granted.
+- Configuration errors come back before discovery or any request.
+- The shared token response parser says "token response" in its errors,
+because refresh and the device grant use it too.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix(oauth): typed invalid_response from RefreshAuthorization
+- A 2xx refresh response that is not a valid token response is now an
+*OAuthError with code invalid_response, with the parse error as Err.
+The device poll returns the same error. Base classifies a malformed
+response by this code.
+- TestBasicAuth_Grants covers refresh, so every grant that sends a raw
+client ID and secret is checked for the percent-encoded Basic header.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix(oauth): error on a nil client authentication result
+- A ClientAuthenticator that returns no result and no error now gets an
+error before the request is sent, instead of a nil-pointer panic in the
+caller. The interface doc says a nil error means the result is not nil.
+- TestRefreshAuthorization_ClientAuthenticationFails covers a credential
+that returns an error and one that returns no result. Neither sends a
+token request.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix(oauth): client authentication replaces fields the grant set
+- addClientAuthentication sets each header and form field from the
+credential, replacing any value the grant already set. A field is no
+longer sent twice when a grant sets client_id before client
+authentication runs. TypeScript uses params.set for the same reason.
+- TestAddClientAuthentication covers new fields, a replaced form field, a
+replaced header, and a field with several values.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix(oauth): one client authentication path for every grant
+- The code exchange from #66 now uses clientAuthenticator and
+addClientAuthentication, the same helpers as refresh and the device
+grant. requireClientAuthenticator is gone. A credential that returns no
+result and no error now fails the exchange before the request is sent,
+instead of sending it without client authentication.
+- addClientAuthentication returns the credential's error as is, as the
+code exchange already did. Spec row 27 of device authorization and the
+WaitForToken doc say the same. The RefreshAuthorization doc now says
+"as is" instead of "wrapped".
+- TestExchangeAuthorizationCode_CredentialReturnsNoResult covers the nil
+result. TestRefreshAuthorization_ClientAuthenticationFails checks that
+the credential's error is the same value, not only that it matches with
+errors.Is.
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- ---------
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
 ## v0.25.0 (2026-11-18)
 
 
