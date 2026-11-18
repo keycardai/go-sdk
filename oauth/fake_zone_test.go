@@ -49,28 +49,64 @@ type recordedRequest struct {
 
 var errNetwork = errors.New("connection reset by peer")
 
-// fakeZone is a fake authorization server with discovery and a token endpoint that
-// plays back scripted steps.
+// fakeZone is a fake authorization server with discovery, a device authorization
+// endpoint, and a token endpoint that plays back scripted steps.
 type fakeZone struct {
 	*httptest.Server
 	t *testing.T
 
-	discoveryRequests atomic.Int32
+	discoveryRequests  atomic.Int32
+	omitDeviceEndpoint atomic.Bool
+	// discoveryStatus, when set, is the status of every discovery response, with no
+	// body.
+	discoveryStatus atomic.Int32
 
-	mu            sync.Mutex
-	tokenSteps    []tokenStep
-	tokenRequests []recordedRequest
-	// delay holds each token response back this long, or until the client gives up
-	// on the request.
+	mu             sync.Mutex
+	deviceBody     any
+	deviceStatus   int
+	deviceRequests []recordedRequest
+	tokenSteps     []tokenStep
+	tokenRequests  []recordedRequest
+	// delay holds each discovery, device authorization, and token response back this
+	// long, or until the client gives up on the request.
 	delay time.Duration
 }
 
 func newFakeZone(t *testing.T) *fakeZone {
-	z := &fakeZone{t: t}
+	z := &fakeZone{
+		t:            t,
+		deviceStatus: http.StatusOK,
+		deviceBody: map[string]any{
+			"device_code":               "device-code-1",
+			"user_code":                 "WDJB-MJHT",
+			"verification_uri":          "https://zone.example.com/device",
+			"verification_uri_complete": "https://zone.example.com/device?user_code=WDJB-MJHT",
+			"expires_in":                600,
+			"interval":                  5,
+		},
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		z.discoveryRequests.Add(1)
+		if !z.wait(r) {
+			return
+		}
+		if status := z.discoveryStatus.Load(); status != 0 {
+			w.WriteHeader(int(status))
+			return
+		}
 		writeJSON(w, http.StatusOK, z.metadata())
+	})
+	mux.HandleFunc("/device/authorize", func(w http.ResponseWriter, r *http.Request) {
+		rec := z.record(r)
+		z.mu.Lock()
+		z.deviceRequests = append(z.deviceRequests, rec)
+		status, body := z.deviceStatus, z.deviceBody
+		z.mu.Unlock()
+		if !z.wait(r) {
+			return
+		}
+		writeJSON(w, status, body)
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		rec := z.record(r)
@@ -102,7 +138,11 @@ func (z *fakeZone) wait(r *http.Request) bool {
 }
 
 func (z *fakeZone) metadata() *AuthorizationServerMetadata {
-	return &AuthorizationServerMetadata{Issuer: z.URL, TokenEndpoint: z.URL + "/token"}
+	md := &AuthorizationServerMetadata{Issuer: z.URL, TokenEndpoint: z.URL + "/token"}
+	if !z.omitDeviceEndpoint.Load() {
+		md.DeviceAuthorizationEndpoint = z.URL + "/device/authorize"
+	}
+	return md
 }
 
 func (z *fakeZone) record(r *http.Request) recordedRequest {
@@ -135,6 +175,12 @@ func (z *fakeZone) script(steps ...tokenStep) {
 	z.mu.Unlock()
 }
 
+func (z *fakeZone) deviceCalls() []recordedRequest {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return append([]recordedRequest(nil), z.deviceRequests...)
+}
+
 func (z *fakeZone) tokenCalls() []recordedRequest {
 	z.mu.Lock()
 	defer z.mu.Unlock()
@@ -161,8 +207,18 @@ func (z *fakeZone) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (z *fakeZone) httpClient() *http.Client { return &http.Client{Transport: z} }
 
+// corruptGzip as a response body sends Content-Encoding gzip with a body that is not
+// gzip.
+type corruptGzip struct{}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := body.(corruptGzip); ok {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"access_token":"access-1"}`))
+		return
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }
