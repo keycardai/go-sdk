@@ -208,9 +208,9 @@ func TestRequestDeviceAuthorization_Request(t *testing.T) {
 	}
 }
 
-// Metadata without a usable device_authorization_endpoint or token_endpoint is a
-// configuration error. The client does not send a device authorization request or
-// call the credential.
+// Spec row 30: metadata without a usable device_authorization_endpoint or
+// token_endpoint is a configuration error. The client does not send a device
+// authorization request or call the credential.
 func TestRequestDeviceAuthorization_BadMetadata(t *testing.T) {
 	cases := map[string]struct {
 		// discovered uses discovery with the zone's device endpoint left out. Otherwise
@@ -541,13 +541,13 @@ func TestPollToken_Response(t *testing.T) {
 			wantCode:  "invalid_response",
 			wantPolls: 1,
 		},
-		"2xx with a body that does not decompress": {
+		"row 31: 2xx with a body that does not decompress": {
 			step:      tokenStep{status: http.StatusOK, body: corruptGzip{}},
 			wantCode:  "invalid_response",
 			wantCause: gzip.ErrHeader,
 			wantPolls: 1,
 		},
-		"503 with a body that does not decompress": {
+		"row 32: 503 with a body that does not decompress": {
 			step:      tokenStep{status: http.StatusServiceUnavailable, body: corruptGzip{}},
 			wantHTTP:  http.StatusServiceUnavailable,
 			wantPolls: 1,
