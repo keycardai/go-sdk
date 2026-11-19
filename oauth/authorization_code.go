@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // Loopback flow defaults (RFC 8252), aligned with the Python and TS SDKs.
@@ -68,6 +71,9 @@ func BuildAuthorizeURL(authorizationEndpoint string, params AuthorizeURLParams) 
 // A public client sets ClientID (sent in the body); a confidential client sets
 // ClientSecret as well and is authenticated with HTTP Basic, with ClientID omitted
 // from the body, or sets Credential instead of both.
+//
+// String, GoString, and LogValue leave out Code, CodeVerifier, and ClientSecret,
+// and show Credential's type only.
 type AuthorizationCodeExchangeRequest struct {
 	Code         string
 	CodeVerifier string
@@ -81,6 +87,24 @@ type AuthorizationCodeExchangeRequest struct {
 	Credential ApplicationCredential
 	Resource   string // optional RFC 8707 resource indicator
 }
+
+func (r AuthorizationCodeExchangeRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.AuthorizationCodeExchangeRequest", Fields: []printed.Field{
+		{Name: "RedirectURI", Key: "redirect_uri", Value: r.RedirectURI},
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(r.Credential)},
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r AuthorizationCodeExchangeRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r AuthorizationCodeExchangeRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r AuthorizationCodeExchangeRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // AuthCodeExchangeOption configures ExchangeAuthorizationCode.
 type AuthCodeExchangeOption func(*authCodeExchangeConfig)
@@ -193,6 +217,9 @@ const EphemeralCallbackPort = -1
 
 // AuthenticateRequest configures the high-level loopback login flow. Zero-valued
 // optional fields take their documented defaults.
+//
+// String, GoString, and LogValue leave out ClientSecret, and show Credential's
+// type only.
 type AuthenticateRequest struct {
 	ClientID        string
 	Scopes          []string
@@ -206,6 +233,27 @@ type AuthenticateRequest struct {
 	Credential ApplicationCredential
 	Resource   string // optional RFC 8707 resource indicator
 }
+
+func (r AuthenticateRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.AuthenticateRequest", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+		{Name: "Scopes", Key: "scopes", Value: r.Scopes},
+		{Name: "RedirectURI", Key: "redirect_uri", Value: r.RedirectURI},
+		{Name: "CallbackPort", Key: "callback_port", Value: r.CallbackPort},
+		{Name: "CallbackTimeout", Key: "callback_timeout", Value: r.CallbackTimeout},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(r.Credential)},
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r AuthenticateRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r AuthenticateRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r AuthenticateRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // AuthenticateOption configures the transport and browser launcher of the high-level flow.
 type AuthenticateOption func(*authenticateConfig)

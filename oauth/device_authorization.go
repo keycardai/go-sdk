@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 const (
@@ -74,50 +76,25 @@ type DeviceAuthorization struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// deviceAuthorizationPrinted is the form of a DeviceAuthorization that fmt and slog
-// print: every field except DeviceCode.
-type deviceAuthorizationPrinted struct {
-	UserCode                string
-	VerificationURI         string
-	VerificationURIComplete string
-	ExpiresIn               int
-	Interval                int
-	ExpiresAt               time.Time
+func (d DeviceAuthorization) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.DeviceAuthorization", Fields: []printed.Field{
+		{Name: "UserCode", Key: "user_code", Value: d.UserCode},
+		{Name: "VerificationURI", Key: "verification_uri", Value: d.VerificationURI},
+		{Name: "VerificationURIComplete", Key: "verification_uri_complete", Value: d.VerificationURIComplete},
+		{Name: "ExpiresIn", Key: "expires_in", Value: d.ExpiresIn},
+		{Name: "Interval", Key: "interval", Value: d.Interval},
+		{Name: "ExpiresAt", Key: "expires_at", Value: d.ExpiresAt},
+	}}
 }
 
-func (d DeviceAuthorization) printed() deviceAuthorizationPrinted {
-	return deviceAuthorizationPrinted{
-		UserCode:                d.UserCode,
-		VerificationURI:         d.VerificationURI,
-		VerificationURIComplete: d.VerificationURIComplete,
-		ExpiresIn:               d.ExpiresIn,
-		Interval:                d.Interval,
-		ExpiresAt:               d.ExpiresAt,
-	}
-}
+// String implements [fmt.Stringer].
+func (d DeviceAuthorization) String() string { return d.printed().String() }
 
-// String returns every field except DeviceCode, as fmt prints a struct with %+v.
-func (d DeviceAuthorization) String() string {
-	return fmt.Sprintf("%+v", d.printed())
-}
+// GoString implements [fmt.GoStringer].
+func (d DeviceAuthorization) GoString() string { return d.printed().GoString() }
 
-// GoString returns every field except DeviceCode in Go syntax.
-func (d DeviceAuthorization) GoString() string {
-	return "oauth.DeviceAuthorization" + strings.TrimPrefix(fmt.Sprintf("%#v", d.printed()), "oauth.deviceAuthorizationPrinted")
-}
-
-// LogValue returns a group with every field except DeviceCode, keyed by the JSON
-// field names.
-func (d DeviceAuthorization) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("user_code", d.UserCode),
-		slog.String("verification_uri", d.VerificationURI),
-		slog.String("verification_uri_complete", d.VerificationURIComplete),
-		slog.Int("expires_in", d.ExpiresIn),
-		slog.Int("interval", d.Interval),
-		slog.Time("expires_at", d.ExpiresAt),
-	)
-}
+// LogValue implements [slog.LogValuer].
+func (d DeviceAuthorization) LogValue() slog.Value { return d.printed().LogValue() }
 
 // deviceAuthorizationResponse is the wire format of the device authorization
 // response. Interval is a pointer so that an absent interval and an interval of 0
@@ -204,11 +181,36 @@ func WithDeviceNegativeTTL(d time.Duration) DeviceAuthorizationOption {
 // from the device's side. It reads device_authorization_endpoint and token_endpoint
 // from discovery, or from metadata set with WithDeviceMetadata. It does not keep
 // state between operations, other than the discovery cache.
+//
+// String, GoString, and LogValue show the issuer, the public client ID, and the
+// credential's type.
 type DeviceAuthorizationClient struct {
 	issuer        string
 	cfg           deviceAuthorizationConfig
 	authenticator ClientAuthenticator
 	metadata      discoveryCache[*AuthorizationServerMetadata]
+}
+
+func (c *DeviceAuthorizationClient) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.DeviceAuthorizationClient", Fields: []printed.Field{
+		{Name: "Issuer", Key: "issuer", Value: c.issuer},
+		{Name: "ClientID", Key: "client_id", Value: c.cfg.clientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(c.cfg.credential)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *DeviceAuthorizationClient) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *DeviceAuthorizationClient) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *DeviceAuthorizationClient) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // NewDeviceAuthorizationClient creates a DeviceAuthorizationClient for issuer. With

@@ -1,6 +1,11 @@
 package oauth
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/keycardai/go-sdk/internal/printed"
+)
 
 // AccessContextStatus represents the overall status of a set of token exchanges.
 type AccessContextStatus string
@@ -35,10 +40,35 @@ func (*ResourceAccessError) keycardError() {}
 
 // AccessContext holds the results of token exchanges for multiple resources. It is a
 // non-throwing result container: callers check status before accessing tokens.
+//
+// String, GoString, and LogValue show the resources that have a token, never the
+// tokens.
 type AccessContext struct {
 	tokens         map[string]*TokenResponse
 	resourceErrors map[string]ErrorDetail
 	globalError    *ErrorDetail
+}
+
+func (ac *AccessContext) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.AccessContext", Fields: []printed.Field{
+		{Name: "Resources", Key: "resources", Value: printed.Keys(ac.tokens)},
+		{Name: "ResourceErrors", Key: "resource_errors", Value: ac.resourceErrors},
+		{Name: "GlobalError", Key: "global_error", Value: ac.globalError},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (ac *AccessContext) String() string { return ac.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (ac *AccessContext) GoString() string { return ac.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (ac *AccessContext) LogValue() slog.Value {
+	if ac == nil {
+		return slog.AnyValue(nil)
+	}
+	return ac.printed().LogValue()
 }
 
 // NewAccessContext creates a new empty AccessContext.

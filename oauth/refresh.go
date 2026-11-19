@@ -3,10 +3,13 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // RefreshAuthorizationRequest is the input to RefreshAuthorization. Authenticate the
@@ -16,6 +19,9 @@ import (
 //   - ClientID and ClientSecret: a confidential client. It authenticates with HTTP
 //     Basic, and ClientID does not go in the body.
 //   - Credential: the credential's client authentication.
+//
+// String, GoString, and LogValue leave out RefreshToken and ClientSecret, and show
+// Credential's type only.
 type RefreshAuthorizationRequest struct {
 	// RefreshToken is the refresh_token from a previous token response.
 	RefreshToken string
@@ -33,6 +39,24 @@ type RefreshAuthorizationRequest struct {
 	// to a subset of the granted scopes.
 	Scopes []string
 }
+
+func (r RefreshAuthorizationRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.RefreshAuthorizationRequest", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(r.Credential)},
+		{Name: "Resources", Key: "resources", Value: r.Resources},
+		{Name: "Scopes", Key: "scopes", Value: r.Scopes},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r RefreshAuthorizationRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r RefreshAuthorizationRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r RefreshAuthorizationRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // RefreshOption configures RefreshAuthorization.
 type RefreshOption func(*refreshConfig)
