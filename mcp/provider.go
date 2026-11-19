@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/oauth"
 )
 
@@ -74,6 +76,8 @@ func WithProviderHTTPClient(c *http.Client) AuthProviderOption {
 // AuthProvider orchestrates token exchange for MCP servers. It is single-zone unless
 // constructed with a multi-zone credential (NewMultiZoneClientSecret), in which case it
 // routes each exchange to the zone that minted the request's token.
+//
+// String, GoString, and LogValue show the zone issuers and the credential's type.
 type AuthProvider struct {
 	multiZone   bool
 	defaultZone string // single-zone issuer URL ("" when multi-zone)
@@ -84,6 +88,37 @@ type AuthProvider struct {
 	// clients is keyed by zone issuer URL. A key's presence marks a configured zone;
 	// the value is that zone's token-exchange client, created lazily (nil until first use).
 	clients map[string]*oauth.TokenExchangeClient
+}
+
+func (p *AuthProvider) printed() printed.Struct {
+	return printed.Struct{Type: "mcp.AuthProvider", Fields: []printed.Field{
+		{Name: "Zones", Key: "zones", Value: p.zones()},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(p.credential)},
+	}}
+}
+
+// zones returns the configured zone issuers, sorted.
+func (p *AuthProvider) zones() []string {
+	if !p.multiZone {
+		return []string{p.defaultZone}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return printed.Keys(p.clients)
+}
+
+// String implements [fmt.Stringer].
+func (p *AuthProvider) String() string { return p.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (p *AuthProvider) GoString() string { return p.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (p *AuthProvider) LogValue() slog.Value {
+	if p == nil {
+		return slog.AnyValue(nil)
+	}
+	return p.printed().LogValue()
 }
 
 // NewAuthProvider creates a new AuthProvider with the given options. With a multi-zone

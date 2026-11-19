@@ -3,8 +3,11 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 const clientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -12,10 +15,29 @@ const clientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-typ
 // ClientAuthentication is the part of a request that authenticates the client to the
 // authorization server: headers and form fields to add to the request. It never
 // includes a grant parameter such as grant_type or subject_token_type.
+//
+// Header and Form hold the client secret or a client assertion. String, GoString,
+// and LogValue show the header and form field names, never their values.
 type ClientAuthentication struct {
 	Header http.Header
 	Form   url.Values
 }
+
+func (a ClientAuthentication) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientAuthentication", Fields: []printed.Field{
+		{Name: "Header", Key: "header", Value: printed.Keys(a.Header)},
+		{Name: "Form", Key: "form", Value: printed.Keys(a.Form)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (a ClientAuthentication) String() string { return a.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (a ClientAuthentication) GoString() string { return a.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (a ClientAuthentication) LogValue() slog.Value { return a.printed().LogValue() }
 
 // Credentials that authenticate requests to the authorization server other than
 // token exchange implement ClientAuthenticator. It is separate from

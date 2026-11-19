@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"log/slog"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/oauth"
 )
 
 // AuthInfo contains information about an authenticated request.
+//
+// String, GoString, and LogValue leave out Token.
 type AuthInfo struct {
 	Token string
 	// ClientID is the verified token's client_id claim: the OAuth client that
@@ -33,6 +37,28 @@ type AuthInfo struct {
 	// the token and is used to route the outbound exchange in a multi-zone provider.
 	Issuer string
 }
+
+func (a AuthInfo) printed() printed.Struct {
+	return printed.Struct{Type: "mcp.AuthInfo", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: a.ClientID},
+		{Name: "Subject", Key: "subject", Value: a.Subject},
+		{Name: "SubProfile", Key: "sub_profile", Value: a.SubProfile},
+		{Name: "KeycardAppID", Key: "keycard_app_id", Value: a.KeycardAppID},
+		{Name: "Scopes", Key: "scopes", Value: a.Scopes},
+		{Name: "Resource", Key: "resource", Value: a.Resource},
+		{Name: "ExpiresAt", Key: "expires_at", Value: a.ExpiresAt},
+		{Name: "Issuer", Key: "issuer", Value: a.Issuer},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (a AuthInfo) String() string { return a.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (a AuthInfo) GoString() string { return a.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (a AuthInfo) LogValue() slog.Value { return a.printed().LogValue() }
 
 // TokenVerifier verifies access tokens and returns auth information.
 type TokenVerifier interface {

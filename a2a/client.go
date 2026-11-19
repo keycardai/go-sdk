@@ -20,10 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/oauth"
 )
 
@@ -36,12 +38,36 @@ const (
 
 // DelegationClient delegates calls from one agent to another, carrying the user's
 // identity through an RFC 8693 token exchange. Construct it once per calling agent.
+//
+// String, GoString, and LogValue show the token exchange client's issuer and
+// client ID, never its secret.
 type DelegationClient struct {
 	exchange      *oauth.TokenExchangeClient
 	discovery     *ServiceDiscovery
 	httpClient    *http.Client
 	wire          wireProtocol
 	invokeTimeout time.Duration
+}
+
+func (c *DelegationClient) printed() printed.Struct {
+	return printed.Struct{Type: "a2a.DelegationClient", Fields: []printed.Field{
+		{Name: "Exchange", Key: "exchange", Value: c.exchange},
+		{Name: "InvokeTimeout", Key: "invoke_timeout", Value: c.invokeTimeout},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *DelegationClient) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *DelegationClient) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *DelegationClient) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // DelegationOption configures a DelegationClient.

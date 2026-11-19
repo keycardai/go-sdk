@@ -3,7 +3,10 @@ package oauth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // IdentityTokenSource supplies a platform-signed OIDC token for use as a client
@@ -32,9 +35,32 @@ func (f IdentityTokenFunc) IdentityToken(ctx context.Context) (string, error) { 
 // token request, token exchange or any other grant, it fetches the current
 // token from the source and attaches it as a jwt-bearer client assertion. It
 // holds no shared secret and never caches the token across requests.
+//
+// String, GoString, and LogValue show the client ID and the token source's type.
 type WorkloadIdentityCredential struct {
 	source   IdentityTokenSource
 	clientID string
+}
+
+func (w *WorkloadIdentityCredential) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.WorkloadIdentityCredential", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: w.clientID},
+		{Name: "Source", Key: "source", Value: printed.TypeName(w.source)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (w *WorkloadIdentityCredential) String() string { return w.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (w *WorkloadIdentityCredential) GoString() string { return w.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (w *WorkloadIdentityCredential) LogValue() slog.Value {
+	if w == nil {
+		return slog.AnyValue(nil)
+	}
+	return w.printed().LogValue()
 }
 
 // WorkloadIdentityOption configures a WorkloadIdentityCredential.
