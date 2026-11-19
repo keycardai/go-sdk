@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
-	"strings"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 const clientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -23,42 +23,21 @@ type ClientAuthentication struct {
 	Form   url.Values
 }
 
-// clientAuthenticationNames is the form of a ClientAuthentication that fmt and
-// slog print.
-type clientAuthenticationNames struct {
-	Header []string
-	Form   []string
+func (a ClientAuthentication) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientAuthentication", Fields: []printed.Field{
+		{Name: "Header", Key: "header", Value: printed.Keys(a.Header)},
+		{Name: "Form", Key: "form", Value: printed.Keys(a.Form)},
+	}}
 }
 
-func (a ClientAuthentication) names() clientAuthenticationNames {
-	return clientAuthenticationNames{Header: sortedKeys(a.Header), Form: sortedKeys(a.Form)}
-}
+// String implements [fmt.Stringer].
+func (a ClientAuthentication) String() string { return a.printed().String() }
 
-// String returns the header and form field names, sorted, as in
-// {Header:[Authorization] Form:[]}.
-func (a ClientAuthentication) String() string {
-	return fmt.Sprintf("%+v", a.names())
-}
+// GoString implements [fmt.GoStringer].
+func (a ClientAuthentication) GoString() string { return a.printed().GoString() }
 
-// GoString returns the header and form field names in Go syntax.
-func (a ClientAuthentication) GoString() string {
-	return "oauth.ClientAuthentication" + strings.TrimPrefix(fmt.Sprintf("%#v", a.names()), "oauth.clientAuthenticationNames")
-}
-
-// LogValue returns a group with the header and form field names, sorted.
-func (a ClientAuthentication) LogValue() slog.Value {
-	n := a.names()
-	return slog.GroupValue(slog.Any("header", n.Header), slog.Any("form", n.Form))
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
+// LogValue implements [slog.LogValuer].
+func (a ClientAuthentication) LogValue() slog.Value { return a.printed().LogValue() }
 
 // Credentials that authenticate requests to the authorization server other than
 // token exchange implement ClientAuthenticator. It is separate from

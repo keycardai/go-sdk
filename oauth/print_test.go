@@ -1,113 +1,253 @@
 package oauth
 
 import (
-	"bytes"
-	"fmt"
-	"log/slog"
-	"net/http"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed/printedtest"
 )
 
-// TestPrintLeavesOutSecrets checks every way a caller can print ClientAuthentication
-// and DeviceAuthorization: each fmt verb, and slog with the text and JSON handlers.
-// Each case lists the secret values, which no output may contain.
+// TestPrintLeavesOutSecrets builds each type that holds a secret the way a caller
+// gets it, and checks its String output and that no fmt or slog form holds a secret.
+// internal/printed checks the exact GoString and slog forms.
 func TestPrintLeavesOutSecrets(t *testing.T) {
-	basic := http.Header{}
-	setBasicAuth(basic, "client-id", "client-secret")
+	const issuer = "https://zone.example.com"
+	ctx := context.Background()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := NewPEMPrivateKeyring(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), issuer, "kid-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifiable, err := keyring.Key(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyD := key.D.String()
+
+	clientSecret, err := NewClientSecret("client-id", "client-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiZone, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		issuer:                       {ClientID: "id-a", ClientSecret: "secret-a"},
+		"https://zone-b.example.com": {ClientID: "id-b", ClientSecret: "secret-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	basic, err := clientSecret.ClientAuthentication(ctx, issuer, issuer+"/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	webIdentity := NewWebIdentity(WithClientID("client-id"), WithStorageDir(t.TempDir()), WithAudienceConfig("https://aud.example.com"))
+	if err := webIdentity.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	workload, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("client-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyManager := NewPrivateKeyManager(NewFilePrivateKeyStorage(t.TempDir()), "kid-2")
+	if err := keyManager.BootstrapIdentity(); err != nil {
+		t.Fatal(err)
+	}
+	deviceClient, err := NewDeviceAuthorizationClient(issuer, WithDeviceCredential(clientSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token := &TokenResponse{
+		AccessToken: "access-token", TokenType: "Bearer", ExpiresIn: 3600, RefreshToken: "refresh-token",
+		IDToken: "id-token", Scope: []string{"openid"}, IssuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
+	}
+	accessContext := NewAccessContext()
+	accessContext.SetToken("https://api-a.example.com", token)
+	accessContext.SetResourceError("https://api-b.example.com", ErrorDetail{Message: "denied", Code: "access_denied"})
 
 	tests := []struct {
-		name     string
-		value    any
-		secrets  []string
-		wantV    string // %v, %+v, and %s
-		wantGo   string // %#v
-		wantText string // slog.TextHandler
-		wantJSON string // slog.JSONHandler
+		name    string
+		value   any
+		want    string
+		secrets []string
 	}{
 		{
-			name:     "client secret",
-			value:    &ClientAuthentication{Header: basic, Form: url.Values{}},
-			secrets:  []string{basic.Get("Authorization"), "client-secret"},
-			wantV:    "{Header:[Authorization] Form:[]}",
-			wantGo:   `oauth.ClientAuthentication{Header:[]string{"Authorization"}, Form:[]string{}}`,
-			wantText: "v.header=[Authorization] v.form=[]",
-			wantJSON: `"v":{"header":["Authorization"],"form":[]}`,
+			name:    "ClientAuthentication with a client secret",
+			value:   basic,
+			want:    "{Header:[Authorization] Form:[]}",
+			secrets: []string{basic.Header.Get("Authorization"), "client-secret"},
 		},
 		{
-			name: "client assertion",
+			name: "ClientAuthentication with an assertion",
 			value: &ClientAuthentication{Form: url.Values{
 				"client_assertion":      {"assertion-jwt"},
 				"client_assertion_type": {clientAssertionTypeJWTBearer},
-				"client_id":             {"client-id"},
 			}},
-			secrets:  []string{"assertion-jwt"},
-			wantV:    "{Header:[] Form:[client_assertion client_assertion_type client_id]}",
-			wantGo:   `oauth.ClientAuthentication{Header:[]string{}, Form:[]string{"client_assertion", "client_assertion_type", "client_id"}}`,
-			wantText: `v.header=[] v.form="[client_assertion client_assertion_type client_id]"`,
-			wantJSON: `"v":{"header":[],"form":["client_assertion","client_assertion_type","client_id"]}`,
+			want:    "{Header:[] Form:[client_assertion client_assertion_type]}",
+			secrets: []string{"assertion-jwt"},
 		},
 		{
-			name: "device authorization",
+			name: "DeviceAuthorization",
 			value: DeviceAuthorization{
-				DeviceCode:              "device-code",
-				UserCode:                "WDJB-MJHT",
-				VerificationURI:         "https://zone.example.com/device",
-				VerificationURIComplete: "https://zone.example.com/device?user_code=WDJB-MJHT",
-				ExpiresIn:               600,
-				Interval:                5,
-				ExpiresAt:               time.Date(2026, 11, 19, 15, 0, 0, 0, time.UTC),
+				DeviceCode: "device-code", UserCode: "WDJB-MJHT", VerificationURI: issuer + "/device",
+				ExpiresIn: 600, Interval: 5, ExpiresAt: time.Date(2026, 11, 19, 15, 0, 0, 0, time.UTC),
 			},
-			secrets: []string{"device-code"},
-			wantV: "{UserCode:WDJB-MJHT VerificationURI:https://zone.example.com/device " +
-				"VerificationURIComplete:https://zone.example.com/device?user_code=WDJB-MJHT " +
+			want: "{UserCode:WDJB-MJHT VerificationURI:https://zone.example.com/device VerificationURIComplete: " +
 				"ExpiresIn:600 Interval:5 ExpiresAt:2026-11-19 15:00:00 +0000 UTC}",
-			wantGo: `oauth.DeviceAuthorization{UserCode:"WDJB-MJHT", VerificationURI:"https://zone.example.com/device", ` +
-				`VerificationURIComplete:"https://zone.example.com/device?user_code=WDJB-MJHT", ` +
-				`ExpiresIn:600, Interval:5, ExpiresAt:time.Date(2026, time.November, 19, 15, 0, 0, 0, time.UTC)}`,
-			wantText: "v.user_code=WDJB-MJHT v.verification_uri=https://zone.example.com/device " +
-				`v.verification_uri_complete="https://zone.example.com/device?user_code=WDJB-MJHT" ` +
-				"v.expires_in=600 v.interval=5 v.expires_at=2026-11-19T15:00:00.000Z",
-			wantJSON: `"v":{"user_code":"WDJB-MJHT","verification_uri":"https://zone.example.com/device",` +
-				`"verification_uri_complete":"https://zone.example.com/device?user_code=WDJB-MJHT",` +
-				`"expires_in":600,"interval":5,"expires_at":"2026-11-19T15:00:00Z"}`,
+			secrets: []string{"device-code"},
+		},
+		{
+			name:    "TokenResponse",
+			value:   token,
+			want:    "{TokenType:Bearer ExpiresIn:3600 Scope:[openid] IssuedTokenType:urn:ietf:params:oauth:token-type:access_token UserID:}",
+			secrets: []string{"access-token", "refresh-token", "id-token"},
+		},
+		{
+			name: "TokenExchangeRequest",
+			value: TokenExchangeRequest{
+				GrantType: "urn:ietf:params:oauth:grant-type:token-exchange", Resource: "https://api.example.com",
+				SubjectToken: "subject-token", SubjectTokenType: "access_token", ActorToken: "actor-token",
+				ActorTokenType: "jwt", ClientAssertion: "assertion-jwt", ClientAssertionType: "jwt-bearer", ClientID: "client-id",
+			},
+			want: "{GrantType:urn:ietf:params:oauth:grant-type:token-exchange Resource:https://api.example.com Audience: Scope: " +
+				"RequestedTokenType: SubjectTokenType:access_token ActorTokenType:jwt ClientAssertionType:jwt-bearer ClientID:client-id}",
+			secrets: []string{"subject-token", "actor-token", "assertion-jwt"},
+		},
+		{
+			name: "AuthorizationCodeExchangeRequest",
+			value: AuthorizationCodeExchangeRequest{
+				Code: "auth-code", CodeVerifier: "code-verifier", RedirectURI: "http://127.0.0.1:8765/callback",
+				ClientID: "client-id", ClientSecret: "client-secret", Credential: clientSecret,
+			},
+			want:    "{RedirectURI:http://127.0.0.1:8765/callback ClientID:client-id Credential:*oauth.ClientSecretCredential Resource:}",
+			secrets: []string{"auth-code", "code-verifier", "client-secret"},
+		},
+		{
+			name:    "AuthenticateRequest",
+			value:   AuthenticateRequest{ClientID: "client-id", Scopes: []string{"openid"}, ClientSecret: "client-secret"},
+			want:    "{ClientID:client-id Scopes:[openid] RedirectURI: CallbackPort:0 CallbackTimeout:0s Credential:<nil> Resource:}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "RefreshAuthorizationRequest",
+			value:   RefreshAuthorizationRequest{RefreshToken: "refresh-token", ClientID: "client-id", ClientSecret: "client-secret"},
+			want:    "{ClientID:client-id Credential:<nil> Resources:[] Scopes:[]}",
+			secrets: []string{"refresh-token", "client-secret"},
+		},
+		{
+			name: "RegistrationResponse",
+			value: &RegistrationResponse{
+				ClientID: "client-id", ClientSecret: "client-secret", RegistrationAccessToken: "registration-token",
+				RegistrationClientURI: issuer + "/register/client-id",
+				Raw:                   map[string]any{"client_id": "client-id", "client_secret": "client-secret"},
+			},
+			want: "{ClientID:client-id ClientIDIssuedAt:0 ClientSecretExpiresAt:0 " +
+				"RegistrationClientURI:https://zone.example.com/register/client-id Raw:[client_id client_secret]}",
+			secrets: []string{"client-secret", "registration-token"},
+		},
+		{
+			name:    "PKCEPair",
+			value:   PKCEPair{CodeVerifier: "code-verifier", CodeChallenge: "code-challenge", CodeChallengeMethod: "S256"},
+			want:    "{CodeChallenge:code-challenge CodeChallengeMethod:S256}",
+			secrets: []string{"code-verifier"},
+		},
+		{
+			name:    "ClientAuth",
+			value:   ClientAuth{ClientID: "client-id", ClientSecret: "client-secret"},
+			want:    "{ClientID:client-id}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "single-zone ClientSecretCredential",
+			value:   clientSecret,
+			want:    "{ClientID:client-id Issuers:[]}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "multi-zone ClientSecretCredential",
+			value:   multiZone,
+			want:    "{ClientID: Issuers:[https://zone-b.example.com https://zone.example.com]}",
+			secrets: []string{"secret-a", "secret-b"},
+		},
+		{
+			name:    "WebIdentityCredential",
+			value:   webIdentity,
+			want:    "{ClientID:client-id AudienceConfig:https://aud.example.com}",
+			secrets: []string{webIdentity.keyManager.privateKey.D.String()},
+		},
+		{
+			name:    "WorkloadIdentityCredential",
+			value:   workload,
+			want:    "{ClientID:client-id Source:oauth.IdentityTokenFunc}",
+			secrets: []string{"platform-token"},
+		},
+		{
+			name:    "TokenExchangeClient",
+			value:   NewTokenExchangeClient(issuer, WithClientCredentials("client-id", "client-secret")),
+			want:    "{Issuer:https://zone.example.com ClientID:client-id}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "ClientCredentialsClient",
+			value:   NewClientCredentialsClient(issuer, WithCCBasicAuth("client-id", "client-secret")),
+			want:    "{Issuer:https://zone.example.com ClientID:client-id}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "DeviceAuthorizationClient",
+			value:   deviceClient,
+			want:    "{Issuer:https://zone.example.com ClientID: Credential:*oauth.ClientSecretCredential}",
+			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "AccessContext",
+			value:   accessContext,
+			want:    "{Resources:[https://api-a.example.com] ResourceErrors:map[https://api-b.example.com:{denied access_denied  }] GlobalError:<nil>}",
+			secrets: []string{"access-token", "refresh-token", "id-token"},
+		},
+		{
+			name:    "PEMPrivateKeyring",
+			value:   keyring,
+			want:    "{Issuer:https://zone.example.com KID:kid-1}",
+			secrets: []string{keyD},
+		},
+		{
+			name:    "IdentifiableKey",
+			value:   identifiable,
+			want:    "{Key:*rsa.PrivateKey Issuer:https://zone.example.com KID:kid-1}",
+			secrets: []string{keyD},
+		},
+		{
+			name:    "PrivateKeyManager",
+			value:   keyManager,
+			want:    "{KeyID:kid-2}",
+			secrets: []string{keyManager.privateKey.D.String()},
+		},
+		{
+			name:    "JWTSigner",
+			value:   NewJWTSigner(keyring),
+			want:    "{Keyring:*oauth.PEMPrivateKeyring}",
+			secrets: []string{keyD},
 		},
 	}
-
-	// dropTime leaves the timestamp out of slog output so the expected lines are fixed.
-	dropTime := &slog.HandlerOptions{ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-		if a.Key == slog.TimeKey {
-			return slog.Attr{}
-		}
-		return a
-	}}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var text, js bytes.Buffer
-			slog.New(slog.NewTextHandler(&text, dropTime)).Info("m", "v", tt.value)
-			slog.New(slog.NewJSONHandler(&js, dropTime)).Info("m", "v", tt.value)
-
-			outputs := []struct{ format, got, want string }{
-				{"%v", fmt.Sprintf("%v", tt.value), tt.wantV},
-				{"%+v", fmt.Sprintf("%+v", tt.value), tt.wantV},
-				{"%s", fmt.Sprintf("%s", tt.value), tt.wantV},
-				{"%#v", fmt.Sprintf("%#v", tt.value), tt.wantGo},
-				{"slog text", text.String(), "level=INFO msg=m " + tt.wantText + "\n"},
-				{"slog JSON", js.String(), `{"level":"INFO","msg":"m",` + tt.wantJSON + "}\n"},
-			}
-			for _, o := range outputs {
-				if o.got != o.want {
-					t.Errorf("%s:\n got %s\nwant %s", o.format, o.got, o.want)
-				}
-				for _, s := range tt.secrets {
-					if strings.Contains(o.got, s) {
-						t.Errorf("%s output contains secret %q: %s", o.format, s, o.got)
-					}
-				}
-			}
+			printedtest.Check(t, tt.value, tt.want, tt.secrets...)
 		})
 	}
 }

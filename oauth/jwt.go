@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // DefaultLeeway is the default time leeway used when validating
@@ -180,8 +182,30 @@ func signingMethodForKey(key crypto.PrivateKey) (jwt.SigningMethod, error) {
 }
 
 // JWTSigner signs JWTs using a PrivateKeyring.
+//
+// String, GoString, and LogValue show the keyring's type only.
 type JWTSigner struct {
 	keyring PrivateKeyring
+}
+
+func (s *JWTSigner) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.JWTSigner", Fields: []printed.Field{
+		{Name: "Keyring", Key: "keyring", Value: printed.TypeName(s.keyring)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (s *JWTSigner) String() string { return s.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (s *JWTSigner) GoString() string { return s.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (s *JWTSigner) LogValue() slog.Value {
+	if s == nil {
+		return slog.AnyValue(nil)
+	}
+	return s.printed().LogValue()
 }
 
 // NewJWTSigner creates a new JWTSigner with the given private keyring.

@@ -3,17 +3,37 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // ClientAuth holds client_id and client_secret for HTTP basic auth.
+//
+// String, GoString, and LogValue leave out ClientSecret.
 type ClientAuth struct {
 	ClientID     string
 	ClientSecret string
 }
+
+func (a ClientAuth) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientAuth", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: a.ClientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (a ClientAuth) String() string { return a.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (a ClientAuth) GoString() string { return a.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (a ClientAuth) LogValue() slog.Value { return a.printed().LogValue() }
 
 // PrepareOptions provides optional context for token exchange request preparation.
 type PrepareOptions struct {
@@ -47,10 +67,34 @@ type MultiZoneCredential interface {
 // ClientSecretCredential implements ApplicationCredential using client_id/client_secret
 // basic auth. It is single-zone by default. NewMultiZoneClientSecret makes it hold
 // per-zone credentials keyed by zone issuer URL.
+//
+// String, GoString, and LogValue show the client ID or the zone issuers, never
+// a client secret.
 type ClientSecretCredential struct {
 	clientID     string
 	clientSecret string
 	zones        map[string]ClientAuth // non-nil only for a multi-zone credential
+}
+
+func (c *ClientSecretCredential) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientSecretCredential", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: c.clientID},
+		{Name: "Issuers", Key: "issuers", Value: printed.Keys(c.zones)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *ClientSecretCredential) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *ClientSecretCredential) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *ClientSecretCredential) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // NewClientSecret creates a single-zone ClientSecretCredential. It returns a
@@ -123,6 +167,9 @@ func (c *ClientSecretCredential) PrepareTokenExchangeRequest(_ context.Context, 
 }
 
 // WebIdentityCredential implements ApplicationCredential using RFC 7523 private_key_jwt.
+//
+// String, GoString, and LogValue show the client ID and audience, never the
+// private key.
 type WebIdentityCredential struct {
 	keyManager     *PrivateKeyManager
 	clientID       string
@@ -130,6 +177,27 @@ type WebIdentityCredential struct {
 
 	bootstrapOnce sync.Once
 	bootstrapErr  error
+}
+
+func (w *WebIdentityCredential) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.WebIdentityCredential", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: w.clientID},
+		{Name: "AudienceConfig", Key: "audience_config", Value: w.audienceConfig},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (w *WebIdentityCredential) String() string { return w.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (w *WebIdentityCredential) GoString() string { return w.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (w *WebIdentityCredential) LogValue() slog.Value {
+	if w == nil {
+		return slog.AnyValue(nil)
+	}
+	return w.printed().LogValue()
 }
 
 // WebIdentityOption configures a WebIdentityCredential.

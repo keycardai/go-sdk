@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // TokenExchangeRequest represents an RFC 8693 token exchange request.
+//
+// String, GoString, and LogValue leave out SubjectToken, ActorToken, and
+// ClientAssertion.
 type TokenExchangeRequest struct {
 	GrantType           string
 	Resource            string
@@ -32,7 +38,33 @@ type TokenExchangeRequest struct {
 	ClientID string
 }
 
+func (r TokenExchangeRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.TokenExchangeRequest", Fields: []printed.Field{
+		{Name: "GrantType", Key: "grant_type", Value: r.GrantType},
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+		{Name: "Audience", Key: "audience", Value: r.Audience},
+		{Name: "Scope", Key: "scope", Value: r.Scope},
+		{Name: "RequestedTokenType", Key: "requested_token_type", Value: r.RequestedTokenType},
+		{Name: "SubjectTokenType", Key: "subject_token_type", Value: r.SubjectTokenType},
+		{Name: "ActorTokenType", Key: "actor_token_type", Value: r.ActorTokenType},
+		{Name: "ClientAssertionType", Key: "client_assertion_type", Value: r.ClientAssertionType},
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r TokenExchangeRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r TokenExchangeRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r TokenExchangeRequest) LogValue() slog.Value { return r.printed().LogValue() }
+
 // TokenResponse represents an OAuth token endpoint response.
+//
+// String, GoString, and LogValue leave out AccessToken, RefreshToken, and IDToken.
+// encoding/json writes them.
 type TokenResponse struct {
 	AccessToken     string   `json:"access_token"`
 	TokenType       string   `json:"token_type"`
@@ -43,6 +75,25 @@ type TokenResponse struct {
 	IssuedTokenType string   `json:"issued_token_type,omitempty"`
 	UserID          string   `json:"user_id,omitempty"`
 }
+
+func (t TokenResponse) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.TokenResponse", Fields: []printed.Field{
+		{Name: "TokenType", Key: "token_type", Value: t.TokenType},
+		{Name: "ExpiresIn", Key: "expires_in", Value: t.ExpiresIn},
+		{Name: "Scope", Key: "scope", Value: t.Scope},
+		{Name: "IssuedTokenType", Key: "issued_token_type", Value: t.IssuedTokenType},
+		{Name: "UserID", Key: "user_id", Value: t.UserID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (t TokenResponse) String() string { return t.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (t TokenResponse) GoString() string { return t.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (t TokenResponse) LogValue() slog.Value { return t.printed().LogValue() }
 
 // TokenExchangeClientOption configures a TokenExchangeClient.
 type TokenExchangeClientOption func(*tokenExchangeConfig)
@@ -117,10 +168,33 @@ func WithTokenExchangeNegativeTTL(d time.Duration) TokenExchangeClientOption {
 // TokenExchangeClient performs RFC 8693 token exchange against an OAuth authorization server.
 // It lazily discovers the token endpoint via OAuth metadata and caches it for the
 // discovery TTL; concurrent callers share one discovery fetch.
+//
+// String, GoString, and LogValue show the issuer and client ID only.
 type TokenExchangeClient struct {
 	issuerURL string
 	cfg       tokenExchangeConfig
 	endpoint  tokenEndpointResolver
+}
+
+func (c *TokenExchangeClient) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.TokenExchangeClient", Fields: []printed.Field{
+		{Name: "Issuer", Key: "issuer", Value: c.issuerURL},
+		{Name: "ClientID", Key: "client_id", Value: c.cfg.clientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *TokenExchangeClient) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *TokenExchangeClient) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *TokenExchangeClient) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // NewTokenExchangeClient creates a new TokenExchangeClient for the given issuer.
