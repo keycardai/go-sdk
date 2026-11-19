@@ -3,8 +3,11 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
 )
 
 const clientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -12,9 +15,49 @@ const clientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-typ
 // ClientAuthentication is the part of a request that authenticates the client to the
 // authorization server: headers and form fields to add to the request. It never
 // includes a grant parameter such as grant_type or subject_token_type.
+//
+// Header and Form hold the client secret or a client assertion. String, GoString,
+// and LogValue show the header and form field names, never their values.
 type ClientAuthentication struct {
 	Header http.Header
 	Form   url.Values
+}
+
+// clientAuthenticationNames is the form of a ClientAuthentication that fmt and
+// slog print.
+type clientAuthenticationNames struct {
+	Header []string
+	Form   []string
+}
+
+func (a ClientAuthentication) names() clientAuthenticationNames {
+	return clientAuthenticationNames{Header: sortedKeys(a.Header), Form: sortedKeys(a.Form)}
+}
+
+// String returns the header and form field names, sorted, as in
+// {Header:[Authorization] Form:[]}.
+func (a ClientAuthentication) String() string {
+	return fmt.Sprintf("%+v", a.names())
+}
+
+// GoString returns the header and form field names in Go syntax.
+func (a ClientAuthentication) GoString() string {
+	return "oauth.ClientAuthentication" + strings.TrimPrefix(fmt.Sprintf("%#v", a.names()), "oauth.clientAuthenticationNames")
+}
+
+// LogValue returns a group with the header and form field names, sorted.
+func (a ClientAuthentication) LogValue() slog.Value {
+	n := a.names()
+	return slog.GroupValue(slog.Any("header", n.Header), slog.Any("form", n.Form))
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Credentials that authenticate requests to the authorization server other than
