@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -49,6 +50,9 @@ type DeviceAuthorizationRequest struct {
 // DeviceAuthorization is the device authorization response (RFC 8628 section 3.2).
 // It is a plain value. Persist it, for example as JSON, to poll from another process
 // that authenticates as the same client.
+//
+// DeviceCode is a credential: a public client redeems it with client_id alone. String,
+// GoString, and LogValue leave it out. encoding/json writes it.
 type DeviceAuthorization struct {
 	// DeviceCode is the code the device polls with. NEVER show it to the person.
 	DeviceCode string `json:"device_code"`
@@ -68,6 +72,51 @@ type DeviceAuthorization struct {
 	// ExpiresAt is the time the response was received plus ExpiresIn, read from the
 	// client's clock.
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// deviceAuthorizationPrinted is the form of a DeviceAuthorization that fmt and slog
+// print: every field except DeviceCode.
+type deviceAuthorizationPrinted struct {
+	UserCode                string
+	VerificationURI         string
+	VerificationURIComplete string
+	ExpiresIn               int
+	Interval                int
+	ExpiresAt               time.Time
+}
+
+func (d DeviceAuthorization) printed() deviceAuthorizationPrinted {
+	return deviceAuthorizationPrinted{
+		UserCode:                d.UserCode,
+		VerificationURI:         d.VerificationURI,
+		VerificationURIComplete: d.VerificationURIComplete,
+		ExpiresIn:               d.ExpiresIn,
+		Interval:                d.Interval,
+		ExpiresAt:               d.ExpiresAt,
+	}
+}
+
+// String returns every field except DeviceCode, as fmt prints a struct with %+v.
+func (d DeviceAuthorization) String() string {
+	return fmt.Sprintf("%+v", d.printed())
+}
+
+// GoString returns every field except DeviceCode in Go syntax.
+func (d DeviceAuthorization) GoString() string {
+	return "oauth.DeviceAuthorization" + strings.TrimPrefix(fmt.Sprintf("%#v", d.printed()), "oauth.deviceAuthorizationPrinted")
+}
+
+// LogValue returns a group with every field except DeviceCode, keyed by the JSON
+// field names.
+func (d DeviceAuthorization) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("user_code", d.UserCode),
+		slog.String("verification_uri", d.VerificationURI),
+		slog.String("verification_uri_complete", d.VerificationURIComplete),
+		slog.Int("expires_in", d.ExpiresIn),
+		slog.Int("interval", d.Interval),
+		slog.Time("expires_at", d.ExpiresAt),
+	)
 }
 
 // deviceAuthorizationResponse is the wire format of the device authorization
