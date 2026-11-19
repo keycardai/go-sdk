@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"net/url"
 	"testing"
@@ -248,6 +249,39 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			printedtest.Check(t, tt.value, tt.want, tt.secrets...)
+		})
+	}
+}
+
+// TestJSONKeepsSecrets checks that encoding/json still writes the values that the
+// printed forms leave out, so persisted tokens and device authorizations still work.
+func TestJSONKeepsSecrets(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{
+			name:  "TokenResponse",
+			value: &TokenResponse{AccessToken: "access-token", TokenType: "Bearer", RefreshToken: "refresh-token", IDToken: "id-token"},
+			want:  `{"access_token":"access-token","token_type":"Bearer","refresh_token":"refresh-token","id_token":"id-token"}`,
+		},
+		{
+			name:  "DeviceAuthorization",
+			value: DeviceAuthorization{DeviceCode: "device-code", UserCode: "U", VerificationURI: "https://zone.example.com/device"},
+			want: `{"device_code":"device-code","user_code":"U","verification_uri":"https://zone.example.com/device",` +
+				`"expires_in":0,"interval":0,"expires_at":"0001-01-01T00:00:00Z"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
+			}
 		})
 	}
 }
