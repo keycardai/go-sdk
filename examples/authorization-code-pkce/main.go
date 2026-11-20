@@ -43,7 +43,7 @@ func main() {
 	if token.ExpiresIn != nil {
 		fmt.Printf("Signed in. Token type %s, expires in %ds.\n", token.TokenType, *token.ExpiresIn)
 	} else {
-		fmt.Printf("Signed in. Token type %s, no expiry.\n", token.TokenType)
+		fmt.Printf("Signed in. Token type %s, expiry not stated.\n", token.TokenType)
 	}
 	fmt.Println(token.AccessToken)
 }

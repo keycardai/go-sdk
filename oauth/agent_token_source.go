@@ -53,7 +53,6 @@ type ResourceTokenSource interface {
 type AgentTokenSource struct {
 	socket     string
 	env        map[string]string
-	envSet     bool
 	workload   string
 	appID      string
 	org        string
@@ -82,7 +81,6 @@ func WithAgentEnv(env map[string]string) AgentTokenSourceOption {
 		for k, v := range env {
 			a.env[k] = v
 		}
-		a.envSet = true
 	}
 }
 
@@ -258,8 +256,10 @@ func (a *AgentTokenSource) validateRequest(resource string, scopes []string) err
 	return nil
 }
 
+// getenv reads the WithAgentEnv map whenever the option was applied, even with
+// a nil map: the option always allocates, so a non-nil env is that signal.
 func (a *AgentTokenSource) getenv(key string) string {
-	if a.envSet {
+	if a.env != nil {
 		return a.env[key]
 	}
 	return os.Getenv(key)
@@ -272,10 +272,8 @@ type issueTokenRequest struct {
 	AppID    string   `json:"appId,omitempty"`
 }
 
-// issueTokenResponse leaves Token a pointer so an absent and a null token are
-// both caught; a token that is not a string fails the decode.
 type issueTokenResponse struct {
-	Token     *string  `json:"token"`
+	Token     string   `json:"token"`
 	ExpiresAt *string  `json:"expiresAt"`
 	Scopes    []string `json:"scopes"`
 }
@@ -285,14 +283,14 @@ func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, err
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, &AgentResponseError{Message: "decoding IssueToken response", Err: err}
 	}
-	if out.Token == nil || *out.Token == "" {
+	if out.Token == "" {
 		return nil, &AgentResponseError{Message: "IssueToken response has no token"}
 	}
-	if hasControlChar(*out.Token) {
+	if hasControlChar(out.Token) {
 		return nil, &AgentResponseError{Message: "IssueToken response token contains a control character"}
 	}
 
-	tok := &TokenResponse{AccessToken: *out.Token, TokenType: "Bearer"}
+	tok := &TokenResponse{AccessToken: out.Token, TokenType: "Bearer"}
 	if out.ExpiresAt != nil {
 		// RFC3339Nano parses up to nine fractional digits, and fewer.
 		exp, err := time.Parse(time.RFC3339Nano, *out.ExpiresAt)
