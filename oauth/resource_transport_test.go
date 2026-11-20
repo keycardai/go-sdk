@@ -165,3 +165,51 @@ func TestResourceTransport_ClosesBodyOnError(t *testing.T) {
 		t.Error("request body not closed")
 	}
 }
+
+func TestResourceClient_CrossOriginRedirectIsRefused(t *testing.T) {
+	other, otherHits, _ := resourceServer(t)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/landing", http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	src := &stubResourceTokenSource{tok: &TokenResponse{AccessToken: "tok-redirect"}}
+	client, err := NewResourceClient(src, "https://api.example.com")
+	if err != nil {
+		t.Fatalf("NewResourceClient: %v", err)
+	}
+	resp, err := client.Get(origin.URL)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("cross-origin redirect followed, want an error")
+	}
+	if n := otherHits.Load(); n != 0 {
+		t.Errorf("redirect target received %d request(s) carrying the token", n)
+	}
+}
+
+func TestResourceClient_SameOriginRedirectIsFollowed(t *testing.T) {
+	var auth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/landing" {
+			http.Redirect(w, r, "/landing", http.StatusFound)
+			return
+		}
+		auth.Store(r.Header.Get("Authorization"))
+	}))
+	t.Cleanup(srv.Close)
+
+	src := &stubResourceTokenSource{tok: &TokenResponse{AccessToken: "tok-same"}}
+	client, err := NewResourceClient(src, "https://api.example.com")
+	if err != nil {
+		t.Fatalf("NewResourceClient: %v", err)
+	}
+	resp, err := client.Get(srv.URL + "/start")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got, _ := auth.Load().(string); got != "Bearer tok-same" {
+		t.Errorf("Authorization after same-origin redirect: got %q", got)
+	}
+}

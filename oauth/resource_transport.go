@@ -1,6 +1,10 @@
 package oauth
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"strings"
+)
 
 // ResourceTransport is an http.RoundTripper that authorizes every request with
 // a token from Source for Resource and Scopes, setting
@@ -10,6 +14,13 @@ import "net/http"
 // resource indicator is the caller's choice, and reconstructing it from a URL
 // would be a second opinion about which resource was approved. A client that
 // calls several resources uses one transport per resource.
+//
+// It authorizes whatever request it is given, whatever its host. An
+// http.Client strips Authorization from a cross-origin redirect only when the
+// caller set the header, not a transport, so a client that installs this
+// transport directly sends the token to every redirect target. Install it
+// through [NewResourceClient], which refuses such redirects, or give the
+// client an equivalent CheckRedirect.
 //
 // It adds no timeout: obtaining the token can wait on a human approving a
 // prompt. An error from Source is returned as is, so the Is* predicates apply
@@ -38,14 +49,32 @@ func NewResourceTransport(source ResourceTokenSource, resource string, scopes ..
 
 // NewResourceClient returns an http.Client with a ResourceTransport installed
 // and no timeout, since obtaining the token can wait on a human; bound each
-// request with its context. It returns a *ConfigurationError when source is nil
-// or resource is empty.
+// request with its context. It follows a redirect only to the origin (scheme,
+// host and port) of the request that started the chain, and fails any other
+// before it is sent, since the transport would authorize it. It returns a
+// *ConfigurationError when source is nil or resource is empty.
 func NewResourceClient(source ResourceTokenSource, resource string, scopes ...string) (*http.Client, error) {
 	t, err := NewResourceTransport(source, resource, scopes...)
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Transport: t}, nil
+	return &http.Client{Transport: t, CheckRedirect: sameOriginRedirect}, nil
+}
+
+// maxResourceRedirects keeps http.Client's default limit, which setting
+// CheckRedirect replaces.
+const maxResourceRedirects = 10
+
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxResourceRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxResourceRedirects)
+	}
+	first := via[0].URL
+	if !strings.EqualFold(req.URL.Scheme, first.Scheme) || !strings.EqualFold(req.URL.Host, first.Host) {
+		return fmt.Errorf("refusing redirect from %s://%s to %s://%s: ResourceTransport would send the token to a different origin",
+			first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // RoundTrip implements http.RoundTripper. It sets the header on a clone, since
