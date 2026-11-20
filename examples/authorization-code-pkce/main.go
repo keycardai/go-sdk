@@ -40,6 +40,10 @@ func main() {
 		log.Fatalf("authentication failed: %v", err)
 	}
 
-	fmt.Printf("Signed in. Token type %s, expires in %ds.\n", token.TokenType, token.ExpiresIn)
+	if token.ExpiresIn != nil {
+		fmt.Printf("Signed in. Token type %s, expires in %ds.\n", token.TokenType, *token.ExpiresIn)
+	} else {
+		fmt.Printf("Signed in. Token type %s, expiry not stated.\n", token.TokenType)
+	}
 	fmt.Println(token.AccessToken)
 }

@@ -98,7 +98,7 @@ func main() {
 		log.Fatalf("waiting for approval failed: %v", err)
 	}
 
-	fmt.Printf("Approved. Token type %s, expires in %ds, scopes %v.\n", token.TokenType, token.ExpiresIn, token.Scope)
+	fmt.Printf("Approved. Token type %s, %s, scopes %v.\n", token.TokenType, expiry(token), token.Scope)
 	fmt.Printf("refresh_token returned: %t\n", token.RefreshToken != "")
 	fmt.Printf("id_token returned: %t\n", token.IDToken != "")
 
@@ -113,7 +113,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("refresh for %s failed: %v", resources[0], err)
 	}
-	fmt.Printf("Token for %s: expires in %ds.\n", resources[0], narrowed.ExpiresIn)
+	fmt.Printf("Token for %s: %s.\n", resources[0], expiry(narrowed))
+}
+
+func expiry(token *oauth.TokenResponse) string {
+	if token.ExpiresIn == nil {
+		return "expiry not stated"
+	}
+	return fmt.Sprintf("expires in %ds", *token.ExpiresIn)
 }
 
 // waitForToken polls until the person approves or denies the request. After a network

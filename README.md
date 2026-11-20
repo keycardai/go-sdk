@@ -32,6 +32,7 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **Refresh**: `RefreshAuthorization` redeems a refresh token as a public client, a confidential client, or with a credential, optionally narrowed to some resources or scopes
 - **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
 - **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`. Each implements `ClientAuthenticator` for requests other than token exchange.
+- **Local agent tokens**: `AgentTokenSource` obtains a token for a resource from the Keycard agent on the same machine (`keycard run` or `keycard agent start`), with no application credential; `ResourceTransport` and `NewResourceClient` attach it to every request. See `examples/local-agent-token-source`.
 
 ### `mcp`: MCP OAuth Integration
 

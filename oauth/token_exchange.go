@@ -32,9 +32,11 @@ type TokenExchangeRequest struct {
 
 // TokenResponse represents an OAuth token endpoint response.
 type TokenResponse struct {
-	AccessToken     string   `json:"access_token"`
-	TokenType       string   `json:"token_type"`
-	ExpiresIn       int      `json:"expires_in,omitempty"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	// ExpiresIn is the token's lifetime in seconds, or nil when the response
+	// carried none, so that 0 means only a token that has already expired.
+	ExpiresIn       *int     `json:"expires_in,omitempty"`
 	RefreshToken    string   `json:"refresh_token,omitempty"`
 	IDToken         string   `json:"id_token,omitempty"`
 	Scope           []string `json:"scope,omitempty"`
@@ -218,7 +220,7 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("token response missing access_token")
 	}
-	if strings.IndexFunc(accessToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if hasControlChar(accessToken) {
 		return nil, fmt.Errorf("token response access_token contains a control character")
 	}
 
@@ -233,7 +235,8 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	}
 
 	if v, ok := raw["expires_in"].(float64); ok {
-		result.ExpiresIn = int(v)
+		expiresIn := int(v)
+		result.ExpiresIn = &expiresIn
 	}
 	if v, ok := raw["refresh_token"].(string); ok {
 		result.RefreshToken = v

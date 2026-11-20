@@ -89,8 +89,8 @@ func main() {
 
 	fmt.Printf("Access Token: %s...\n", preview(token.AccessToken))
 	fmt.Printf("Token Type:   %s\n", token.TokenType)
-	if token.ExpiresIn > 0 {
-		fmt.Printf("Expires In:   %ds\n", token.ExpiresIn)
+	if token.ExpiresIn != nil {
+		fmt.Printf("Expires In:   %ds\n", *token.ExpiresIn)
 	}
 	if len(token.Scope) > 0 {
 		fmt.Printf("Scope:        %s\n", strings.Join(token.Scope, " "))
