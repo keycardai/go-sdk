@@ -155,14 +155,52 @@ type closeTracker struct {
 func (c *closeTracker) Close() error { c.closed = true; return nil }
 
 func TestResourceTransport_ClosesBodyOnError(t *testing.T) {
-	body := &closeTracker{Reader: strings.NewReader("payload")}
-	req, _ := http.NewRequest(http.MethodPost, "http://resource.invalid", body)
-	transport := &ResourceTransport{Source: &stubResourceTokenSource{err: errors.New("no token")}, Resource: "https://api.example.com"}
-	if _, err := transport.RoundTrip(req); err == nil {
-		t.Fatal("RoundTrip succeeded")
+	tests := []struct {
+		name      string
+		transport *ResourceTransport
+	}{
+		{"source error", &ResourceTransport{Source: &stubResourceTokenSource{err: errors.New("no token")}, Resource: "https://api.example.com"}},
+		{"invalid transport", &ResourceTransport{Resource: "https://api.example.com"}},
 	}
-	if !body.closed {
-		t.Error("request body not closed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &closeTracker{Reader: strings.NewReader("payload")}
+			req, _ := http.NewRequest(http.MethodPost, "http://resource.invalid", body)
+			if _, err := tt.transport.RoundTrip(req); err == nil {
+				t.Fatal("RoundTrip succeeded")
+			}
+			if !body.closed {
+				t.Error("request body not closed")
+			}
+		})
+	}
+}
+
+type recordingRoundTripper struct{ req *http.Request }
+
+func (r *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.req = req
+	return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Request: req}, nil
+}
+
+func TestResourceTransport_SendsThroughBase(t *testing.T) {
+	base := &recordingRoundTripper{}
+	transport := &ResourceTransport{
+		Source:   &stubResourceTokenSource{tok: &TokenResponse{AccessToken: "tok-base"}},
+		Resource: "https://api.example.com",
+		Base:     base,
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://resource.invalid/", nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if base.req == nil {
+		t.Fatal("Base was not used")
+	}
+	if got := base.req.Header.Get("Authorization"); got != "Bearer tok-base" {
+		t.Errorf("Authorization at Base: got %q", got)
 	}
 }
 
