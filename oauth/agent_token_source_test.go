@@ -664,8 +664,8 @@ func TestAgentTokenSource_CancelledContext(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}
-	if strings.Contains(err.Error(), "keycard agent start") {
-		t.Errorf("a cancelled request suggests starting the agent: %v", err)
+	if msg := err.Error(); strings.Contains(msg, "cannot reach") || !strings.Contains(msg, "ended") {
+		t.Errorf("a cancelled request reads as an unreachable agent: %v", err)
 	}
 }
 
