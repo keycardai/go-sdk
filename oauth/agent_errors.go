@@ -20,6 +20,10 @@ const (
 // carrying a Connect error. Code is the Connect error code, one of the
 // AgentCode* constants or a code this package does not know yet. Message is the
 // agent's explanation, which names the remedy where there is one.
+//
+// Not every code has a predicate. invalid_argument, for instance, is what the
+// agent answers when it has no org or zone to resolve [WithAgentAppID] against;
+// read Code for those.
 type AgentError struct {
 	Code    string
 	Message string
@@ -64,10 +68,11 @@ func (*AgentResponseError) keycardError() {}
 
 // IsDeclined reports whether err is, or wraps, an AgentError with code
 // permission_denied: the human declined, the prompt expired or failed, the
-// authorization server rejected the exchange, or the agent holds no session for
-// the requested org and zone. Do not retry automatically: the agent remembers
-// approvals but not declines, so a retry puts the same prompt in front of the
-// human again.
+// authorization server rejected the exchange, the agent holds no session for
+// the requested org and zone, or the signed-in account cannot read the zone's
+// applications to resolve [WithAgentAppID]. Do not retry automatically: the
+// agent remembers approvals but not declines, so a retry puts the same prompt
+// in front of the human again.
 func IsDeclined(err error) bool { return agentCode(err) == AgentCodePermissionDenied }
 
 // IsRateLimited reports whether err is, or wraps, an AgentError with code
@@ -76,8 +81,11 @@ func IsDeclined(err error) bool { return agentCode(err) == AgentCodePermissionDe
 func IsRateLimited(err error) bool { return agentCode(err) == AgentCodeResourceExhausted }
 
 // IsPrompterUnavailable reports whether err is, or wraps, an AgentError with
-// code failed_precondition: the host has no way to ask a human. Retrying will
-// not help; a caller with another credential falls back to it.
+// code failed_precondition. Usually the host has no way to ask a human, and a
+// caller with another credential falls back to it. The agent also answers
+// failed_precondition when it cannot find its configured zone while resolving
+// [WithAgentAppID]; [AgentError.Message] says which. Retrying will not help in
+// either case.
 func IsPrompterUnavailable(err error) bool { return agentCode(err) == AgentCodeFailedPrecondition }
 
 // IsAuthorizationRequired reports whether err is, or wraps, an AgentError with
@@ -88,7 +96,7 @@ func IsAuthorizationRequired(err error) bool { return agentCode(err) == AgentCod
 
 // IsApplicationNotFound reports whether err is, or wraps, an AgentError with
 // code not_found: the id passed to [WithAgentAppID] names no application in the
-// zone.
+// zone, as found by the agent or by the authorization server.
 func IsApplicationNotFound(err error) bool { return agentCode(err) == AgentCodeNotFound }
 
 // IsUnavailable reports whether err is, or wraps, an AgentError with code
