@@ -147,6 +147,9 @@ func NewAgentTokenSource(opts ...AgentTokenSourceOption) *AgentTokenSource {
 				DialContext:       dialAgentSocket,
 				DisableKeepAlives: true,
 			},
+			// Connect never redirects, and the dialer ignores the host, so a
+			// followed redirect would re-send the request to the same socket.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
 	return a
@@ -368,10 +371,10 @@ type agentSocket struct {
 // also reads keycard.toml; this does not.
 func resolveAgentSocket(goos, socket string, getenv func(string) string) (agentSocket, error) {
 	if socket != "" {
-		return agentSocket{path: socket, rule: agentSocketFromOption}, nil
+		return agentSocket{path: socket, rule: agentSocketFromOption}.supportedOn(goos)
 	}
 	if s := getenv(AgentSocketEnv); s != "" {
-		return agentSocket{path: s, rule: agentSocketFromEnv}, nil
+		return agentSocket{path: s, rule: agentSocketFromEnv}.supportedOn(goos)
 	}
 	if goos == "windows" {
 		return agentSocket{}, &ConfigurationError{
@@ -403,6 +406,17 @@ func resolveAgentSocket(goos, socket string, getenv func(string) string) (agentS
 		}
 	}
 	return agentSocket{path: filepath.Join(dir, "agent.sock"), rule: agentSocketDefault}, nil
+}
+
+// supportedOn refuses a Windows named pipe, which `keycard run` listens on
+// there and puts in KEYCARD_SOCKET: the source dials only Unix sockets.
+func (s agentSocket) supportedOn(goos string) (agentSocket, error) {
+	if goos == "windows" && strings.HasPrefix(s.path, `\\.\pipe\`) {
+		return agentSocket{}, &ConfigurationError{
+			Message: "keycard agent: socket " + s.path + " is a Windows named pipe, which this SDK cannot dial; only Unix sockets are supported",
+		}
+	}
+	return s, nil
 }
 
 // transportError wraps a failure to reach the agent, or a connection lost
