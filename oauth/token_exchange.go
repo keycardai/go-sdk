@@ -220,7 +220,7 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("token response missing access_token")
 	}
-	if strings.IndexFunc(accessToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if hasControlChar(accessToken) {
 		return nil, fmt.Errorf("token response access_token contains a control character")
 	}
 
