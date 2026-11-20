@@ -40,27 +40,27 @@ type fakeAgent struct {
 	cache  map[string]string
 }
 
-// fakeZone signs tokens as the zone's issuer, and verifies them as a resource
+// signingZone signs tokens as the zone's issuer, and verifies them as a resource
 // server would.
-type fakeZone struct {
+type signingZone struct {
 	signer *JWTSigner
 	key    *rsa.PublicKey
 }
 
-func newFakeZone(t *testing.T) *fakeZone {
+func newSigningZone(t *testing.T) *signingZone {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generating key: %v", err)
 	}
-	return &fakeZone{
+	return &signingZone{
 		signer: NewJWTSigner(&testPrivateKeyring{key: key, issuer: testIssuer}),
 		key:    &key.PublicKey,
 	}
 }
 
 // verifier verifies a token as one the zone issued for resource.
-func (z *fakeZone) verifier(t *testing.T, resource string) *JWTVerifier {
+func (z *signingZone) verifier(t *testing.T, resource string) *JWTVerifier {
 	t.Helper()
 	return newVerifier(t, &staticTestKeyring{publicKey: z.key}, []string{testIssuer}, WithAudiences(resource))
 }
@@ -143,10 +143,10 @@ func connectError(w http.ResponseWriter, status int, code, message string) {
 
 // startFakeAgent serves a fake agent on a fresh socket and returns it with its
 // zone and the socket path.
-func startFakeAgent(t *testing.T) (*fakeAgent, *fakeZone, string) {
+func startFakeAgent(t *testing.T) (*fakeAgent, *signingZone, string) {
 	t.Helper()
 	requireUnix(t)
-	zone := newFakeZone(t)
+	zone := newSigningZone(t)
 	agent := &fakeAgent{t: t, signer: zone.signer, declinedScope: "admin", knownAppIDs: map[string]bool{"incident-digest": true}}
 	path := filepath.Join(socketTempDir(t), "agent.sock")
 	serveAgent(t, path, agent)
@@ -155,7 +155,7 @@ func startFakeAgent(t *testing.T) (*fakeAgent, *fakeZone, string) {
 
 // startResourceServer answers 200 only to a bearer token the zone issued for
 // the server's own URL.
-func startResourceServer(t *testing.T, zone *fakeZone) *httptest.Server {
+func startResourceServer(t *testing.T, zone *signingZone) *httptest.Server {
 	t.Helper()
 	var verifier *JWTVerifier
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +300,7 @@ func TestAgentIntegration_Row7_DefaultSocketReachesDaemon(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	agent := &fakeAgent{t: t, signer: newFakeZone(t).signer, requireTenant: true}
+	agent := &fakeAgent{t: t, signer: newSigningZone(t).signer, requireTenant: true}
 	serveAgent(t, path, agent)
 
 	_, err := NewAgentTokenSource(WithAgentEnv(env)).ResourceToken(context.Background(), "https://api.example.com")

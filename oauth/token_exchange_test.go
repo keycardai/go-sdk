@@ -347,3 +347,5 @@ func TestTokenExchangeClient_RejectsInvalidTokenResponse(t *testing.T) {
 		})
 	}
 }
+
+func intPtr(v int) *int { return &v }

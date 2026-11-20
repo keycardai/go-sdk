@@ -504,7 +504,7 @@ func TestPollToken_Response(t *testing.T) {
 	issued := &TokenResponse{
 		AccessToken:  "access-1",
 		TokenType:    "Bearer",
-		ExpiresIn:    3600,
+		ExpiresIn:    intPtr(3600),
 		RefreshToken: "refresh-1",
 		IDToken:      "header.claims.signature",
 		Scope:        []string{"openid"},
@@ -991,7 +991,7 @@ func TestWaitForToken(t *testing.T) {
 				want := &TokenResponse{
 					AccessToken:  "access-1",
 					TokenType:    "Bearer",
-					ExpiresIn:    3600,
+					ExpiresIn:    intPtr(3600),
 					RefreshToken: "refresh-1",
 					IDToken:      "header.claims.signature",
 					Scope:        []string{"openid"},

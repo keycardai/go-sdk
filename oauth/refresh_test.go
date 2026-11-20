@@ -20,7 +20,7 @@ func TestRefreshAuthorization(t *testing.T) {
 	rotated := &TokenResponse{
 		AccessToken:  "access-1",
 		TokenType:    "Bearer",
-		ExpiresIn:    3600,
+		ExpiresIn:    intPtr(3600),
 		RefreshToken: "refresh-1",
 		IDToken:      "header.claims.signature",
 		Scope:        []string{"openid"},
@@ -78,7 +78,7 @@ func TestRefreshAuthorization(t *testing.T) {
 			},
 			wantHeader:    formHeader,
 			wantDiscovery: 1,
-			wantToken:     &TokenResponse{AccessToken: "access-2", TokenType: "Bearer", ExpiresIn: 3600},
+			wantToken:     &TokenResponse{AccessToken: "access-2", TokenType: "Bearer", ExpiresIn: intPtr(3600)},
 		},
 		"confidential client authenticates with Basic and no body client_id": {
 			req: RefreshAuthorizationRequest{
