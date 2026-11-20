@@ -214,7 +214,12 @@ func TestAgentTokenSource_InvalidUTF8IsRefused(t *testing.T) {
 	}{
 		{"resource", newStubSource(stub), "https://api.example.com/\xff", nil},
 		{"scope", newStubSource(stub), "https://api.example.com", []string{"\xff"}},
+		{"workload", newStubSource(stub, WithAgentWorkload("report\xff")), "https://api.example.com", nil},
+		{"app id", newStubSource(stub, WithAgentAppID("digest\xff")), "https://api.example.com", nil},
 		{"org control character", newStubSource(stub, WithAgentOrg("org\r\nX-Injected: 1")), "https://api.example.com", nil},
+		{"org", newStubSource(stub, WithAgentOrg("org\xff")), "https://api.example.com", nil},
+		{"zone control character", newStubSource(stub, WithAgentZone("zone\r\nX-Injected: 1")), "https://api.example.com", nil},
+		{"zone", newStubSource(stub, WithAgentZone("zone\xff")), "https://api.example.com", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -227,6 +232,27 @@ func TestAgentTokenSource_InvalidUTF8IsRefused(t *testing.T) {
 	}
 	if n := len(stub.recorded()); n != 0 {
 		t.Errorf("requests: got %d, want 0", n)
+	}
+}
+
+func TestAgentTokenSource_OversizedResponseIsRefused(t *testing.T) {
+	stub := &stubAgent{body: `{"token":"` + strings.Repeat("a", maxAgentResponseBytes) + `"}`}
+	_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	var respErr *AgentResponseError
+	if !errors.As(err, &respErr) {
+		t.Fatalf("got %v, want *AgentResponseError", err)
+	}
+}
+
+func TestAgentTokenSource_OversizedErrorIsNotParsed(t *testing.T) {
+	stub := &stubAgent{
+		status: http.StatusForbidden,
+		body:   `{"code":"permission_denied","message":"` + strings.Repeat("a", maxAgentErrorBytes) + `"}`,
+	}
+	_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("got %v, want *HTTPError", err)
 	}
 }
 
