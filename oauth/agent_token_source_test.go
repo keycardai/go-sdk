@@ -378,6 +378,54 @@ func TestAgentTokenSource_Windows_DefaultSocketIsConfigurationError(t *testing.T
 	}
 }
 
+func TestAgentTokenSource_Windows_NamedPipeIsConfigurationError(t *testing.T) {
+	const pipe = `\\.\pipe\keycard-0b5e`
+	tests := []struct {
+		name   string
+		socket string
+		env    map[string]string
+	}{
+		{"KEYCARD_SOCKET", "", map[string]string{AgentSocketEnv: pipe}},
+		{"WithAgentSocket", pipe, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveAgentSocket("windows", tt.socket, mapGetenv(tt.env))
+			var cfgErr *ConfigurationError
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("got %v, want *ConfigurationError", err)
+			}
+			if !strings.Contains(cfgErr.Message, "named pipe") {
+				t.Errorf("message does not say named pipes are unsupported: %q", cfgErr.Message)
+			}
+		})
+	}
+}
+
+func TestAgentTokenSource_RedirectIsNotFollowed(t *testing.T) {
+	requireUnix(t)
+	path := filepath.Join(socketTempDir(t), "agent.sock")
+	var mu sync.Mutex
+	var paths []string
+	serveAgent(t, path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+	}))
+
+	_, err := NewAgentTokenSource(WithAgentSocket(path)).ResourceToken(context.Background(), "https://api.example.com")
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("got %v, want *HTTPError with status 307", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 {
+		t.Errorf("agent saw %d requests, want 1: %v", len(paths), paths)
+	}
+}
+
 func TestAgentTokenSource_Row16_ConnectFailureLeavesNoState(t *testing.T) {
 	requireUnix(t)
 	home := t.TempDir()
