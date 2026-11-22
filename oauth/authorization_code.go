@@ -214,6 +214,19 @@ type authenticateConfig struct {
 	httpClient     *http.Client
 	openBrowser    func(rawURL string) error
 	requestTimeout time.Duration
+	allowedIssuers []string
+}
+
+// WithAllowedIssuers lists the issuers the caller trusts for AuthenticateFromChallenge.
+// The issuer resolved from the challenge must equal one of them, compared without a
+// trailing slash. It is required when the request sets ClientSecret or Credential, since
+// the protected resource names the issuer that receives the client authentication.
+// Optional for a public client; when set, it is enforced the same way. When it is
+// unset and Credential is a multi-zone *ClientSecretCredential, the credential's zone
+// issuers are the allow-list. Authenticate, which takes the issuer from the caller,
+// ignores it.
+func WithAllowedIssuers(issuers ...string) AuthenticateOption {
+	return func(cfg *authenticateConfig) { cfg.allowedIssuers = issuers }
 }
 
 // WithAuthenticateHTTPClient sets the HTTP client used for discovery and code exchange.
@@ -347,10 +360,26 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 
 // AuthenticateFromChallenge resolves the issuer from an RFC 9728 WWW-Authenticate
 // challenge, then runs Authenticate against it.
+//
+// The protected resource names the issuer, so a request with ClientSecret or Credential
+// needs WithAllowedIssuers. A multi-zone *ClientSecretCredential counts as the pin: with
+// WithAllowedIssuers unset, its zone issuers are the allow-list. Without an allow-list,
+// AuthenticateFromChallenge returns a *ConfigurationError before any request. With one,
+// a resolved issuer outside it returns a *ConfigurationError after the resource metadata
+// fetch and before any request to that issuer.
 func AuthenticateFromChallenge(ctx context.Context, wwwAuthenticateHeader string, req AuthenticateRequest, opts ...AuthenticateOption) (*TokenResponse, error) {
 	cfg := authenticateConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	allowList, source := cfg.allowedIssuers, "the allowed issuers"
+	if len(allowList) == 0 {
+		if cs, ok := req.Credential.(*ClientSecretCredential); ok {
+			allowList, source = cs.Zones(), "the multi-zone ClientSecret's zone issuers"
+		}
+	}
+	if (req.ClientSecret != "" || req.Credential != nil) && len(allowList) == 0 {
+		return nil, &ConfigurationError{Message: "authenticate from challenge: set WithAllowedIssuers to send ClientSecret or Credential to an issuer resolved from a challenge"}
 	}
 	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
 	defer cancel()
@@ -359,7 +388,22 @@ func AuthenticateFromChallenge(ctx context.Context, wwwAuthenticateHeader string
 	if err != nil {
 		return nil, err
 	}
+	if len(allowList) > 0 && !issuerAllowed(issuer, allowList) {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("authenticate from challenge: the challenge resolved issuer %q, which is not in %s", issuer, source)}
+	}
 	return Authenticate(ctx, issuer, req, opts...)
+}
+
+// issuerAllowed reports whether issuer equals one of allowed, compared without a
+// trailing slash, the comparison discovery uses for its issuer check.
+func issuerAllowed(issuer string, allowed []string) bool {
+	want := strings.TrimSuffix(issuer, "/")
+	for _, a := range allowed {
+		if strings.TrimSuffix(a, "/") == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveIssuerFromChallenge reads the resource_metadata URL from an RFC 6750
