@@ -1,3 +1,20 @@
+## v0.27.0 (2026-11-22)
+
+
+- fix(oauth)!: require an issuer allow-list before sending client auth to a challenge-resolved issuer (#68)
+- * fix(oauth): require WithAllowedIssuers before sending client auth to a challenge-resolved issuer
+- AuthenticateFromChallenge takes the issuer from the protected resource's
+metadata. With ClientSecret or Credential set it now requires
+WithAllowedIssuers and checks the resolved issuer against it before any
+request to that issuer. SDK-120.
+- * fix(oauth): use a multi-zone ClientSecret's zone issuers as the challenge allow-list
+- When WithAllowedIssuers is unset and Credential is a multi-zone
+*ClientSecretCredential, AuthenticateFromChallenge checks the resolved
+issuer against the credential's zones. An explicit WithAllowedIssuers
+wins. SDK-120.
+- ---------
+- Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.26.0 (2026-11-18)
 
 
