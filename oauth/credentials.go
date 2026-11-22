@@ -98,7 +98,8 @@ func (c *ClientSecretCredential) Auth(issuer string) *ClientAuth {
 }
 
 // Zones returns the configured zone issuer URLs (nil for a single-zone credential),
-// implementing MultiZoneCredential.
+// implementing MultiZoneCredential. AuthenticateFromChallenge uses them as its
+// allow-list when WithAllowedIssuers is unset.
 func (c *ClientSecretCredential) Zones() []string {
 	if c.zones == nil {
 		return nil

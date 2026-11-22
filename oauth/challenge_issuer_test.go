@@ -183,3 +183,93 @@ func TestAuthenticate_IssuerDirectClientAuthNeedsNoAllowedIssuers(t *testing.T) 
 		t.Errorf("token request should carry HTTP Basic for c, got user %q ok=%v", as.lastAuthUser, as.lastAuthOK)
 	}
 }
+
+func TestAuthenticateFromChallenge_MultiZoneClientSecretZoneIssuerProceeds(t *testing.T) {
+	as := newAuthServer()
+	defer as.Close()
+	prm, _ := resourceMetadataServer(t, as.URL)
+	cred, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		"https://zone.keycard.cloud": {ClientID: "zone-client", ClientSecret: "zone-secret"},
+		as.URL:                       {ClientID: "c", ClientSecret: "s"},
+	})
+	if err != nil {
+		t.Fatalf("NewMultiZoneClientSecret: %v", err)
+	}
+
+	_, err = AuthenticateFromChallenge(context.Background(), challengeFor(prm),
+		AuthenticateRequest{ClientID: "c", Credential: cred, CallbackPort: EphemeralCallbackPort},
+		WithAuthenticateHTTPClient(as.Client()), WithBrowserOpener(loopbackOpener))
+	if err != nil {
+		t.Fatalf("AuthenticateFromChallenge: %v", err)
+	}
+	if !as.lastAuthOK || as.lastAuthUser != "c" {
+		t.Errorf("token request should carry HTTP Basic for c, got user %q ok=%v", as.lastAuthUser, as.lastAuthOK)
+	}
+}
+
+func TestAuthenticateFromChallenge_MultiZoneClientSecretIssuerOutsideZones(t *testing.T) {
+	issuer, issuerHits := countingServer(t)
+	prm, prmHits := resourceMetadataServer(t, issuer.URL)
+	cred, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		"https://zone.keycard.cloud":  {ClientID: "zone-client", ClientSecret: "zone-secret"},
+		"https://other.keycard.cloud": {ClientID: "other-client", ClientSecret: "other-secret"},
+	})
+	if err != nil {
+		t.Fatalf("NewMultiZoneClientSecret: %v", err)
+	}
+
+	_, err = AuthenticateFromChallenge(context.Background(), challengeFor(prm),
+		AuthenticateRequest{Credential: cred, CallbackPort: EphemeralCallbackPort}, noBrowser(t))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+	if !strings.Contains(err.Error(), issuer.URL) || !strings.Contains(err.Error(), "zone issuers") {
+		t.Errorf("error %q should name the resolved issuer %s and the zone issuers", err, issuer.URL)
+	}
+	if prmHits.Load() != 1 {
+		t.Errorf("resource metadata fetches: got %d, want 1", prmHits.Load())
+	}
+	if issuerHits.Load() != 0 {
+		t.Errorf("no request should reach the resolved issuer, got %d", issuerHits.Load())
+	}
+}
+
+func TestAuthenticateFromChallenge_ExplicitAllowedIssuersWinsOverZones(t *testing.T) {
+	issuer, issuerHits := countingServer(t)
+	prm, _ := resourceMetadataServer(t, issuer.URL)
+	cred, err := NewMultiZoneClientSecret(map[string]ClientAuth{issuer.URL: {ClientID: "c", ClientSecret: "s"}})
+	if err != nil {
+		t.Fatalf("NewMultiZoneClientSecret: %v", err)
+	}
+
+	_, err = AuthenticateFromChallenge(context.Background(), challengeFor(prm),
+		AuthenticateRequest{Credential: cred, CallbackPort: EphemeralCallbackPort},
+		WithAllowedIssuers("https://zone.keycard.cloud"), noBrowser(t))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) || !strings.Contains(err.Error(), "allowed issuers") {
+		t.Fatalf("error: got %v, want ConfigurationError naming the allowed issuers", err)
+	}
+	if issuerHits.Load() != 0 {
+		t.Errorf("no request should reach the resolved issuer, got %d", issuerHits.Load())
+	}
+}
+
+func TestAuthenticateFromChallenge_SingleZoneClientSecretNeedsAllowedIssuers(t *testing.T) {
+	issuer, issuerHits := countingServer(t)
+	prm, prmHits := resourceMetadataServer(t, issuer.URL)
+	cred, err := NewClientSecret("c", "s")
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+
+	_, err = AuthenticateFromChallenge(context.Background(), challengeFor(prm),
+		AuthenticateRequest{Credential: cred, CallbackPort: EphemeralCallbackPort}, noBrowser(t))
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+	if prmHits.Load() != 0 || issuerHits.Load() != 0 {
+		t.Errorf("no request should be sent: resource metadata %d, issuer %d", prmHits.Load(), issuerHits.Load())
+	}
+}
