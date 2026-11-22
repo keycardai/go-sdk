@@ -275,6 +275,10 @@ func TestRefreshAuthorization_Configuration(t *testing.T) {
 			req:         RefreshAuthorizationRequest{RefreshToken: "refresh-0", Credential: noClientAuthentication{}},
 			wantMessage: "credential oauth.noClientAuthentication does not provide client authentication",
 		},
+		"workload identity without a client id": {
+			req:         RefreshAuthorizationRequest{RefreshToken: "refresh-0", Credential: workloadIdentityWithoutClientID(t)},
+			wantMessage: "workload identity: client id is required for interactive grants (the public ID of a v2 token credential): set WithWorkloadClientID",
+		},
 		"neither credential nor client id": {
 			req:         RefreshAuthorizationRequest{RefreshToken: "refresh-0"},
 			wantMessage: "refresh requires a Credential or a ClientID",

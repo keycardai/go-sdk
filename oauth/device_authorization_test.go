@@ -90,6 +90,11 @@ func TestNewDeviceAuthorizationClient_Configuration(t *testing.T) {
 			opts:    []DeviceAuthorizationOption{WithDeviceCredential(noClientAuthentication{})},
 			wantErr: "credential oauth.noClientAuthentication does not provide client authentication",
 		},
+		"workload identity without a client id": {
+			issuer:  "https://zone.example.com",
+			opts:    []DeviceAuthorizationOption{WithDeviceCredential(workloadIdentityWithoutClientID(t))},
+			wantErr: "workload identity: client id is required for interactive grants (the public ID of a v2 token credential): set WithWorkloadClientID",
+		},
 		"no issuer and no metadata": {
 			opts:    []DeviceAuthorizationOption{WithDevicePublicClient("public-1")},
 			wantErr: "an issuer or metadata is required",

@@ -45,8 +45,9 @@ type WorkloadIdentityOption func(*WorkloadIdentityCredential)
 // sends it as the client_id form parameter alongside the client assertion. A v2
 // token credential is resolved by this ID and requires it; a v1 token
 // credential (deprecated) is resolved by the assertion's issuer and subject and
-// rejects it. Interactive grants (authorization code, device authorization) need
-// a v2 credential, so they need it.
+// rejects it. Interactive grants (authorization code, refresh, device
+// authorization) need a v2 credential, so they need it and return a
+// ConfigurationError before any request without it.
 func WithWorkloadClientID(clientID string) WorkloadIdentityOption {
 	return func(w *WorkloadIdentityCredential) { w.clientID = clientID }
 }

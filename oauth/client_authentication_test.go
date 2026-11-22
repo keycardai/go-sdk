@@ -333,3 +333,37 @@ func TestAddClientAuthentication(t *testing.T) {
 		})
 	}
 }
+
+func workloadIdentityWithoutClientID(t *testing.T) *WorkloadIdentityCredential {
+	t.Helper()
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		t.Error("the identity token source should not be called")
+		return "platform-token", nil
+	}))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	return cred
+}
+
+// The interactive grants need a v2 token credential, which the zone resolves by
+// client_id, so CheckClientAuthentication requires the client id.
+func TestWorkloadIdentityCheckClientAuthentication(t *testing.T) {
+	err := workloadIdentityWithoutClientID(t).CheckClientAuthentication()
+	var cfgErr *ConfigurationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("without a client id: got %v (%T), want *ConfigurationError", err, err)
+	}
+
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) { return "platform-token", nil }),
+		WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+	if err := cred.CheckClientAuthentication(); err != nil {
+		t.Errorf("with a client id: got %v, want nil", err)
+	}
+	if _, err := clientAuthenticator(cred); err != nil {
+		t.Errorf("clientAuthenticator with a client id: got %v, want nil", err)
+	}
+}
