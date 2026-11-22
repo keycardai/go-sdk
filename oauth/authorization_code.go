@@ -366,7 +366,9 @@ func Authenticate(ctx context.Context, issuer string, req AuthenticateRequest, o
 // WithAllowedIssuers unset, its zone issuers are the allow-list. Without an allow-list,
 // AuthenticateFromChallenge returns a *ConfigurationError before any request. With one,
 // a resolved issuer outside it returns a *ConfigurationError after the resource metadata
-// fetch and before any request to that issuer.
+// fetch and before any request to that issuer. A Credential that cannot authenticate
+// the client, such as a WorkloadIdentityCredential without a client id, returns a
+// *ConfigurationError before the resource metadata fetch.
 func AuthenticateFromChallenge(ctx context.Context, wwwAuthenticateHeader string, req AuthenticateRequest, opts ...AuthenticateOption) (*TokenResponse, error) {
 	cfg := authenticateConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
@@ -380,6 +382,11 @@ func AuthenticateFromChallenge(ctx context.Context, wwwAuthenticateHeader string
 	}
 	if (req.ClientSecret != "" || req.Credential != nil) && len(allowList) == 0 {
 		return nil, &ConfigurationError{Message: "authenticate from challenge: set WithAllowedIssuers to send ClientSecret or Credential to an issuer resolved from a challenge"}
+	}
+	if req.Credential != nil {
+		if _, err := clientAuthenticator(req.Credential); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := withDefaultTimeout(ctx, cfg.requestTimeout)
 	defer cancel()

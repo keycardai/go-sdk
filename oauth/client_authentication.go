@@ -21,7 +21,9 @@ type ClientAuthentication struct {
 // token exchange implement ClientAuthenticator. It is separate from
 // [ApplicationCredential], so a credential implemented outside this package does not
 // have to provide it. Operations that need it check for it with a type assertion, and
-// return a ConfigurationError before sending a request when it is missing.
+// return a ConfigurationError before sending a request when it is missing. A
+// credential that also has a CheckClientAuthentication() error method is checked
+// with it before any request, such as WorkloadIdentityCredential without a client id.
 type ClientAuthenticator interface {
 	// ClientAuthentication returns the headers and form fields that authenticate the
 	// client to the zone identified by issuer, for a request sent to endpoint. Call it
@@ -93,12 +95,35 @@ func (w *WorkloadIdentityCredential) ClientAuthentication(ctx context.Context, _
 	return &ClientAuthentication{Header: http.Header{}, Form: form}, nil
 }
 
+// CheckClientAuthentication returns a ConfigurationError when no client id is set
+// with WithWorkloadClientID. The interactive grants (authorization code, refresh,
+// device authorization) need a v2 token credential, which the zone resolves by
+// client_id, so they call it before sending any request.
+func (w *WorkloadIdentityCredential) CheckClientAuthentication() error {
+	if w.clientID == "" {
+		return &ConfigurationError{Message: "workload identity: client id is required for interactive grants (the public ID of a v2 token credential): set WithWorkloadClientID"}
+	}
+	return nil
+}
+
+// clientAuthenticationChecker is implemented by a ClientAuthenticator that can tell,
+// before any request, that it cannot authenticate the client.
+type clientAuthenticationChecker interface {
+	CheckClientAuthentication() error
+}
+
 // clientAuthenticator returns cred as a ClientAuthenticator, or a ConfigurationError
-// when cred does not implement it.
+// when cred does not implement it. When cred also has a CheckClientAuthentication
+// method, it returns that method's error. Callers run it before any request.
 func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error) {
 	ca, ok := cred.(ClientAuthenticator)
 	if !ok {
 		return nil, &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", cred)}
+	}
+	if checker, ok := cred.(clientAuthenticationChecker); ok {
+		if err := checker.CheckClientAuthentication(); err != nil {
+			return nil, err
+		}
 	}
 	return ca, nil
 }
