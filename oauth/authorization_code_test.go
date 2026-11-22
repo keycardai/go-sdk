@@ -504,7 +504,7 @@ func TestExchangeAuthorizationCode_CredentialErrorReturnedAsIs(t *testing.T) {
 
 	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
 		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceFile, Message: "token file is empty"}
-	}))
+	}), WithWorkloadClientID("acr_123"))
 	if err != nil {
 		t.Fatalf("NewWorkloadIdentity: %v", err)
 	}
@@ -629,6 +629,61 @@ func TestAuthenticate_CredentialWithoutClientIDRejected(t *testing.T) {
 	var cfgErr *ConfigurationError
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+}
+
+// The authorization code needs a v2 token credential, which the zone resolves by
+// client_id, so a WorkloadIdentityCredential without a client id fails before any
+// request, discovery included, and before the browser opens.
+func TestWorkloadIdentityWithoutClientID_FailsBeforeAnyRequest(t *testing.T) {
+	const wantMessage = "workload identity: client id is required for interactive grants (the public ID of a v2 token credential): set WithWorkloadClientID"
+	var requests int
+	zone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer zone.Close()
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		t.Error("the identity token source should not be called")
+		return "platform-token", nil
+	}))
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentity: %v", err)
+	}
+
+	for name, call := range map[string]func() error{
+		"code exchange": func() error {
+			_, err := ExchangeAuthorizationCode(context.Background(), zone.URL, AuthorizationCodeExchangeRequest{
+				Code:         "auth-code",
+				CodeVerifier: "verifier",
+				RedirectURI:  "http://127.0.0.1:8765/callback",
+				Credential:   cred,
+			}, WithAuthCodeHTTPClient(zone.Client()))
+			return err
+		},
+		"authenticate": func() error {
+			_, err := Authenticate(context.Background(), zone.URL, AuthenticateRequest{
+				ClientID:   "acr_123",
+				Credential: cred,
+			}, WithAuthenticateHTTPClient(zone.Client()),
+				WithBrowserOpener(func(string) error { t.Error("browser should not open"); return nil }))
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests = 0
+			err := call()
+			var cfgErr *ConfigurationError
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("error: got %v (%T), want *ConfigurationError", err, err)
+			}
+			if err.Error() != wantMessage {
+				t.Errorf("message: got %q, want %q", err.Error(), wantMessage)
+			}
+			if requests != 0 {
+				t.Errorf("requests: got %d, want 0", requests)
+			}
+		})
 	}
 }
 
