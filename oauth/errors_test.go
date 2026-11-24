@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestHTTPError(t *testing.T) {
@@ -51,6 +52,28 @@ func TestInsufficientScopeError(t *testing.T) {
 	}
 	if err.ErrorCode() != "insufficient_scope" {
 		t.Errorf("got %q", err.ErrorCode())
+	}
+}
+
+func TestAgentError(t *testing.T) {
+	err := &AgentError{Code: AgentCodeUnauthenticated, Message: "run keycard login"}
+	if err.Error() != "keycard agent: unauthenticated: run keycard login" {
+		t.Errorf("got %q", err.Error())
+	}
+
+	// "é" is two bytes, so 1 KiB falls mid-rune after the leading "a".
+	long := "a" + strings.Repeat("é", maxAgentErrorMessageBytes)
+	err = &AgentError{Code: AgentCodePermissionDenied, Message: long}
+	got := err.Error()
+	const prefix = "keycard agent: permission_denied: "
+	if want := prefix + long[:maxAgentErrorMessageBytes-1] + "... (truncated)"; got != want {
+		t.Errorf("got %d bytes %q..., want the first %d bytes of Message on a rune boundary", len(got), got[:64], maxAgentErrorMessageBytes-1)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("Error() is not valid UTF-8")
+	}
+	if err.Message != long {
+		t.Error("Message was changed")
 	}
 }
 

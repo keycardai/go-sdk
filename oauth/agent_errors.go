@@ -1,6 +1,9 @@
 package oauth
 
-import "errors"
+import (
+	"errors"
+	"unicode/utf8"
+)
 
 // The Connect error codes the local Keycard agent answers IssueToken with, in
 // the snake_case spelling Connect puts on the wire. The Is* predicates are the
@@ -19,7 +22,8 @@ const (
 // AgentError is a refusal from the local Keycard agent: a non-200 response
 // carrying a Connect error. Code is the Connect error code, one of the
 // AgentCode* constants or a code this package does not know yet. Message is the
-// agent's explanation, which names the remedy where there is one.
+// agent's explanation, which names the remedy where there is one. Error prints
+// at most the first 1 KiB of Message; Message itself is kept whole.
 //
 // Not every code has a predicate. invalid_argument, for instance, is what the
 // agent answers when it has no org or zone to resolve [WithAgentAppID] against;
@@ -29,8 +33,20 @@ type AgentError struct {
 	Message string
 }
 
+// maxAgentErrorMessageBytes bounds what Error prints of a message the agent
+// chose, since errors end up in logs.
+const maxAgentErrorMessageBytes = 1 << 10
+
 func (e *AgentError) Error() string {
-	return "keycard agent: " + e.Code + ": " + e.Message
+	msg := e.Message
+	if len(msg) > maxAgentErrorMessageBytes {
+		cut := maxAgentErrorMessageBytes
+		for cut > 0 && !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		msg = msg[:cut] + "... (truncated)"
+	}
+	return "keycard agent: " + e.Code + ": " + msg
 }
 
 // Retryable reports whether repeating the request unchanged could succeed: true
