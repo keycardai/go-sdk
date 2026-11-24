@@ -51,6 +51,13 @@ type ResourceTokenSource interface {
 // The source keeps no token cache; the agent caches. Every ResourceToken call
 // sends one IssueToken request. An AgentTokenSource is safe for concurrent use.
 type AgentTokenSource struct {
+	cfg agentTokenSourceConfig
+}
+
+// AgentTokenSourceOption configures an AgentTokenSource.
+type AgentTokenSourceOption func(*agentTokenSourceConfig)
+
+type agentTokenSourceConfig struct {
 	socket     string
 	env        map[string]string
 	workload   string
@@ -61,25 +68,22 @@ type AgentTokenSource struct {
 	httpClient *http.Client
 }
 
-// AgentTokenSourceOption configures an AgentTokenSource.
-type AgentTokenSourceOption func(*AgentTokenSource)
-
 // WithAgentSocket sets the path of the agent's Unix socket, overriding
 // KEYCARD_SOCKET and the daemon's default socket. Pass it when the socket's
 // directory may be shared with other users: the source does not check who
 // serves a resolved socket.
 func WithAgentSocket(path string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.socket = path }
+	return func(c *agentTokenSourceConfig) { c.socket = path }
 }
 
 // WithAgentEnv sets the environment the socket is resolved from, in place of
 // the process environment, which is then never read. A nil or empty map is an
 // empty environment. The map is copied.
 func WithAgentEnv(env map[string]string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) {
-		a.env = make(map[string]string, len(env))
+	return func(c *agentTokenSourceConfig) {
+		c.env = make(map[string]string, len(env))
 		for k, v := range env {
-			a.env[k] = v
+			c.env[k] = v
 		}
 	}
 }
@@ -87,7 +91,7 @@ func WithAgentEnv(env map[string]string) AgentTokenSourceOption {
 // WithAgentWorkload sets the name shown to the human in the approval prompt.
 // It is self-declared and unauthenticated.
 func WithAgentWorkload(name string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.workload = name }
+	return func(c *agentTokenSourceConfig) { c.workload = name }
 }
 
 // WithAgentAppID declares the Keycard application the caller acts for, by the
@@ -97,27 +101,27 @@ func WithAgentWorkload(name string) AgentTokenSourceOption {
 // accepted id on the token as keycard_declared_app_id. An id naming no
 // application in the zone fails with an error [IsApplicationNotFound] matches.
 func WithAgentAppID(id string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.appID = id }
+	return func(c *agentTokenSourceConfig) { c.appID = id }
 }
 
 // WithAgentOrg sets the organization id, sent as Keycard-Org. The multi-zone
 // daemon needs it, with [WithAgentZone]; a per-session server ignores it.
 func WithAgentOrg(org string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.org = org }
+	return func(c *agentTokenSourceConfig) { c.org = org }
 }
 
 // WithAgentZone sets the zone id, sent as Keycard-Zone, alongside
 // [WithAgentOrg].
 func WithAgentZone(zone string) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.zone = zone }
+	return func(c *agentTokenSourceConfig) { c.zone = zone }
 }
 
 // WithAgentClock sets the wall-clock source ExpiresIn is computed against.
 // Default: time.Now. A nil now is ignored.
 func WithAgentClock(now func() time.Time) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) {
+	return func(c *agentTokenSourceConfig) {
 		if now != nil {
-			a.now = now
+			c.now = now
 		}
 	}
 }
@@ -126,8 +130,8 @@ func WithAgentClock(now func() time.Time) AgentTokenSourceOption {
 // tests. The default dials the resolved Unix socket; a replacement is
 // responsible for reaching the agent itself, and should carry no timeout,
 // since a request can wait on a human.
-func WithAgentHTTPClient(c *http.Client) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.httpClient = c }
+func WithAgentHTTPClient(client *http.Client) AgentTokenSourceOption {
+	return func(c *agentTokenSourceConfig) { c.httpClient = client }
 }
 
 // NewAgentTokenSource creates an AgentTokenSource. It returns a
@@ -136,15 +140,15 @@ func WithAgentHTTPClient(c *http.Client) AgentTokenSourceOption {
 // connection and does not resolve the socket: both happen, and their errors
 // surface, on each ResourceToken call.
 func NewAgentTokenSource(opts ...AgentTokenSourceOption) (*AgentTokenSource, error) {
-	a := &AgentTokenSource{now: time.Now}
+	cfg := agentTokenSourceConfig{now: time.Now}
 	for _, opt := range opts {
-		opt(a)
+		opt(&cfg)
 	}
-	if err := a.validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if a.httpClient == nil {
-		a.httpClient = &http.Client{
+	if cfg.httpClient == nil {
+		cfg.httpClient = &http.Client{
 			// A zero Transport, not a clone of http.DefaultTransport, so that
 			// HTTP_PROXY never redirects a request meant for the socket.
 			// Keep-alives are off because the socket is resolved per call: a
@@ -159,7 +163,7 @@ func NewAgentTokenSource(opts ...AgentTokenSourceOption) (*AgentTokenSource, err
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return a, nil
+	return &AgentTokenSource{cfg: cfg}, nil
 }
 
 // ResourceToken asks the agent for a token for resource carrying scopes. The
@@ -187,7 +191,7 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 		return nil, err
 	}
 
-	sock, err := resolveAgentSocket(runtime.GOOS, a.socket, a.getenv)
+	sock, err := resolveAgentSocket(runtime.GOOS, a.cfg.socket, a.getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +205,8 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 	if err := enc.Encode(issueTokenRequest{
 		Resource: resource,
 		Scopes:   scopes,
-		Workload: a.workload,
-		AppID:    a.appID,
+		Workload: a.cfg.workload,
+		AppID:    a.cfg.appID,
 	}); err != nil {
 		return nil, fmt.Errorf("keycard agent: encoding request: %w", err)
 	}
@@ -214,14 +218,14 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Connect-Protocol-Version", "1")
-	if a.org != "" {
-		req.Header.Set("Keycard-Org", a.org)
+	if a.cfg.org != "" {
+		req.Header.Set("Keycard-Org", a.cfg.org)
 	}
-	if a.zone != "" {
-		req.Header.Set("Keycard-Zone", a.zone)
+	if a.cfg.zone != "" {
+		req.Header.Set("Keycard-Zone", a.cfg.zone)
 	}
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := a.cfg.httpClient.Do(req)
 	if err != nil {
 		return nil, sock.transportError(ctx, err)
 	}
@@ -245,7 +249,7 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 	if len(raw) > maxAgentResponseBytes {
 		return nil, &AgentResponseError{Message: "IssueToken response is over 1 MiB"}
 	}
-	return tokenFromIssueTokenResponse(raw, a.now())
+	return tokenFromIssueTokenResponse(raw, a.cfg.now())
 }
 
 // validateAgentRequest and validate refuse values the request cannot carry
@@ -264,17 +268,17 @@ func validateAgentRequest(resource string, scopes []string) error {
 	return nil
 }
 
-func (a *AgentTokenSource) validate() error {
-	if !utf8.ValidString(a.workload) {
+func (c *agentTokenSourceConfig) validate() error {
+	if !utf8.ValidString(c.workload) {
 		return &ConfigurationError{Message: "keycard agent: workload is not valid UTF-8"}
 	}
-	if !utf8.ValidString(a.appID) {
+	if !utf8.ValidString(c.appID) {
 		return &ConfigurationError{Message: "keycard agent: app id is not valid UTF-8"}
 	}
-	if !validHeaderValue(a.org) {
+	if !validHeaderValue(c.org) {
 		return &ConfigurationError{Message: "keycard agent: org contains a control character or invalid UTF-8"}
 	}
-	if !validHeaderValue(a.zone) {
+	if !validHeaderValue(c.zone) {
 		return &ConfigurationError{Message: "keycard agent: zone contains a control character or invalid UTF-8"}
 	}
 	return nil
@@ -283,8 +287,8 @@ func (a *AgentTokenSource) validate() error {
 // getenv reads the WithAgentEnv map whenever the option was applied, even with
 // a nil map: the option always allocates, so a non-nil env is that signal.
 func (a *AgentTokenSource) getenv(key string) string {
-	if a.env != nil {
-		return a.env[key]
+	if a.cfg.env != nil {
+		return a.cfg.env[key]
 	}
 	return os.Getenv(key)
 }
