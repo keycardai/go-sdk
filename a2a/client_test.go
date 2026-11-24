@@ -22,6 +22,8 @@ type fakeZone struct {
 	exchanges    int
 	lastClientID string
 	reject       bool
+	// token replaces the default Bearer token response when set.
+	token map[string]any
 }
 
 func newFakeZone(t *testing.T) *fakeZone {
@@ -41,6 +43,7 @@ func newFakeZone(t *testing.T) *fakeZone {
 		z.exchanges++
 		z.lastClientID = id
 		reject := z.reject
+		token := z.token
 		z.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -52,11 +55,14 @@ func newFakeZone(t *testing.T) *fakeZone {
 			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "exchanged-token",
-			"token_type":   "bearer",
-			"expires_in":   3600,
-		})
+		if token == nil {
+			token = map[string]any{
+				"access_token": "exchanged-token",
+				"token_type":   "bearer",
+				"expires_in":   3600,
+			}
+		}
+		_ = json.NewEncoder(w).Encode(token)
 	})
 	t.Cleanup(z.Close)
 	return z
@@ -661,5 +667,94 @@ func TestDelegationClient_Invoke_RejectsEmptySubjectToken(t *testing.T) {
 	var cfgErr *ConfigurationError
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("error: got %v, want ConfigurationError", err)
+	}
+}
+
+// The exchanged token goes where its token_type and method say
+// (credential-placement.md, Integrations). A token the SDK cannot place is not
+// sent to the agent.
+func TestDelegationClient_Invoke_PlacesCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		token      map[string]any
+		wantHeader http.Header
+		wantReason oauth.CredentialPlacementReason
+	}{
+		{
+			name: "Keycard-API-Key header",
+			token: map[string]any{
+				"access_token": "the-key",
+				"token_type":   "Keycard-API-Key",
+				"method":       map[string]any{"in": "header", "name": "X-API-Key"},
+			},
+			wantHeader: http.Header{"X-Api-Key": {"the-key"}},
+		},
+		{
+			name: "Keycard-Password headers",
+			token: map[string]any{
+				"access_token": "the-password",
+				"token_type":   "Keycard-Password",
+				"username":     "the-user",
+				"method": map[string]any{
+					"username": map[string]any{"in": "header", "name": "X-User"},
+					"password": map[string]any{"in": "header", "name": "X-Secret"},
+				},
+			},
+			wantHeader: http.Header{"X-User": {"the-user"}, "X-Secret": {"the-password"}},
+		},
+		{
+			name:       "unsupported token type",
+			token:      map[string]any{"access_token": "t", "token_type": "MAC"},
+			wantReason: oauth.PlacementUnsupportedTokenType,
+		},
+		{
+			name: "invalid method",
+			token: map[string]any{
+				"access_token": "the-key",
+				"token_type":   "Keycard-API-Key",
+				"method":       map[string]any{"in": "body", "name": "key"},
+			},
+			wantReason: oauth.PlacementInvalidMethod,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newFakeZone(t)
+			zone.token = tc.token
+			agent := newFakeAgent(t)
+
+			client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret")
+			if err != nil {
+				t.Fatalf("NewDelegationClient: %v", err)
+			}
+			_, err = client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("hi"))
+
+			if tc.wantReason != "" {
+				var pe *oauth.CredentialPlacementError
+				if !errors.As(err, &pe) || pe.Reason != tc.wantReason {
+					t.Fatalf("Invoke error: got %v, want a %s *oauth.CredentialPlacementError", err, tc.wantReason)
+				}
+				var ie *InvocationError
+				if !errors.As(err, &ie) {
+					t.Errorf("Invoke error %T is not an *InvocationError", err)
+				}
+				if n := agent.invocationCount(); n != 0 {
+					t.Errorf("agent invocations: got %d, want 0", n)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if got := agent.lastHeaders.Get("Authorization"); got != "" {
+				t.Errorf("Authorization: got %q, want none", got)
+			}
+			for name, want := range tc.wantHeader {
+				if got := agent.lastHeaders.Values(name); len(got) != 1 || got[0] != want[0] {
+					t.Errorf("%s: got %q, want %q", name, got, want)
+				}
+			}
+		})
 	}
 }
