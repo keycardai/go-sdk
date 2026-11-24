@@ -641,6 +641,8 @@ var agentCodePredicates = []struct {
 	{AgentCodeNotFound, "IsApplicationNotFound", false},
 	{AgentCodeUnavailable, "IsUnavailable", true},
 	{AgentCodeInvalidArgument, "", false},
+	{AgentCodeInternal, "", false},
+	{AgentCodeUnknown, "", false},
 }
 
 func matchingPredicates(err error) []string {

@@ -17,6 +17,8 @@ const (
 	AgentCodeNotFound           = "not_found"
 	AgentCodeUnavailable        = "unavailable"
 	AgentCodeInvalidArgument    = "invalid_argument"
+	AgentCodeInternal           = "internal"
+	AgentCodeUnknown            = "unknown"
 )
 
 // AgentError is a refusal from the local Keycard agent: a non-200 response
@@ -27,7 +29,9 @@ const (
 //
 // Not every code has a predicate. invalid_argument, for instance, is what the
 // agent answers when it has no org or zone to resolve [WithAgentAppID] against;
-// read Code for those.
+// internal is a fault in the agent, such as the authorization server returning
+// no token; and unknown is an error the agent did not classify. Read Code for
+// those.
 type AgentError struct {
 	Code    string
 	Message string
