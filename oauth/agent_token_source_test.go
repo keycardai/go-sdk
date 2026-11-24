@@ -531,6 +531,17 @@ func TestAgentTokenSource_Row26_NineFractionalDigitsAndClock(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_NilClockIsIgnored(t *testing.T) {
+	stub := &stubAgent{body: `{"token":"tok","expiresAt":"` + time.Now().Add(time.Hour).Format(time.RFC3339) + `"}`}
+	tok, err := newStubSource(stub, WithAgentClock(nil)).ResourceToken(context.Background(), "https://api.example.com")
+	if err != nil {
+		t.Fatalf("ResourceToken: %v", err)
+	}
+	if tok.ExpiresIn == nil || *tok.ExpiresIn <= 0 {
+		t.Errorf("ExpiresIn: got %v, want a positive lifetime", tok.ExpiresIn)
+	}
+}
+
 func TestAgentTokenSource_Row27_GrantedScopes(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok","scopes":["a","b"]}`}
 	tok, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com", "a")

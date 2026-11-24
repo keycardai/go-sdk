@@ -113,9 +113,13 @@ func WithAgentZone(zone string) AgentTokenSourceOption {
 }
 
 // WithAgentClock sets the wall-clock source ExpiresIn is computed against.
-// Default: time.Now.
+// Default: time.Now. A nil now is ignored.
 func WithAgentClock(now func() time.Time) AgentTokenSourceOption {
-	return func(a *AgentTokenSource) { a.now = now }
+	return func(a *AgentTokenSource) {
+		if now != nil {
+			a.now = now
+		}
+	}
 }
 
 // WithAgentHTTPClient replaces the client used to reach the agent, mainly for
