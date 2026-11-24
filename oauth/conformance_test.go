@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -94,6 +95,38 @@ func TestDeserializeTokenResponse_ExplicitTokenTypePreserved(t *testing.T) {
 	}
 	if tr.TokenType != "DPoP" {
 		t.Errorf("explicit token_type should be preserved: got %q", tr.TokenType)
+	}
+}
+
+func TestDeserializeTokenResponse_ExpiresIn(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *int
+	}{
+		{"absent is nil", `{"access_token":"at"}`, nil},
+		{"zero is kept", `{"access_token":"at","expires_in":0}`, intPtr(0)},
+		{"present", `{"access_token":"at","expires_in":3600}`, intPtr(3600)},
+		{"negative is floored at zero", `{"access_token":"at","expires_in":-5}`, intPtr(0)},
+		{"fraction is truncated", `{"access_token":"at","expires_in":59.9}`, intPtr(59)},
+		{"MaxInt32 is kept", `{"access_token":"at","expires_in":2147483647}`, intPtr(math.MaxInt32)},
+		{"above MaxInt32 is capped", `{"access_token":"at","expires_in":2147483648}`, intPtr(math.MaxInt32)},
+		{"overflowing int64 is capped", `{"access_token":"at","expires_in":1e300}`, intPtr(math.MaxInt32)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tt.body))}
+			tr, err := deserializeTokenResponse(resp)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			switch {
+			case tt.want == nil && tr.ExpiresIn != nil:
+				t.Errorf("expires_in: got %d, want nil", *tr.ExpiresIn)
+			case tt.want != nil && (tr.ExpiresIn == nil || *tr.ExpiresIn != *tt.want):
+				t.Errorf("expires_in: got %v, want %d", tr.ExpiresIn, *tt.want)
+			}
+		})
 	}
 }
 

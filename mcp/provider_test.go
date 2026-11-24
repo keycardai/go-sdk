@@ -13,10 +13,11 @@ import (
 func TestAccessContext_SetAndAccess(t *testing.T) {
 	ac := NewAccessContext()
 
+	expiresIn := 3600
 	token := &oauth.TokenResponse{
 		AccessToken: "github-token",
 		TokenType:   "bearer",
-		ExpiresIn:   3600,
+		ExpiresIn:   &expiresIn,
 	}
 
 	ac.SetToken("https://api.github.com", token)

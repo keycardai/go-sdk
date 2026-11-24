@@ -32,3 +32,32 @@ func ExampleBuildAuthorizeURL() {
 	fmt.Println(url)
 	// Output: https://zone.keycard.cloud/authorize?client_id=my-client&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback&response_type=code&scope=openid&state=xyz
 }
+
+// ExampleNewResourceClient calls a resource with a token from the local Keycard
+// agent. The socket comes from KEYCARD_SOCKET, set by `keycard run`, or is the
+// `keycard agent` daemon's default, which needs the org and zone.
+func ExampleNewResourceClient() {
+	source, err := oauth.NewAgentTokenSource(
+		oauth.WithAgentWorkload("nightly-report"),
+		oauth.WithAgentOrg("org-id"),
+		oauth.WithAgentZone("zone-id"),
+	)
+	if err != nil {
+		panic(err)
+	}
+	client, err := oauth.NewResourceClient(source, "https://api.github.com", "repo")
+	if err != nil {
+		panic(err)
+	}
+
+	resp, err := client.Get("https://api.github.com/user")
+	if oauth.IsDeclined(err) {
+		fmt.Println("the request was declined")
+		return
+	}
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	fmt.Println(resp.Status)
+}

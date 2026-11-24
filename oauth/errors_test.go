@@ -1,12 +1,14 @@
 package oauth
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestHTTPError(t *testing.T) {
@@ -54,12 +56,51 @@ func TestInsufficientScopeError(t *testing.T) {
 	}
 }
 
+func TestAgentError(t *testing.T) {
+	err := &AgentError{Code: AgentCodeUnauthenticated, Message: "run keycard login"}
+	if err.Error() != "keycard agent: unauthenticated: run keycard login" {
+		t.Errorf("got %q", err.Error())
+	}
+
+	// "é" is two bytes, so 1 KiB falls mid-rune after the leading "a".
+	long := "a" + strings.Repeat("é", maxAgentErrorMessageBytes)
+	err = &AgentError{Code: AgentCodePermissionDenied, Message: long}
+	got := err.Error()
+	const prefix = "keycard agent: permission_denied: "
+	if want := prefix + long[:maxAgentErrorMessageBytes-1] + "... (truncated)"; got != want {
+		t.Errorf("got %d bytes %q..., want the first %d bytes of Message on a rune boundary", len(got), got[:64], maxAgentErrorMessageBytes-1)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("Error() is not valid UTF-8")
+	}
+	if err.Message != long {
+		t.Error("Message was changed")
+	}
+}
+
+func TestAgentResponseError(t *testing.T) {
+	_, err := tokenFromIssueTokenResponse([]byte(`{"token":`), time.Now())
+	var respErr *AgentResponseError
+	if !errors.As(err, &respErr) {
+		t.Fatalf("got %v, want *AgentResponseError", err)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("errors.As(*json.SyntaxError) through AgentResponseError.Err: got false for %v", err)
+	}
+	if !strings.HasSuffix(err.Error(), ": "+syntaxErr.Error()) {
+		t.Errorf("Error() does not append the cause: %q", err.Error())
+	}
+}
+
 func TestKeycardErrorMarker(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
+		{"AgentError", &AgentError{Code: AgentCodeNotFound}, true},
+		{"AgentResponseError", &AgentResponseError{Message: "bad", Err: errors.New("cause")}, true},
 		{"ConfigurationError", &ConfigurationError{Message: "bad config"}, true},
 		{"DeviceAuthorizationDiscoveryError", &DeviceAuthorizationDiscoveryError{Message: "discovery", Err: errors.New("reset")}, true},
 		{"HTTPError", &HTTPError{Message: "not found", Status: 404}, true},

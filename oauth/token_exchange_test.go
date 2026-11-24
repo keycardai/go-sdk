@@ -63,8 +63,8 @@ func TestTokenExchangeClient_ExchangeToken(t *testing.T) {
 	if resp.TokenType != "bearer" {
 		t.Errorf("token_type: got %q", resp.TokenType)
 	}
-	if resp.ExpiresIn != 3600 {
-		t.Errorf("expires_in: got %d", resp.ExpiresIn)
+	if resp.ExpiresIn == nil || *resp.ExpiresIn != 3600 {
+		t.Errorf("expires_in: got %v", resp.ExpiresIn)
 	}
 	if len(resp.Scope) != 2 || resp.Scope[0] != "repo" || resp.Scope[1] != "user" {
 		t.Errorf("scope: got %v", resp.Scope)
@@ -347,3 +347,5 @@ func TestTokenExchangeClient_RejectsInvalidTokenResponse(t *testing.T) {
 		})
 	}
 }
+
+func intPtr(v int) *int { return &v }

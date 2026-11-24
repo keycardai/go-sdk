@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,9 +33,13 @@ type TokenExchangeRequest struct {
 
 // TokenResponse represents an OAuth token endpoint response.
 type TokenResponse struct {
-	AccessToken     string   `json:"access_token"`
-	TokenType       string   `json:"token_type"`
-	ExpiresIn       int      `json:"expires_in,omitempty"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	// ExpiresIn is the token's lifetime in seconds, or nil when the response
+	// carried none, so that 0 means only a token that has already expired. A
+	// negative expires_in reads as 0, and one past math.MaxInt32 as
+	// math.MaxInt32.
+	ExpiresIn       *int     `json:"expires_in,omitempty"`
 	RefreshToken    string   `json:"refresh_token,omitempty"`
 	IDToken         string   `json:"id_token,omitempty"`
 	Scope           []string `json:"scope,omitempty"`
@@ -218,7 +223,7 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("token response missing access_token")
 	}
-	if strings.IndexFunc(accessToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if hasControlChar(accessToken) {
 		return nil, fmt.Errorf("token response access_token contains a control character")
 	}
 
@@ -233,7 +238,8 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	}
 
 	if v, ok := raw["expires_in"].(float64); ok {
-		result.ExpiresIn = int(v)
+		expiresIn := clampExpiresIn(v)
+		result.ExpiresIn = &expiresIn
 	}
 	if v, ok := raw["refresh_token"].(string); ok {
 		result.RefreshToken = v
@@ -252,4 +258,20 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	}
 
 	return result, nil
+}
+
+// clampExpiresIn converts a lifetime in seconds to ExpiresIn, flooring at 0
+// and capping at math.MaxInt32. Clamp before converting: int(v) of a value
+// past int's range is implementation-defined (1e300 becomes MinInt64 on
+// amd64), and a negative lifetime would read as anything but expired.
+// MaxInt32 fits int on every platform and is past any real token's lifetime.
+func clampExpiresIn(v float64) int {
+	switch {
+	case v <= 0:
+		return 0
+	case v >= math.MaxInt32:
+		return math.MaxInt32
+	default:
+		return int(v)
+	}
 }
