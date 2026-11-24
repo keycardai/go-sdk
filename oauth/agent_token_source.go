@@ -165,6 +165,11 @@ func NewAgentTokenSource(opts ...AgentTokenSourceOption) (*AgentTokenSource, err
 // ResourceToken asks the agent for a token for resource carrying scopes. The
 // resource and scopes are sent exactly as given.
 //
+// A nil ExpiresIn on the returned token means the token does not expire: the
+// agent sends no expiresAt only for such a token. That is narrower than nil on
+// a TokenResponse from a token endpoint, which means only that the response
+// did not state a lifetime.
+//
 // The source sets no timeout: the first request for an approval waits for as
 // long as the human takes to answer the prompt, so bound it with ctx.
 //
