@@ -180,7 +180,7 @@ func TestAgentIntegration_Row1_MintWithNoApplicationCredential(t *testing.T) {
 	agent, zone, socket := startFakeAgent(t)
 	const resource = "https://api.example.com"
 
-	tok, err := NewAgentTokenSource(WithAgentSocket(socket), WithAgentWorkload("integration")).
+	tok, err := mustAgentTokenSource(t, WithAgentSocket(socket), WithAgentWorkload("integration")).
 		ResourceToken(context.Background(), resource, "read")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
@@ -200,7 +200,7 @@ func TestAgentIntegration_Row2_ResourceTransportVerifies(t *testing.T) {
 	_, zone, socket := startFakeAgent(t)
 	srv := startResourceServer(t, zone)
 
-	client, err := NewResourceClient(NewAgentTokenSource(WithAgentSocket(socket)), srv.URL, "read")
+	client, err := NewResourceClient(mustAgentTokenSource(t, WithAgentSocket(socket)), srv.URL, "read")
 	if err != nil {
 		t.Fatalf("NewResourceClient: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestAgentIntegration_Row2_ResourceTransportVerifies(t *testing.T) {
 func TestAgentIntegration_Row3_RepeatsReachTheAgent(t *testing.T) {
 	agent, zone, socket := startFakeAgent(t)
 	srv := startResourceServer(t, zone)
-	src := NewAgentTokenSource(WithAgentSocket(socket))
+	src := mustAgentTokenSource(t, WithAgentSocket(socket))
 
 	first, err := src.ResourceToken(context.Background(), srv.URL, "read")
 	if err != nil {
@@ -251,7 +251,7 @@ func TestAgentIntegration_Row3_RepeatsReachTheAgent(t *testing.T) {
 
 func TestAgentIntegration_Row4_Declined(t *testing.T) {
 	agent, _, socket := startFakeAgent(t)
-	_, err := NewAgentTokenSource(WithAgentSocket(socket)).ResourceToken(context.Background(), "https://api.example.com", "admin")
+	_, err := mustAgentTokenSource(t, WithAgentSocket(socket)).ResourceToken(context.Background(), "https://api.example.com", "admin")
 	if !IsDeclined(err) {
 		t.Fatalf("IsDeclined: got false for %v", err)
 	}
@@ -262,7 +262,7 @@ func TestAgentIntegration_Row4_Declined(t *testing.T) {
 
 func TestAgentIntegration_Row5_UnknownAppID(t *testing.T) {
 	_, _, socket := startFakeAgent(t)
-	_, err := NewAgentTokenSource(WithAgentSocket(socket), WithAgentAppID("no-such-app")).
+	_, err := mustAgentTokenSource(t, WithAgentSocket(socket), WithAgentAppID("no-such-app")).
 		ResourceToken(context.Background(), "https://api.example.com")
 	if !IsApplicationNotFound(err) {
 		t.Fatalf("IsApplicationNotFound: got false for %v", err)
@@ -271,7 +271,7 @@ func TestAgentIntegration_Row5_UnknownAppID(t *testing.T) {
 
 func TestAgentIntegration_Row6_DeclaredAppIDClaim(t *testing.T) {
 	_, zone, socket := startFakeAgent(t)
-	tok, err := NewAgentTokenSource(WithAgentSocket(socket), WithAgentAppID("incident-digest")).
+	tok, err := mustAgentTokenSource(t, WithAgentSocket(socket), WithAgentAppID("incident-digest")).
 		ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
@@ -303,12 +303,12 @@ func TestAgentIntegration_Row7_DefaultSocketReachesDaemon(t *testing.T) {
 	agent := &fakeAgent{t: t, signer: newSigningZone(t).signer, requireTenant: true}
 	serveAgent(t, path, agent)
 
-	_, err := NewAgentTokenSource(WithAgentEnv(env)).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := mustAgentTokenSource(t, WithAgentEnv(env)).ResourceToken(context.Background(), "https://api.example.com")
 	if !IsDeclined(err) {
 		t.Errorf("without org and zone: got %v, want a declined agent error", err)
 	}
 
-	tok, err := NewAgentTokenSource(WithAgentEnv(env), WithAgentOrg("org-1"), WithAgentZone("zone-1")).
+	tok, err := mustAgentTokenSource(t, WithAgentEnv(env), WithAgentOrg("org-1"), WithAgentZone("zone-1")).
 		ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
@@ -321,7 +321,7 @@ func TestAgentIntegration_Row7_DefaultSocketReachesDaemon(t *testing.T) {
 func TestAgentIntegration_Row8_DaemonStopped(t *testing.T) {
 	requireUnix(t)
 	env, path := defaultSocketEnv(t)
-	_, err := NewAgentTokenSource(WithAgentEnv(env), WithAgentOrg("org-1"), WithAgentZone("zone-1")).
+	_, err := mustAgentTokenSource(t, WithAgentEnv(env), WithAgentOrg("org-1"), WithAgentZone("zone-1")).
 		ResourceToken(context.Background(), "https://api.example.com")
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) {
@@ -339,7 +339,7 @@ func TestAgentIntegration_Row8_DaemonStopped(t *testing.T) {
 func TestAgentIntegration_SocketChangeBetweenCalls(t *testing.T) {
 	first, _, firstSocket := startFakeAgent(t)
 	second, _, secondSocket := startFakeAgent(t)
-	src := NewAgentTokenSource()
+	src := mustAgentTokenSource(t)
 
 	t.Setenv(AgentSocketEnv, firstSocket)
 	if _, err := src.ResourceToken(context.Background(), "https://api.example.com", "read"); err != nil {

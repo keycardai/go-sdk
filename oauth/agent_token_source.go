@@ -130,13 +130,18 @@ func WithAgentHTTPClient(c *http.Client) AgentTokenSourceOption {
 	return func(a *AgentTokenSource) { a.httpClient = c }
 }
 
-// NewAgentTokenSource creates an AgentTokenSource. Construction opens no
+// NewAgentTokenSource creates an AgentTokenSource. It returns a
+// *ConfigurationError when a workload or app id is not valid UTF-8, or an org or
+// zone holds a control character or invalid UTF-8. Construction opens no
 // connection and does not resolve the socket: both happen, and their errors
 // surface, on each ResourceToken call.
-func NewAgentTokenSource(opts ...AgentTokenSourceOption) *AgentTokenSource {
+func NewAgentTokenSource(opts ...AgentTokenSourceOption) (*AgentTokenSource, error) {
 	a := &AgentTokenSource{now: time.Now}
 	for _, opt := range opts {
 		opt(a)
+	}
+	if err := a.validate(); err != nil {
+		return nil, err
 	}
 	if a.httpClient == nil {
 		a.httpClient = &http.Client{
@@ -154,7 +159,7 @@ func NewAgentTokenSource(opts ...AgentTokenSourceOption) *AgentTokenSource {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return a
+	return a, nil
 }
 
 // ResourceToken asks the agent for a token for resource carrying scopes. The
@@ -173,7 +178,7 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 	if resource == "" {
 		return nil, &ConfigurationError{Message: "keycard agent: resource is required"}
 	}
-	if err := a.validateRequest(resource, scopes); err != nil {
+	if err := validateAgentRequest(resource, scopes); err != nil {
 		return nil, err
 	}
 
@@ -232,11 +237,11 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 	return tokenFromIssueTokenResponse(raw, a.now())
 }
 
-// validateRequest refuses values the request cannot carry unchanged, rather
-// than let the JSON encoder or net/http rewrite or reject them: JSON replaces
-// invalid UTF-8 with U+FFFD, which would ask for a different resource than the
-// caller named.
-func (a *AgentTokenSource) validateRequest(resource string, scopes []string) error {
+// validateAgentRequest and validate refuse values the request cannot carry
+// unchanged, rather than let the JSON encoder or net/http rewrite or reject
+// them: JSON replaces invalid UTF-8 with U+FFFD, which would ask for a
+// different resource than the caller named.
+func validateAgentRequest(resource string, scopes []string) error {
 	if !utf8.ValidString(resource) {
 		return &ConfigurationError{Message: "keycard agent: resource is not valid UTF-8"}
 	}
@@ -245,6 +250,10 @@ func (a *AgentTokenSource) validateRequest(resource string, scopes []string) err
 			return &ConfigurationError{Message: "keycard agent: scope is not valid UTF-8"}
 		}
 	}
+	return nil
+}
+
+func (a *AgentTokenSource) validate() error {
 	if !utf8.ValidString(a.workload) {
 		return &ConfigurationError{Message: "keycard agent: workload is not valid UTF-8"}
 	}

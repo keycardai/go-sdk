@@ -78,19 +78,29 @@ func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
-func newStubSource(stub http.Handler, opts ...AgentTokenSourceOption) *AgentTokenSource {
+func newStubSource(t *testing.T, stub http.Handler, opts ...AgentTokenSourceOption) *AgentTokenSource {
+	t.Helper()
 	base := []AgentTokenSourceOption{
 		WithAgentEnv(map[string]string{AgentSocketEnv: "/stub/agent.sock"}),
 		WithAgentHTTPClient(&http.Client{Transport: handlerTransport{stub}}),
 	}
-	return NewAgentTokenSource(append(base, opts...)...)
+	return mustAgentTokenSource(t, append(base, opts...)...)
+}
+
+func mustAgentTokenSource(t *testing.T, opts ...AgentTokenSourceOption) *AgentTokenSource {
+	t.Helper()
+	src, err := NewAgentTokenSource(opts...)
+	if err != nil {
+		t.Fatalf("NewAgentTokenSource: %v", err)
+	}
+	return src
 }
 
 const okBody = `{"token":"tok-123"}`
 
 func TestAgentTokenSource_Row1_Request(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	src := newStubSource(stub, WithAgentWorkload("nightly-report"))
+	src := newStubSource(t, stub, WithAgentWorkload("nightly-report"))
 
 	if _, err := src.ResourceToken(context.Background(), "https://api.example.com", "read", "write"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
@@ -123,7 +133,7 @@ func TestAgentTokenSource_Row1_Request(t *testing.T) {
 
 func TestAgentTokenSource_Row1_EmptyScopesAndWorkloadAreSent(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	if _, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
+	if _, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
 	raw := stub.recorded()[0].raw
@@ -134,11 +144,11 @@ func TestAgentTokenSource_Row1_EmptyScopesAndWorkloadAreSent(t *testing.T) {
 
 func TestAgentTokenSource_Row2_OrgAndZoneHeaders(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	src := newStubSource(stub, WithAgentOrg("org-1"), WithAgentZone("zone-1"))
+	src := newStubSource(t, stub, WithAgentOrg("org-1"), WithAgentZone("zone-1"))
 	if _, err := src.ResourceToken(context.Background(), "https://api.example.com"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
-	if _, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
+	if _, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
 
@@ -158,10 +168,10 @@ func TestAgentTokenSource_Row2_OrgAndZoneHeaders(t *testing.T) {
 
 func TestAgentTokenSource_Row3_AppID(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	if _, err := newStubSource(stub, WithAgentAppID("incident-digest")).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
+	if _, err := newStubSource(t, stub, WithAgentAppID("incident-digest")).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
-	if _, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
+	if _, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
 
@@ -177,7 +187,7 @@ func TestAgentTokenSource_Row3_AppID(t *testing.T) {
 func TestAgentTokenSource_Row4_ResourcePassThrough(t *testing.T) {
 	const resource = "HTTPS://API.Example.COM:443/a/./b/../c?x=1&y=<2>"
 	stub := &stubAgent{body: okBody}
-	if _, err := newStubSource(stub).ResourceToken(context.Background(), resource, "Read:All"); err != nil {
+	if _, err := newStubSource(t, stub).ResourceToken(context.Background(), resource, "Read:All"); err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
 	r := stub.recorded()[0]
@@ -194,7 +204,7 @@ func TestAgentTokenSource_Row4_ResourcePassThrough(t *testing.T) {
 
 func TestAgentTokenSource_Row5_EmptyResource(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	_, err := newStubSource(stub).ResourceToken(context.Background(), "")
+	_, err := newStubSource(t, stub).ResourceToken(context.Background(), "")
 	var cfgErr *ConfigurationError
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("got %v, want *ConfigurationError", err)
@@ -206,24 +216,18 @@ func TestAgentTokenSource_Row5_EmptyResource(t *testing.T) {
 
 func TestAgentTokenSource_InvalidUTF8IsRefused(t *testing.T) {
 	stub := &stubAgent{body: okBody}
+	src := newStubSource(t, stub)
 	tests := []struct {
 		name     string
-		src      *AgentTokenSource
 		resource string
 		scopes   []string
 	}{
-		{"resource", newStubSource(stub), "https://api.example.com/\xff", nil},
-		{"scope", newStubSource(stub), "https://api.example.com", []string{"\xff"}},
-		{"workload", newStubSource(stub, WithAgentWorkload("report\xff")), "https://api.example.com", nil},
-		{"app id", newStubSource(stub, WithAgentAppID("digest\xff")), "https://api.example.com", nil},
-		{"org control character", newStubSource(stub, WithAgentOrg("org\r\nX-Injected: 1")), "https://api.example.com", nil},
-		{"org", newStubSource(stub, WithAgentOrg("org\xff")), "https://api.example.com", nil},
-		{"zone control character", newStubSource(stub, WithAgentZone("zone\r\nX-Injected: 1")), "https://api.example.com", nil},
-		{"zone", newStubSource(stub, WithAgentZone("zone\xff")), "https://api.example.com", nil},
+		{"resource", "https://api.example.com/\xff", nil},
+		{"scope", "https://api.example.com", []string{"\xff"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.src.ResourceToken(context.Background(), tt.resource, tt.scopes...)
+			_, err := src.ResourceToken(context.Background(), tt.resource, tt.scopes...)
 			var cfgErr *ConfigurationError
 			if !errors.As(err, &cfgErr) {
 				t.Fatalf("got %v, want *ConfigurationError", err)
@@ -235,9 +239,35 @@ func TestAgentTokenSource_InvalidUTF8IsRefused(t *testing.T) {
 	}
 }
 
+func TestNewAgentTokenSource_InvalidOptionsAreRefused(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  AgentTokenSourceOption
+	}{
+		{"workload", WithAgentWorkload("report\xff")},
+		{"app id", WithAgentAppID("digest\xff")},
+		{"org control character", WithAgentOrg("org\r\nX-Injected: 1")},
+		{"org", WithAgentOrg("org\xff")},
+		{"zone control character", WithAgentZone("zone\r\nX-Injected: 1")},
+		{"zone", WithAgentZone("zone\xff")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src, err := NewAgentTokenSource(tt.opt)
+			var cfgErr *ConfigurationError
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("got %v, want *ConfigurationError", err)
+			}
+			if src != nil {
+				t.Error("got a source alongside the error")
+			}
+		})
+	}
+}
+
 func TestAgentTokenSource_OversizedResponseIsRefused(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"` + strings.Repeat("a", maxAgentResponseBytes) + `"}`}
-	_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 	var respErr *AgentResponseError
 	if !errors.As(err, &respErr) {
 		t.Fatalf("got %v, want *AgentResponseError", err)
@@ -249,7 +279,7 @@ func TestAgentTokenSource_OversizedErrorIsNotParsed(t *testing.T) {
 		status: http.StatusForbidden,
 		body:   `{"code":"permission_denied","message":"` + strings.Repeat("a", maxAgentErrorBytes) + `"}`,
 	}
-	_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 	var httpErr *HTTPError
 	if !errors.As(err, &httpErr) {
 		t.Fatalf("got %v, want *HTTPError", err)
@@ -269,7 +299,7 @@ func requireUnix(t *testing.T) {
 // so the dial fails.
 func dialledSocket(t *testing.T, opts ...AgentTokenSourceOption) error {
 	t.Helper()
-	_, err := NewAgentTokenSource(opts...).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := mustAgentTokenSource(t, opts...).ResourceToken(context.Background(), "https://api.example.com")
 	if err == nil {
 		t.Fatal("ResourceToken succeeded against an absent socket")
 	}
@@ -369,7 +399,7 @@ func TestAgentTokenSource_Row14_KeycardTOMLIsNotRead(t *testing.T) {
 func TestAgentTokenSource_Row15_NoHome(t *testing.T) {
 	requireUnix(t)
 	stub := &stubAgent{body: okBody}
-	src := NewAgentTokenSource(
+	src := mustAgentTokenSource(t,
 		WithAgentEnv(map[string]string{}),
 		WithAgentHTTPClient(&http.Client{Transport: handlerTransport{stub}}),
 	)
@@ -440,7 +470,7 @@ func TestAgentTokenSource_RedirectIsNotFollowed(t *testing.T) {
 		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
 	}))
 
-	_, err := NewAgentTokenSource(WithAgentSocket(path)).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := mustAgentTokenSource(t, WithAgentSocket(path)).ResourceToken(context.Background(), "https://api.example.com")
 	var httpErr *HTTPError
 	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusTemporaryRedirect {
 		t.Fatalf("got %v, want *HTTPError with status 307", err)
@@ -475,7 +505,7 @@ func TestAgentTokenSource_Row17_RealUnixSocket(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok-unix"}`}
 	serveAgent(t, path, stub)
 
-	tok, err := NewAgentTokenSource(WithAgentSocket(path)).ResourceToken(context.Background(), "https://api.example.com")
+	tok, err := mustAgentTokenSource(t, WithAgentSocket(path)).ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -486,7 +516,7 @@ func TestAgentTokenSource_Row17_RealUnixSocket(t *testing.T) {
 
 func TestAgentTokenSource_Row18_NoSDKCache(t *testing.T) {
 	stub := &stubAgent{body: okBody}
-	src := newStubSource(stub)
+	src := newStubSource(t, stub)
 	for range 2 {
 		if _, err := src.ResourceToken(context.Background(), "https://api.example.com", "read"); err != nil {
 			t.Fatalf("ResourceToken: %v", err)
@@ -498,7 +528,7 @@ func TestAgentTokenSource_Row18_NoSDKCache(t *testing.T) {
 }
 
 func TestAgentTokenSource_Row24_NoExpiresAt(t *testing.T) {
-	tok, err := newStubSource(&stubAgent{body: okBody}).ResourceToken(context.Background(), "https://api.example.com")
+	tok, err := newStubSource(t, &stubAgent{body: okBody}).ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -509,7 +539,7 @@ func TestAgentTokenSource_Row24_NoExpiresAt(t *testing.T) {
 
 func TestAgentTokenSource_Row25_ExpiresAtInThePast(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok","expiresAt":"2020-01-01T00:00:00Z"}`}
-	tok, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	tok, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -521,7 +551,7 @@ func TestAgentTokenSource_Row25_ExpiresAtInThePast(t *testing.T) {
 func TestAgentTokenSource_Row26_NineFractionalDigitsAndClock(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	stub := &stubAgent{body: `{"token":"tok","expiresAt":"2030-01-01T00:01:40.123456789Z"}`}
-	src := newStubSource(stub, WithAgentClock(func() time.Time { return now }))
+	src := newStubSource(t, stub, WithAgentClock(func() time.Time { return now }))
 	tok, err := src.ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
@@ -533,7 +563,7 @@ func TestAgentTokenSource_Row26_NineFractionalDigitsAndClock(t *testing.T) {
 
 func TestAgentTokenSource_NilClockIsIgnored(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok","expiresAt":"` + time.Now().Add(time.Hour).Format(time.RFC3339) + `"}`}
-	tok, err := newStubSource(stub, WithAgentClock(nil)).ResourceToken(context.Background(), "https://api.example.com")
+	tok, err := newStubSource(t, stub, WithAgentClock(nil)).ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -544,7 +574,7 @@ func TestAgentTokenSource_NilClockIsIgnored(t *testing.T) {
 
 func TestAgentTokenSource_Row27_GrantedScopes(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok","scopes":["a","b"]}`}
-	tok, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com", "a")
+	tok, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com", "a")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -555,7 +585,7 @@ func TestAgentTokenSource_Row27_GrantedScopes(t *testing.T) {
 
 func TestAgentTokenSource_Row28_NoGrantedScopes(t *testing.T) {
 	for _, body := range []string{`{"token":"tok"}`, `{"token":"tok","scopes":[]}`} {
-		tok, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com", "a")
+		tok, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com", "a")
 		if err != nil {
 			t.Fatalf("ResourceToken: %v", err)
 		}
@@ -607,7 +637,7 @@ func TestAgentTokenSource_Row29_ConnectErrorCodes(t *testing.T) {
 				status: http.StatusForbidden,
 				body:   `{"code":"` + tt.code + `","message":"run keycard login"}`,
 			}
-			_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+			_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 			var agentErr *AgentError
 			if !errors.As(err, &agentErr) {
 				t.Fatalf("got %v, want *AgentError", err)
@@ -648,7 +678,7 @@ func TestAgentTokenSource_Row31_NonConnectErrorResponse(t *testing.T) {
 	}
 	for _, body := range bodies {
 		stub := &stubAgent{status: http.StatusBadGateway, body: body}
-		_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+		_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 		var httpErr *HTTPError
 		if !errors.As(err, &httpErr) || httpErr.Status != http.StatusBadGateway {
 			t.Errorf("%s: got %v, want *HTTPError with status 502", body, err)
@@ -670,7 +700,7 @@ func TestAgentTokenSource_Row32_UnusableToken(t *testing.T) {
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
-			_, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
+			_, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
 			var respErr *AgentResponseError
 			if !errors.As(err, &respErr) {
 				t.Fatalf("got %v, want *AgentResponseError", err)
@@ -685,7 +715,7 @@ func TestAgentTokenSource_Row32_UnusableToken(t *testing.T) {
 func TestAgentTokenSource_Row33_ControlCharacterInToken(t *testing.T) {
 	const secret = "secret-token-value"
 	stub := &stubAgent{body: `{"token":"` + secret + `\r\nX-Injected: 1"}`}
-	_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 	var respErr *AgentResponseError
 	if !errors.As(err, &respErr) {
 		t.Fatalf("got %v, want *AgentResponseError", err)
@@ -706,7 +736,7 @@ func TestAgentTokenSource_InvalidUTF8ResponseIsRefused(t *testing.T) {
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
-			_, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
+			_, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
 			var respErr *AgentResponseError
 			if !errors.As(err, &respErr) {
 				t.Fatalf("got %v, want *AgentResponseError", err)
@@ -721,7 +751,7 @@ func TestAgentTokenSource_InvalidUTF8ResponseIsRefused(t *testing.T) {
 func TestAgentTokenSource_UnparseableExpiresAt(t *testing.T) {
 	for _, expiresAt := range []string{`"tomorrow"`, `""`, `1700000000`} {
 		stub := &stubAgent{body: `{"token":"secret-token-value","expiresAt":` + expiresAt + `}`}
-		_, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+		_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 		var respErr *AgentResponseError
 		if !errors.As(err, &respErr) {
 			t.Errorf("expiresAt %s: got %v, want *AgentResponseError", expiresAt, err)
@@ -750,7 +780,7 @@ func TestAgentTokenSource_Row39_ScopesNotAnArrayOfStrings(t *testing.T) {
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
-			tok, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com", "a")
+			tok, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com", "a")
 			var respErr *AgentResponseError
 			if !errors.As(err, &respErr) {
 				t.Fatalf("got token %v, error %v, want *AgentResponseError", tok, err)
@@ -761,7 +791,7 @@ func TestAgentTokenSource_Row39_ScopesNotAnArrayOfStrings(t *testing.T) {
 
 func TestAgentTokenSource_Row40_NullExpiresAt(t *testing.T) {
 	stub := &stubAgent{body: `{"token":"tok","expiresAt":null}`}
-	tok, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	tok, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
 	if err != nil {
 		t.Fatalf("ResourceToken: %v", err)
 	}
@@ -806,7 +836,7 @@ func TestAgentTokenSource_CancelledContext(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := NewAgentTokenSource(WithAgentSocket(path)).ResourceToken(ctx, "https://api.example.com")
+	_, err := mustAgentTokenSource(t, WithAgentSocket(path)).ResourceToken(ctx, "https://api.example.com")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}

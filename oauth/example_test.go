@@ -37,11 +37,14 @@ func ExampleBuildAuthorizeURL() {
 // agent. The socket comes from KEYCARD_SOCKET, set by `keycard run`, or is the
 // `keycard agent` daemon's default, which needs the org and zone.
 func ExampleNewResourceClient() {
-	source := oauth.NewAgentTokenSource(
+	source, err := oauth.NewAgentTokenSource(
 		oauth.WithAgentWorkload("nightly-report"),
 		oauth.WithAgentOrg("org-id"),
 		oauth.WithAgentZone("zone-id"),
 	)
+	if err != nil {
+		panic(err)
+	}
 	client, err := oauth.NewResourceClient(source, "https://api.github.com", "repo")
 	if err != nil {
 		panic(err)

@@ -62,12 +62,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	source := oauth.NewAgentTokenSource(
+	source, err := oauth.NewAgentTokenSource(
 		oauth.WithAgentWorkload("local-agent-token-source example"),
 		oauth.WithAgentOrg(os.Getenv("KEYCARD_ORG")),
 		oauth.WithAgentZone(os.Getenv("KEYCARD_ZONE")),
 		oauth.WithAgentAppID(os.Getenv("KEYCARD_APP_ID")),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Printf("Requesting a token for %s; approve the prompt if one appears...\n", resource)
 	token, err := source.ResourceToken(ctx, resource, scopes...)
