@@ -725,6 +725,26 @@ func TestAgentTokenSource_Row39_ScopesNotAnArrayOfStrings(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_Row40_NullExpiresAt(t *testing.T) {
+	stub := &stubAgent{body: `{"token":"tok","expiresAt":null}`}
+	tok, err := newStubSource(stub).ResourceToken(context.Background(), "https://api.example.com")
+	if err != nil {
+		t.Fatalf("ResourceToken: %v", err)
+	}
+	if tok.ExpiresIn != nil {
+		t.Errorf("ExpiresIn: got %d, want nil", *tok.ExpiresIn)
+	}
+}
+
+func TestAgentTokenSource_Row41_EmptySocketFallsBackToEnv(t *testing.T) {
+	fromEnv := filepath.Join(t.TempDir(), "env.sock")
+	err := dialledSocket(t, WithAgentSocket(""), WithAgentEnv(map[string]string{AgentSocketEnv: fromEnv}))
+	assertNamesSocket(t, err, fromEnv)
+	if !strings.Contains(err.Error(), AgentSocketEnv) {
+		t.Errorf("error does not name the rule: %v", err)
+	}
+}
+
 func TestAgentErrors_KeycardErrorMarker(t *testing.T) {
 	for _, err := range []error{&AgentError{Code: AgentCodeNotFound}, &AgentResponseError{Message: "bad"}} {
 		var kc KeycardError
