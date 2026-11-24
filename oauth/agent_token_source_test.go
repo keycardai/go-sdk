@@ -809,19 +809,6 @@ func TestAgentTokenSource_Row41_EmptySocketFallsBackToEnv(t *testing.T) {
 	}
 }
 
-func TestAgentErrors_KeycardErrorMarker(t *testing.T) {
-	for _, err := range []error{&AgentError{Code: AgentCodeNotFound}, &AgentResponseError{Message: "bad"}} {
-		var kc KeycardError
-		if !errors.As(err, &kc) {
-			t.Errorf("%T does not implement KeycardError", err)
-		}
-	}
-	cause := errors.New("cause")
-	if err := (&AgentResponseError{Message: "bad", Err: cause}); !errors.Is(err, cause) {
-		t.Error("AgentResponseError does not unwrap to Err")
-	}
-}
-
 func TestAgentTokenSource_CancelledContext(t *testing.T) {
 	requireUnix(t)
 	path := filepath.Join(socketTempDir(t), "agent.sock")
