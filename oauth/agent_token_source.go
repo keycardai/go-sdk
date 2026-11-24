@@ -273,9 +273,11 @@ type issueTokenRequest struct {
 }
 
 type issueTokenResponse struct {
-	Token     string   `json:"token"`
-	ExpiresAt *string  `json:"expiresAt"`
-	Scopes    []string `json:"scopes"`
+	Token     string  `json:"token"`
+	ExpiresAt *string `json:"expiresAt"`
+	// Scopes holds pointers because encoding/json decodes a null element of a
+	// []string as "", which would report a scope the agent never granted.
+	Scopes []*string `json:"scopes"`
 }
 
 func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, error) {
@@ -304,8 +306,11 @@ func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, err
 		tok.ExpiresIn = &expiresIn
 	}
 	// An empty list means the grant is unknown, not that nothing was granted.
-	if len(out.Scopes) > 0 {
-		tok.Scope = out.Scopes
+	for _, s := range out.Scopes {
+		if s == nil {
+			return nil, &AgentResponseError{Message: "IssueToken response scopes holds a null element"}
+		}
+		tok.Scope = append(tok.Scope, *s)
 	}
 	return tok, nil
 }

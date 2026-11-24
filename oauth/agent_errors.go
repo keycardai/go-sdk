@@ -41,10 +41,10 @@ func (e *AgentError) Retryable() bool {
 
 // AgentResponseError indicates the agent answered 200 with a body that cannot be
 // used: not JSON, a token that is absent, empty, not a string, or contains a
-// control character, or an expiresAt that does not parse. It is distinct from
-// AgentError, which is the agent refusing. Message never includes the token. Err
-// carries the underlying decode or parse cause, when there is one, for
-// errors.Is/errors.As.
+// control character, an expiresAt that does not parse, or scopes that are not
+// an array of strings. It is distinct from AgentError, which is the agent
+// refusing. Message never includes the token. Err carries the underlying decode
+// or parse cause, when there is one, for errors.Is/errors.As.
 type AgentResponseError struct {
 	Message string
 	Err     error

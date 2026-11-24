@@ -707,6 +707,24 @@ func TestAgentTokenSource_Row34_Retryable(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_Row39_ScopesNotAnArrayOfStrings(t *testing.T) {
+	bodies := map[string]string{
+		"string":       `{"token":"tok","scopes":"a b"}`,
+		"non-string":   `{"token":"tok","scopes":["a",42]}`,
+		"null element": `{"token":"tok","scopes":["a",null]}`,
+		"object":       `{"token":"tok","scopes":{"a":true}}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			tok, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com", "a")
+			var respErr *AgentResponseError
+			if !errors.As(err, &respErr) {
+				t.Fatalf("got token %v, error %v, want *AgentResponseError", tok, err)
+			}
+		})
+	}
+}
+
 func TestAgentErrors_KeycardErrorMarker(t *testing.T) {
 	for _, err := range []error{&AgentError{Code: AgentCodeNotFound}, &AgentResponseError{Message: "bad"}} {
 		var kc KeycardError
