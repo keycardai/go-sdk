@@ -146,11 +146,14 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 // Invoke delegates a call to the target agent on the user's behalf. It discovers the
 // target's card, exchanges subjectToken (the inbound user token) for a token scoped to
 // the target, and invokes the target's JSON-RPC endpoint with that token, sending msg.
+// The token goes where its token_type and method say (oauth.PlaceCredential).
 // The agent answers with a message or a task; see Result.
 //
 // A discovery, exchange, or invocation failure is returned as a *DiscoveryError, an
 // OAuth error from the exchange (wrapped), or an *InvocationError respectively. On an
-// exchange failure the target agent is not invoked.
+// exchange failure the target agent is not invoked. When the exchanged token cannot be
+// placed, or the endpoint redirects to another origin, the *InvocationError wraps an
+// *oauth.CredentialPlacementError.
 func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken string, msg Message) (*Result, error) {
 	if strings.TrimSpace(subjectToken) == "" {
 		return nil, &ConfigurationError{Message: "subject_token must not be empty"}
@@ -178,7 +181,7 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 		return nil, fmt.Errorf("a2a delegation: token exchange for %s: %w", audience, err)
 	}
 
-	respMsg, task, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp.AccessToken, msg)
+	respMsg, task, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +236,16 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
-func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, msg Message) (Message, *Task, error) {
+// invoke sends msg to endpoint with token placed per its token_type
+// (oauth.CredentialTransport). A redirect to another origin fails.
+func (c *DelegationClient) invoke(ctx context.Context, endpoint string, token *oauth.TokenResponse, msg Message) (Message, *Task, error) {
+	transport, err := oauth.NewCredentialTransport(token, c.httpClient.Transport)
+	if err != nil {
+		return Message{}, nil, &InvocationError{Message: "placing credential", Err: err}
+	}
+	httpClient := *c.httpClient
+	httpClient.Transport = transport
+
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      newUUID(),
@@ -250,10 +262,9 @@ func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set(c.wire.versionHeader, c.wire.version)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("invoking %s", endpoint), Err: err}
 	}

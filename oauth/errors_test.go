@@ -61,6 +61,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		want bool
 	}{
 		{"ConfigurationError", &ConfigurationError{Message: "bad config"}, true},
+		{"CredentialPlacementError", &CredentialPlacementError{Reason: PlacementInvalidMethod, Message: "bad method"}, true},
 		{"DeviceAuthorizationDiscoveryError", &DeviceAuthorizationDiscoveryError{Message: "discovery", Err: errors.New("reset")}, true},
 		{"HTTPError", &HTTPError{Message: "not found", Status: 404}, true},
 		{"OAuthError", &OAuthError{ErrorCode: "invalid_grant", Message: "expired"}, true},

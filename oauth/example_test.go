@@ -1,7 +1,9 @@
 package oauth_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/keycardai/go-sdk/oauth"
 )
@@ -31,4 +33,27 @@ func ExampleBuildAuthorizeURL() {
 	}
 	fmt.Println(url)
 	// Output: https://zone.keycard.cloud/authorize?client_id=my-client&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback&response_type=code&scope=openid&state=xyz
+}
+
+// ExampleApplyCredential sends a Keycard-Password credential where its method
+// says: the username in one header and the password in another.
+func ExampleApplyCredential() {
+	token := &oauth.TokenResponse{
+		AccessToken: "plaid-secret",
+		TokenType:   oauth.TokenTypeKeycardPassword,
+		Username:    "plaid-client-id",
+		Method: json.RawMessage(`{
+			"username": {"in": "header", "name": "PLAID-CLIENT-ID"},
+			"password": {"in": "header", "name": "PLAID-SECRET"}
+		}`),
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://production.plaid.com/accounts/get", nil)
+	if err := oauth.ApplyCredential(token, req); err != nil {
+		panic(err)
+	}
+	fmt.Println(req.Header.Get("PLAID-CLIENT-ID"))
+	fmt.Println(token)
+	// Output:
+	// plaid-client-id
+	// oauth.TokenResponse{TokenType:"Keycard-Password" AccessToken:[redacted] Username:[redacted] Method:{"username":{"in":"header","name":"PLAID-CLIENT-ID"},"password":{"in":"header","name":"PLAID-SECRET"}}}
 }

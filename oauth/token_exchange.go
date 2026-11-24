@@ -1,11 +1,14 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,15 +34,63 @@ type TokenExchangeRequest struct {
 }
 
 // TokenResponse represents an OAuth token endpoint response.
+//
+// AccessToken, RefreshToken, IDToken, UserID and Username are secrets. The
+// printed form of a TokenResponse, through any fmt verb, shows which of them
+// are set and never their values. JSON encoding includes them. A token
+// response stored as JSON is placed the same way as a fresh one.
 type TokenResponse struct {
-	AccessToken     string   `json:"access_token"`
+	AccessToken string `json:"access_token"`
+	// TokenType names the kind of credential: Bearer, Basic, Keycard-API-Key
+	// or Keycard-Password. It is kept as received. A response without
+	// token_type gives Bearer. PlaceCredential refuses any other value.
 	TokenType       string   `json:"token_type"`
 	ExpiresIn       int      `json:"expires_in,omitempty"`
 	RefreshToken    string   `json:"refresh_token,omitempty"`
 	IDToken         string   `json:"id_token,omitempty"`
 	Scope           []string `json:"scope,omitempty"`
 	IssuedTokenType string   `json:"issued_token_type,omitempty"`
-	UserID          string   `json:"user_id,omitempty"`
+	// UserID is the user ID of a Basic credential.
+	UserID string `json:"user_id,omitempty"`
+	// Username is the username of a Keycard-Password credential.
+	Username string `json:"username,omitempty"`
+	// Method says where to send a Keycard-API-Key or Keycard-Password
+	// credential. It holds the response's method member as received.
+	// PlaceCredential checks it.
+	Method json.RawMessage `json:"method,omitempty"`
+}
+
+// Format prints t with its secrets redacted, for every verb.
+func (t TokenResponse) Format(f fmt.State, _ rune) {
+	fields := []string{"TokenType:" + strconv.Quote(t.TokenType)}
+	secret := func(name, value string) {
+		if value != "" {
+			fields = append(fields, name+":[redacted]")
+		}
+	}
+	secret("AccessToken", t.AccessToken)
+	if t.ExpiresIn != 0 {
+		fields = append(fields, "ExpiresIn:"+strconv.Itoa(t.ExpiresIn))
+	}
+	secret("RefreshToken", t.RefreshToken)
+	secret("IDToken", t.IDToken)
+	if len(t.Scope) > 0 {
+		fields = append(fields, fmt.Sprintf("Scope:%q", t.Scope))
+	}
+	if t.IssuedTokenType != "" {
+		fields = append(fields, "IssuedTokenType:"+strconv.Quote(t.IssuedTokenType))
+	}
+	secret("UserID", t.UserID)
+	secret("Username", t.Username)
+	if len(t.Method) > 0 {
+		var method bytes.Buffer
+		if json.Compact(&method, t.Method) != nil {
+			method.Reset()
+			method.Write(t.Method)
+		}
+		fields = append(fields, "Method:"+method.String())
+	}
+	io.WriteString(f, "oauth.TokenResponse{"+strings.Join(fields, " ")+"}")
 }
 
 // TokenExchangeClientOption configures a TokenExchangeClient.
@@ -208,13 +259,21 @@ func serializeTokenExchangeRequest(req TokenExchangeRequest) url.Values {
 	return params
 }
 
+// deserializeTokenResponse parses a token endpoint response. A member with the
+// wrong JSON type is ignored. token_type, user_id, username and method are kept
+// as received; PlaceCredential checks them.
 func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
-	var raw map[string]any
+	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decoding token response: %w", err)
 	}
+	str := func(key string) string {
+		var s string
+		_ = json.Unmarshal(raw[key], &s)
+		return s
+	}
 
-	accessToken, _ := raw["access_token"].(string)
+	accessToken := str("access_token")
 	if accessToken == "" {
 		return nil, fmt.Errorf("token response missing access_token")
 	}
@@ -222,33 +281,30 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 		return nil, fmt.Errorf("token response access_token contains a control character")
 	}
 
-	tokenType, _ := raw["token_type"].(string)
+	tokenType := str("token_type")
 	if tokenType == "" {
-		tokenType = "Bearer"
+		tokenType = TokenTypeBearer
 	}
 
 	result := &TokenResponse{
-		AccessToken: accessToken,
-		TokenType:   tokenType,
+		AccessToken:     accessToken,
+		TokenType:       tokenType,
+		RefreshToken:    str("refresh_token"),
+		IDToken:         str("id_token"),
+		IssuedTokenType: str("issued_token_type"),
+		UserID:          str("user_id"),
+		Username:        str("username"),
 	}
 
-	if v, ok := raw["expires_in"].(float64); ok {
-		result.ExpiresIn = int(v)
+	var expiresIn float64
+	if json.Unmarshal(raw["expires_in"], &expiresIn) == nil {
+		result.ExpiresIn = int(expiresIn)
 	}
-	if v, ok := raw["refresh_token"].(string); ok {
-		result.RefreshToken = v
+	if scope := str("scope"); scope != "" {
+		result.Scope = strings.Fields(scope)
 	}
-	if v, ok := raw["id_token"].(string); ok {
-		result.IDToken = v
-	}
-	if v, ok := raw["issued_token_type"].(string); ok {
-		result.IssuedTokenType = v
-	}
-	if v, ok := raw["scope"].(string); ok {
-		result.Scope = strings.Fields(v)
-	}
-	if v, ok := raw["user_id"].(string); ok {
-		result.UserID = string(v)
+	if method, ok := raw["method"]; ok && string(method) != "null" {
+		result.Method = method
 	}
 
 	return result, nil
