@@ -30,6 +30,7 @@ type AuthorizeURLParams struct {
 	Scopes              []string // optional; space-joined on the wire
 	State               string   // optional CSRF token
 	Resource            string   // optional RFC 8707 resource indicator
+	Resources           []string // optional RFC 8707 resource indicators, after Resource
 }
 
 // BuildAuthorizeURL builds an authorization-code request URL against the given
@@ -59,6 +60,18 @@ func BuildAuthorizeURL(authorizationEndpoint string, params AuthorizeURLParams) 
 	}
 	if params.Resource != "" {
 		q.Set("resource", params.Resource)
+	} else if len(params.Resources) > 0 {
+		q.Del("resource")
+	}
+	seen := make(map[string]bool, len(params.Resources)+1)
+	if params.Resource != "" {
+		seen[params.Resource] = true
+	}
+	for _, resource := range params.Resources {
+		if !seen[resource] {
+			q.Add("resource", resource)
+			seen[resource] = true
+		}
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"testing"
 )
@@ -91,6 +92,67 @@ func TestBuildAuthorizeURL_DefaultsMethodAndOmitsEmptyScope(t *testing.T) {
 	}
 	if _, ok := q.Query()["scope"]; ok {
 		t.Error("scope should be omitted when no scopes are set")
+	}
+}
+
+// Spec row 3a: preserve unrelated endpoint parameters and replace SDK parameters.
+func TestBuildAuthorizeURL_EndpointQuery(t *testing.T) {
+	raw, err := BuildAuthorizeURL("https://as.example/authorize?tenant=acme&client_id=x&client%5Fid=y", AuthorizeURLParams{
+		ClientID:      "sdk-client",
+		RedirectURI:   "https://app.example.com/callback",
+		CodeChallenge: "challenge-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if !slices.Equal(q["tenant"], []string{"acme"}) || !slices.Equal(q["client_id"], []string{"sdk-client"}) {
+		t.Errorf("query: %v", q)
+	}
+	for name, values := range q {
+		if len(values) != 1 {
+			t.Errorf("query %q: got %q, want one value", name, values)
+		}
+	}
+}
+
+// Spec row 3b: replace inherited resources with distinct ordered SDK resources.
+func TestBuildAuthorizeURL_Resources(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		resource  string
+		resources []string
+		want      []string
+	}{
+		{"list", "", []string{"a", "b"}, []string{"a", "b"}},
+		{"scalar and list", "b", []string{"a", "b", "a"}, []string{"b", "a"}},
+		{"scalar only", "b", nil, []string{"b"}},
+		{"empty list", "", []string{}, []string{"https://old"}},
+		{"omitted", "", nil, []string{"https://old"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := BuildAuthorizeURL("https://as.example/authorize?resource=https://old", AuthorizeURLParams{
+				ClientID:      "sdk-client",
+				RedirectURI:   "https://app.example.com/callback",
+				CodeChallenge: "challenge-value",
+				Resource:      tc.resource,
+				Resources:     tc.resources,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, err := url.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := u.Query()["resource"]; !slices.Equal(got, tc.want) {
+				t.Errorf("resources: got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
