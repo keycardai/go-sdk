@@ -239,6 +239,26 @@ func TestAgentTokenSource_InvalidUTF8IsRefused(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_Row42_ControlCharacterInOrgOrZone(t *testing.T) {
+	stub := &stubAgent{body: okBody}
+	client := WithAgentHTTPClient(&http.Client{Transport: handlerTransport{stub}})
+	for name, opt := range map[string]AgentTokenSourceOption{
+		"org":  WithAgentOrg("org\r\nX-Injected: 1"),
+		"zone": WithAgentZone("zone\r\nX-Injected: 1"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewAgentTokenSource(client, opt)
+			var cfgErr *ConfigurationError
+			if !errors.As(err, &cfgErr) {
+				t.Fatalf("got %v, want *ConfigurationError", err)
+			}
+		})
+	}
+	if n := len(stub.recorded()); n != 0 {
+		t.Errorf("requests: got %d, want 0", n)
+	}
+}
+
 func TestNewAgentTokenSource_InvalidOptionsAreRefused(t *testing.T) {
 	tests := []struct {
 		name string
@@ -246,9 +266,7 @@ func TestNewAgentTokenSource_InvalidOptionsAreRefused(t *testing.T) {
 	}{
 		{"workload", WithAgentWorkload("report\xff")},
 		{"app id", WithAgentAppID("digest\xff")},
-		{"org control character", WithAgentOrg("org\r\nX-Injected: 1")},
 		{"org", WithAgentOrg("org\xff")},
-		{"zone control character", WithAgentZone("zone\r\nX-Injected: 1")},
 		{"zone", WithAgentZone("zone\xff")},
 	}
 	for _, tt := range tests {
@@ -741,7 +759,9 @@ func TestAgentTokenSource_Row33_ControlCharacterInToken(t *testing.T) {
 	}
 }
 
-func TestAgentTokenSource_InvalidUTF8ResponseIsRefused(t *testing.T) {
+// Row 44 is the token byte case; the rest refuse the other ways the decoder
+// would rewrite the response.
+func TestAgentTokenSource_Row44_InvalidUTF8Response(t *testing.T) {
 	const secret = "secret-token-value"
 	bodies := map[string]string{
 		"token byte":           `{"token":"` + secret + "\xff" + `"}`,
