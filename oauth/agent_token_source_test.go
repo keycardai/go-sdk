@@ -684,6 +684,29 @@ func TestAgentTokenSource_Row33_ControlCharacterInToken(t *testing.T) {
 	}
 }
 
+func TestAgentTokenSource_InvalidUTF8ResponseIsRefused(t *testing.T) {
+	const secret = "secret-token-value"
+	bodies := map[string]string{
+		"token byte":           `{"token":"` + secret + "\xff" + `"}`,
+		"token lone surrogate": `{"token":"` + secret + `\udc80"}`,
+		"scope byte":           `{"token":"` + secret + `","scopes":["a` + "\xff" + `"]}`,
+		"unknown key byte":     `{"token":"` + secret + `","note":"` + "\xff" + `"}`,
+		"token literal U+FFFD": `{"token":"` + secret + "\uFFFD" + `"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			_, err := newStubSource(&stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
+			var respErr *AgentResponseError
+			if !errors.As(err, &respErr) {
+				t.Fatalf("got %v, want *AgentResponseError", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error leaks the token: %v", err)
+			}
+		})
+	}
+}
+
 func TestAgentTokenSource_UnparseableExpiresAt(t *testing.T) {
 	for _, expiresAt := range []string{`"tomorrow"`, `""`, `1700000000`} {
 		stub := &stubAgent{body: `{"token":"secret-token-value","expiresAt":` + expiresAt + `}`}

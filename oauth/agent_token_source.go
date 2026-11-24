@@ -281,6 +281,11 @@ type issueTokenResponse struct {
 }
 
 func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, error) {
+	// encoding/json replaces invalid UTF-8 with U+FFFD rather than failing, so
+	// a decoded token would differ from the one the agent sent.
+	if !utf8.Valid(raw) {
+		return nil, &AgentResponseError{Message: "IssueToken response is not valid UTF-8"}
+	}
 	var out issueTokenResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, &AgentResponseError{Message: "decoding IssueToken response", Err: err}
@@ -290,6 +295,12 @@ func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, err
 	}
 	if hasControlChar(out.Token) {
 		return nil, &AgentResponseError{Message: "IssueToken response token contains a control character"}
+	}
+	// The decoder also turns an escaped lone surrogate ("\udc80") into U+FFFD,
+	// which the check on raw cannot see. A bearer token is ASCII (RFC 6750), so
+	// refusing U+FFFD outright loses no real token.
+	if strings.ContainsRune(out.Token, utf8.RuneError) {
+		return nil, &AgentResponseError{Message: "IssueToken response token is not valid UTF-8"}
 	}
 
 	tok := &TokenResponse{AccessToken: out.Token, TokenType: "Bearer"}
