@@ -82,11 +82,15 @@ func main() {
 			return
 		}
 
-		// Use the exchanged token to call GitHub API
+		// Send the exchanged token where its token_type and method say.
+		transport, err := oauth.NewCredentialTransport(token, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 		githubReq, _ := http.NewRequestWithContext(r.Context(), "GET", "https://api.github.com/user", nil)
-		githubReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 
-		resp, err := http.DefaultClient.Do(githubReq)
+		resp, err := (&http.Client{Transport: transport}).Do(githubReq)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("GitHub API error: %v", err), http.StatusBadGateway)
 			return

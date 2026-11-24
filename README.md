@@ -102,10 +102,23 @@ handler := mcp.RequireBearerAuth(
         return
     }
 
-    // Use token.AccessToken to call the GitHub API
-    fmt.Fprintf(w, "GitHub token: %s", token.AccessToken)
+    // Send the token where its token_type and method say.
+    transport, err := oauth.NewCredentialTransport(token, nil)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadGateway)
+        return
+    }
+    req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://api.github.com/user", nil)
+    resp, err := (&http.Client{Transport: transport}).Do(req)
+    // ...
 })))
 ```
+
+The zone returns `Bearer`, `Basic`, `Keycard-API-Key` or `Keycard-Password`,
+depending on the resource. `oauth.NewCredentialTransport` and
+`oauth.ApplyCredential` send each one where it goes: an `Authorization` header,
+another header, a query parameter or a cookie. They refuse a token type they do
+not know. The transport also refuses a redirect to another origin.
 
 ### Standalone token exchange (without middleware)
 
@@ -122,7 +135,10 @@ if ac.HasErrors() {
 }
 
 token, _ := ac.Access("https://api.github.com")
-// Use token.AccessToken
+req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+if err := oauth.ApplyCredential(token, req); err != nil {
+    log.Printf("Cannot send token: %v", err)
+}
 ```
 
 ### Using WebIdentity (private_key_jwt)
