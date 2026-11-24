@@ -338,10 +338,7 @@ func tokenFromIssueTokenResponse(raw []byte, now time.Time) (*TokenResponse, err
 		if err != nil {
 			return nil, &AgentResponseError{Message: "IssueToken response expiresAt is not an RFC 3339 timestamp", Err: err}
 		}
-		expiresIn := 0
-		if d := exp.Sub(now); d > 0 {
-			expiresIn = int(d / time.Second)
-		}
+		expiresIn := clampExpiresIn(float64(exp.Sub(now) / time.Second))
 		tok.ExpiresIn = &expiresIn
 	}
 	// An empty list means the grant is unknown, not that nothing was granted.

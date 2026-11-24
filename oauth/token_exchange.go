@@ -238,18 +238,7 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	}
 
 	if v, ok := raw["expires_in"].(float64); ok {
-		// Clamp before converting: int(v) of a value past int's range is
-		// implementation-defined (1e300 becomes MinInt64 on amd64), and a
-		// negative lifetime would read as anything but expired. MaxInt32 fits
-		// int on every platform and is past any real token's lifetime.
-		var expiresIn int
-		switch {
-		case v <= 0:
-		case v >= math.MaxInt32:
-			expiresIn = math.MaxInt32
-		default:
-			expiresIn = int(v)
-		}
+		expiresIn := clampExpiresIn(v)
 		result.ExpiresIn = &expiresIn
 	}
 	if v, ok := raw["refresh_token"].(string); ok {
@@ -269,4 +258,20 @@ func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
 	}
 
 	return result, nil
+}
+
+// clampExpiresIn converts a lifetime in seconds to ExpiresIn, flooring at 0
+// and capping at math.MaxInt32. Clamp before converting: int(v) of a value
+// past int's range is implementation-defined (1e300 becomes MinInt64 on
+// amd64), and a negative lifetime would read as anything but expired.
+// MaxInt32 fits int on every platform and is past any real token's lifetime.
+func clampExpiresIn(v float64) int {
+	switch {
+	case v <= 0:
+		return 0
+	case v >= math.MaxInt32:
+		return math.MaxInt32
+	default:
+		return int(v)
+	}
 }

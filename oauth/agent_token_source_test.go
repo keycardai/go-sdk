@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -592,6 +593,17 @@ func TestAgentTokenSource_Row26_NineFractionalDigitsAndClock(t *testing.T) {
 	}
 	if tok.ExpiresIn == nil || *tok.ExpiresIn != 100 {
 		t.Errorf("ExpiresIn: got %v, want 100", tok.ExpiresIn)
+	}
+}
+
+func TestAgentTokenSource_FarExpiresAtIsCapped(t *testing.T) {
+	stub := &stubAgent{body: `{"token":"tok","expiresAt":"9999-12-31T23:59:59Z"}`}
+	tok, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
+	if err != nil {
+		t.Fatalf("ResourceToken: %v", err)
+	}
+	if tok.ExpiresIn == nil || *tok.ExpiresIn != math.MaxInt32 {
+		t.Errorf("ExpiresIn: got %v, want math.MaxInt32", tok.ExpiresIn)
 	}
 }
 
