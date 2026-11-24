@@ -265,13 +265,29 @@ func TestNewAgentTokenSource_InvalidOptionsAreRefused(t *testing.T) {
 	}
 }
 
-func TestAgentTokenSource_OversizedResponseIsRefused(t *testing.T) {
-	stub := &stubAgent{body: `{"token":"` + strings.Repeat("a", maxAgentResponseBytes) + `"}`}
-	_, err := newStubSource(t, stub).ResourceToken(context.Background(), "https://api.example.com")
-	var respErr *AgentResponseError
-	if !errors.As(err, &respErr) {
-		t.Fatalf("got %v, want *AgentResponseError", err)
+func TestAgentTokenSource_Row43_ResponseOver1MiB(t *testing.T) {
+	bodies := map[string]string{
+		"oversized token": `{"token":"` + strings.Repeat("a", maxAgentResponseBytes) + `"}`,
+		// A complete object whose padding runs past the cap must not decode
+		// from the prefix that fits.
+		"padded object": okBody + strings.Repeat(" ", maxAgentResponseBytes),
 	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			_, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com")
+			var respErr *AgentResponseError
+			if !errors.As(err, &respErr) {
+				t.Fatalf("got %v, want *AgentResponseError", err)
+			}
+		})
+	}
+
+	t.Run("exactly 1 MiB", func(t *testing.T) {
+		body := okBody + strings.Repeat(" ", maxAgentResponseBytes-len(okBody))
+		if _, err := newStubSource(t, &stubAgent{body: body}).ResourceToken(context.Background(), "https://api.example.com"); err != nil {
+			t.Fatalf("ResourceToken: %v", err)
+		}
+	})
 }
 
 func TestAgentTokenSource_OversizedErrorIsNotParsed(t *testing.T) {

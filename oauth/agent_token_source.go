@@ -235,9 +235,15 @@ func (a *AgentTokenSource) ResourceToken(ctx context.Context, resource string, s
 		return nil, agentErrorFromBody(resp.StatusCode, raw)
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAgentResponseBytes))
+	// One byte past the cap tells a body of exactly the cap from a longer one,
+	// which must not be parsed from its prefix: a complete object followed by
+	// padding would otherwise decode.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAgentResponseBytes+1))
 	if err != nil {
 		return nil, sock.transportError(ctx, err)
+	}
+	if len(raw) > maxAgentResponseBytes {
+		return nil, &AgentResponseError{Message: "IssueToken response is over 1 MiB"}
 	}
 	return tokenFromIssueTokenResponse(raw, a.now())
 }
