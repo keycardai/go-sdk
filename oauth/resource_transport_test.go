@@ -154,6 +154,30 @@ type closeTracker struct {
 
 func (c *closeTracker) Close() error { c.closed = true; return nil }
 
+func TestResourceTransport_SourceWithoutTokenIsAnError(t *testing.T) {
+	srv, hits, _ := resourceServer(t)
+	for name, tok := range map[string]*TokenResponse{
+		"nil token":          nil,
+		"empty access token": {TokenType: "Bearer"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			transport := &ResourceTransport{Source: &stubResourceTokenSource{tok: tok}, Resource: "https://api.example.com"}
+			req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+			resp, err := transport.RoundTrip(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Fatal("RoundTrip succeeded")
+			}
+			if !strings.Contains(err.Error(), "no token") {
+				t.Errorf("error does not say the source returned no token: %v", err)
+			}
+		})
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("resource requests: got %d, want 0", n)
+	}
+}
+
 func TestResourceTransport_ClosesBodyOnError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -161,6 +185,7 @@ func TestResourceTransport_ClosesBodyOnError(t *testing.T) {
 	}{
 		{"source error", &ResourceTransport{Source: &stubResourceTokenSource{err: errors.New("no token")}, Resource: "https://api.example.com"}},
 		{"invalid transport", &ResourceTransport{Resource: "https://api.example.com"}},
+		{"nil token", &ResourceTransport{Source: &stubResourceTokenSource{}, Resource: "https://api.example.com"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

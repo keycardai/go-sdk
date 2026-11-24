@@ -24,7 +24,8 @@ import (
 //
 // It adds no timeout: obtaining the token can wait on a human approving a
 // prompt. An error from Source is returned as is, so the Is* predicates apply
-// to it, and the request is not sent.
+// to it, and the request is not sent. Nor is it when Source returns neither an
+// error nor a token with an AccessToken.
 type ResourceTransport struct {
 	// Source mints the token. Required.
 	Source ResourceTokenSource
@@ -89,6 +90,10 @@ func (t *ResourceTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		closeRequestBody(req)
 		return nil, err
+	}
+	if tok == nil || tok.AccessToken == "" {
+		closeRequestBody(req)
+		return nil, fmt.Errorf("ResourceTransport: %T returned no token and no error", t.Source)
 	}
 
 	authorized := req.Clone(req.Context())
