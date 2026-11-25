@@ -1,3 +1,17 @@
+## v0.33.1 (2026-11-25)
+
+
+- fix(oauth): cap decoded authorization-server responses at 1 MiB (#81)
+- * fix(oauth): cap decoded authorization-server responses at 1 MiB
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * fix(oauth): return KeycardError on oversized challenge metadata
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * fix(oauth): document oversized error responses and test their retry rules
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.33.0 (2026-11-25)
 
 
