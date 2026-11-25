@@ -130,8 +130,19 @@ func (c *TokenExchangeClient) TokenEndpoint(ctx context.Context) (string, error)
 	return c.endpoint.Endpoint(ctx)
 }
 
-// ExchangeToken performs a token exchange request.
+// ExchangeToken performs a token exchange request. A request assertion takes
+// precedence over configured HTTP Basic credentials. A request ClientID with
+// HTTP Basic returns a ConfigurationError before discovery.
 func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchangeRequest) (*TokenResponse, error) {
+	auth := &ClientAuth{ClientID: c.cfg.clientID, ClientSecret: c.cfg.clientSecret}
+	if c.cfg.credential != nil {
+		auth = c.cfg.credential.Auth(c.issuerURL)
+	}
+	useBasic := req.ClientAssertion == "" && auth != nil && auth.ClientID != "" && auth.ClientSecret != ""
+	if useBasic && req.ClientID != "" {
+		return nil, &ConfigurationError{Message: "token exchange client_id cannot be sent with HTTP Basic"}
+	}
+
 	tokenEndpoint, err := c.endpoint.Endpoint(ctx)
 	if err != nil {
 		return nil, err
@@ -140,23 +151,19 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
 	defer cancel()
 
-	auth := &ClientAuth{ClientID: c.cfg.clientID, ClientSecret: c.cfg.clientSecret}
-	if credential := c.cfg.credential; credential != nil {
-		auth = credential.Auth(c.issuerURL)
-		if auth == nil && req.ClientAssertion == "" {
-			prepared, err := credential.PrepareTokenExchangeRequest(ctx, req.SubjectToken, req.Resource, &PrepareOptions{
-				Issuer: c.issuerURL, TokenEndpoint: tokenEndpoint,
-			})
-			if err != nil {
-				return nil, err
-			}
-			if prepared == nil || prepared.ClientAssertion == "" {
-				return nil, &ClientSecretConfigurationError{Message: fmt.Sprintf("no client credentials configured for zone %q", c.issuerURL)}
-			}
-			req.ClientAssertion = prepared.ClientAssertion
-			req.ClientAssertionType = prepared.ClientAssertionType
-			req.ClientID = prepared.ClientID
+	if credential := c.cfg.credential; credential != nil && auth == nil && req.ClientAssertion == "" {
+		prepared, err := credential.PrepareTokenExchangeRequest(ctx, req.SubjectToken, req.Resource, &PrepareOptions{
+			Issuer: c.issuerURL, TokenEndpoint: tokenEndpoint,
+		})
+		if err != nil {
+			return nil, err
 		}
+		if prepared == nil || prepared.ClientAssertion == "" {
+			return nil, &ClientSecretConfigurationError{Message: fmt.Sprintf("no client credentials configured for zone %q", c.issuerURL)}
+		}
+		req.ClientAssertion = prepared.ClientAssertion
+		req.ClientAssertionType = prepared.ClientAssertionType
+		req.ClientID = prepared.ClientID
 	}
 
 	body := serializeTokenExchangeRequest(req)
@@ -166,7 +173,7 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	if auth != nil && auth.ClientID != "" && auth.ClientSecret != "" {
+	if useBasic {
 		setBasicAuth(httpReq.Header, auth.ClientID, auth.ClientSecret)
 	}
 
