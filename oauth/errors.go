@@ -59,8 +59,10 @@ func (e *NetworkError) Error() string {
 
 func (e *NetworkError) Unwrap() error { return e.Err }
 
-// Retryable reports whether the failure is a network fault rather than a caller cancellation.
-func (e *NetworkError) Retryable() bool { return !errors.Is(e.Err, context.Canceled) }
+// Retryable reports whether the failure is a transient transport fault.
+func (e *NetworkError) Retryable() bool {
+	return !errors.Is(e.Err, context.Canceled) && retryableMetadataFailure(e.Err)
+}
 
 func (*NetworkError) keycardError() {}
 
@@ -176,6 +178,9 @@ func (e *InvalidMetadataError) Error() string {
 }
 func (e *InvalidMetadataError) Unwrap() error { return e.Err }
 func (*InvalidMetadataError) keycardError()   {}
+
+// Retryable reports whether the metadata failure is transient.
+func (e *InvalidMetadataError) Retryable() bool { return retryableMetadataFailure(e.Err) }
 
 // JWKSDiscoveryError indicates the JWKS URI could not be resolved from the issuer's
 // authorization server metadata. Err carries the underlying cause (e.g. a discovery

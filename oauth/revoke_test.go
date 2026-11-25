@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -304,7 +305,7 @@ func TestRevokeToken_OAuthErrors(t *testing.T) {
 // Spec row 8: transport and 5xx errors are retryable and do not trigger a retry.
 func TestRevokeToken_TransportAndHTTPFailures(t *testing.T) {
 	t.Run("transport", func(t *testing.T) {
-		cause := errors.New("connection failed")
+		cause := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection failed")}
 		calls, err := revokeWithResponse(t, "test-token", func() (*http.Response, error) { return nil, cause })
 		var got *NetworkError
 		if calls != 1 || !errors.As(err, &got) || !errors.Is(err, cause) || !got.Retryable() {
@@ -334,7 +335,7 @@ func TestRevokeToken_TransportAndHTTPFailures(t *testing.T) {
 // Spec row 8: a discovery transport failure is retryable and stops the operation.
 func TestRevokeToken_DiscoveryTransportFailure(t *testing.T) {
 	const issuer = "https://zone.example"
-	cause := errors.New("discovery connection failed")
+	cause := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("discovery connection failed")}
 	calls := 0
 	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -348,6 +349,23 @@ func TestRevokeToken_DiscoveryTransportFailure(t *testing.T) {
 	var got *NetworkError
 	if calls != 1 || !errors.As(err, &got) || !errors.Is(err, cause) || !got.Retryable() {
 		t.Fatalf("want one request and retryable discovery network error wrapping cause, got %d requests and %v", calls, err)
+	}
+}
+
+// Base bounded response bodies: oversized HTTP 200 discovery metadata is retryable.
+func TestRevokeToken_DiscoveryResponseTooLarge(t *testing.T) {
+	const issuer = "https://zone.example"
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != issuer+"/.well-known/oauth-authorization-server" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		return revocationTestResponse(http.StatusOK, strings.Repeat("x", int(MaxResponseBodyBytes)+1)), nil
+	})}
+	err := RevokeToken(context.Background(), issuer, RevokeTokenRequest{Token: "test-token", ClientID: "client-a"},
+		WithRevocationHTTPClient(client))
+	var metadataErr *InvalidMetadataError
+	if !errors.As(err, &metadataErr) || !errors.Is(err, ErrResponseBodyTooLarge) || !metadataErr.Retryable() {
+		t.Fatalf("want retryable oversized metadata error, got %v", err)
 	}
 }
 

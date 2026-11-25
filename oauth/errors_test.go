@@ -2,11 +2,13 @@ package oauth
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,27 @@ func TestGrantDenialReason(t *testing.T) {
 						t.Fatalf("expected reason %q: %#v", tc.reason, denial)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestNetworkErrorRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"certificate verification", x509.UnknownAuthorityError{}, false},
+		{"redirect limit", errors.New("stopped after 10 redirects"), false},
+		{"caller cancellation", context.Canceled, false},
+		{"timeout", context.DeadlineExceeded, true},
+		{"interrupted read", io.ErrUnexpectedEOF, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &NetworkError{Err: &url.Error{Op: "Get", URL: "https://zone.example", Err: tc.err}}
+			if got := err.Retryable(); got != tc.want {
+				t.Errorf("Retryable() = %t, want %t", got, tc.want)
 			}
 		})
 	}
