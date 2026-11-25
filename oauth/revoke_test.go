@@ -96,10 +96,11 @@ func TestRevokeToken_Form(t *testing.T) {
 }
 
 // Spec row 3: credential authentication supplies the headers and fields, and a
-// private-key assertion uses only the issuer as its audience.
+// private-key assertion uses only the metadata issuer as its audience, even
+// when the explicit issuer differs by a trailing slash.
 func TestRevokeToken_Credential(t *testing.T) {
-	const issuer = "https://zone.example/"
-	md := &AuthorizationServerMetadata{Issuer: strings.TrimSuffix(issuer, "/"), RevocationEndpoint: issuer + "revoke"}
+	const issuer = "https://zone.example"
+	md := &AuthorizationServerMetadata{Issuer: issuer + "/", RevocationEndpoint: issuer + "/revoke"}
 	web := NewWebIdentity(WithClientID("client-a"), WithStorageDir(t.TempDir()))
 	fake := &fakeAuthenticator{}
 	run := func(t *testing.T, cred ApplicationCredential, check func(*http.Request)) {
@@ -130,7 +131,7 @@ func TestRevokeToken_Credential(t *testing.T) {
 			assertion := r.PostForm.Get("client_assertion")
 			verifyAssertionSignature(t, web, assertion)
 			claims := assertionClaims(t, assertion)
-			if claims["aud"] != issuer || claims["iss"] != "client-a" || claims["sub"] != "client-a" {
+			if claims["aud"] != md.Issuer || claims["iss"] != "client-a" || claims["sub"] != "client-a" {
 				t.Errorf("unexpected assertion claims: %v", claims)
 			}
 		})
@@ -142,7 +143,7 @@ func TestRevokeToken_Credential(t *testing.T) {
 				t.Error("missing credential authentication material")
 			}
 		})
-		if got, want := fake.recordedCalls(), [][2]string{{issuer, issuer}}; !reflect.DeepEqual(got, want) {
+		if got, want := fake.recordedCalls(), [][2]string{{issuer, md.Issuer}}; !reflect.DeepEqual(got, want) {
 			t.Errorf("authentication calls = %v, want %v", got, want)
 		}
 	})
