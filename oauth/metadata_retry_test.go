@@ -1,0 +1,181 @@
+package oauth
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type metadataTestTransport func(*http.Request) (*http.Response, error)
+
+func (f metadataTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+// Spec rows 10, 11, 20 (JWKS caching): pace discovery and key-set fetches independently of kid.
+func TestKeyringMetadataRetry(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		discovery bool
+		throttle  bool
+	}{
+		{name: "JWKS network error"}, {name: "discovery network error", discovery: true},
+		{name: "429 for two kids", throttle: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var failed atomic.Bool
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				discovery := r.URL.Path != "/jwks"
+				if discovery {
+					_ = json.NewEncoder(w).Encode(map[string]string{"issuer": "http://" + r.Host, "jwks_uri": "http://" + r.Host + "/jwks"})
+				} else {
+					_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+						"kty": "RSA", "kid": "key", "n": Base64URLEncode(privateKey.N.Bytes()),
+						"e": Base64URLEncode(big.NewInt(int64(privateKey.E)).Bytes()),
+					}}})
+				}
+			}))
+			defer srv.Close()
+			clock := newFakeDeviceClock()
+			client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+				if (r.URL.Path != "/jwks") == test.discovery {
+					requests.Add(1)
+					if !failed.Swap(true) {
+						if test.throttle {
+							return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": {"120"}}, Body: http.NoBody}, nil
+						}
+						return nil, io.ErrUnexpectedEOF
+					}
+				}
+				return http.DefaultTransport.RoundTrip(r)
+			})}
+			keyring := NewJWKSOAuthKeyring(WithKeyringHTTPClient(client))
+			keyring.now = clock.Now
+			kid := "key"
+			if test.throttle {
+				kid = "first"
+			}
+			_, first := keyring.Key(context.Background(), srv.URL, kid)
+			_, gated := keyring.Key(context.Background(), srv.URL, "key")
+			var transient interface{ Retryable() bool }
+			if !errors.As(first, &transient) || !transient.Retryable() || first != gated || requests.Load() != 1 {
+				t.Fatalf("expected shared typed failure, got %v then %v (%d requests)", first, gated, requests.Load())
+			}
+			delay := 1200 * time.Millisecond
+			if test.throttle {
+				delay = time.Minute
+			}
+			clock.advance(delay)
+			if _, err := keyring.Key(context.Background(), srv.URL, "key"); err != nil || requests.Load() != 2 {
+				t.Fatalf("recovery: %v (%d requests)", err, requests.Load())
+			}
+		})
+	}
+}
+
+// Spec row 11 (authorization server discovery): only cache-backed discovery is paced.
+func TestCachedDiscoveryRetryAfter(t *testing.T) {
+	ds := newDiscoveryServer()
+	defer ds.Close()
+	ds.set(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(503)
+	})
+	client := NewTokenExchangeClient(ds.URL)
+	advance := fakeClock(client)
+	var discoveryError *TokenEndpointDiscoveryError
+	if _, err := client.TokenEndpoint(context.Background()); !errors.As(err, &discoveryError) {
+		t.Fatalf("first discovery error: %v", err)
+	}
+	ds.recover()
+	advance(5*time.Second - time.Millisecond)
+	if _, err := client.TokenEndpoint(context.Background()); err != discoveryError || ds.requests.Load() != 1 {
+		t.Fatalf("gated discovery: requests %d, error %v", ds.requests.Load(), err)
+	}
+	if _, err := FetchAuthorizationServerMetadata(context.Background(), ds.URL); err != nil {
+		t.Fatalf("standalone discovery: %v", err)
+	}
+	advance(time.Millisecond)
+	if _, err := client.TokenEndpoint(context.Background()); err != nil || ds.requests.Load() != 3 {
+		t.Fatalf("discovery at expiry: requests %d, error %v", ds.requests.Load(), err)
+	}
+}
+
+// Spec row 2 (base): HTTP dates and delta-seconds are honored up to 60 seconds.
+func TestMetadataRetryAfterCap(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, status := range []int{429, 503} {
+		for _, delay := range []time.Duration{5 * time.Second, 120 * time.Second} {
+			for _, header := range []string{fmt.Sprint(int(delay.Seconds())), now.Add(delay).Format(http.TimeFormat)} {
+				err := &metadataHTTPError{HTTPError: &HTTPError{Status: status}, retryAfter: header}
+				retry := (metadataRetry{}).record(now, err)
+				expiry := now.Add(min(time.Minute, delay))
+				if retry.failure(expiry.Add(-time.Nanosecond)) != err || retry.failure(expiry) != nil {
+					t.Errorf("status %d Retry-After %q was not gated up to %s", status, header, expiry)
+				}
+			}
+		}
+	}
+}
+
+// Spec row 3 (base): network failures and 5xx use exponential jitter capped at 30 seconds.
+func TestMetadataRetryExponentialCap(t *testing.T) {
+	now := time.Now()
+	for _, err := range []error{context.DeadlineExceeded, &HTTPError{Status: 503}} {
+		var retry metadataRetry
+		for _, nominal := range []time.Duration{1, 2, 4, 8, 16, 32, 64, 64} {
+			retry = retry.record(now, err)
+			d := retry.until.Sub(now)
+			if d < min(30*time.Second, nominal*800*time.Millisecond) || d > min(30*time.Second, nominal*1200*time.Millisecond) {
+				t.Errorf("nominal %ds, got %s", nominal, d)
+			}
+			if retry.failure(retry.until.Add(-time.Nanosecond)) != err || retry.failure(retry.until) != nil {
+				t.Fatal("delay did not gate until expiry")
+			}
+		}
+	}
+}
+
+// Spec row 4 (base): a successful metadata refresh resets the exponential step.
+func TestMetadataRetryResetsOnSuccess(t *testing.T) {
+	ds := newDiscoveryServer()
+	defer ds.Close()
+	client := NewTokenExchangeClient(ds.URL)
+	advance := fakeClock(client)
+	for _, delay := range []time.Duration{1200, 2400} {
+		ds.status(500)
+		if _, err := client.TokenEndpoint(context.Background()); err == nil {
+			t.Fatal("expected HTTP failure")
+		}
+		advance(delay * time.Millisecond)
+	}
+	ds.recover()
+	if _, err := client.TokenEndpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	advance(defaultDiscoveryTTL)
+	ds.status(500)
+	if _, err := client.TokenEndpoint(context.Background()); err == nil {
+		t.Fatal("expected refresh error")
+	}
+	advance(1200 * time.Millisecond)
+	ds.recover()
+	if _, err := client.TokenEndpoint(context.Background()); err != nil {
+		t.Fatalf("refresh backoff was not reset: %v", err)
+	}
+}

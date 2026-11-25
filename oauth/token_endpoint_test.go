@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -24,6 +25,10 @@ func newDiscoveryServer() *discoveryServer {
 	ds := &discoveryServer{}
 	ds.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/oauth-authorization-server" {
+			if r.URL.Path == "/token" {
+				_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "at", "token_type": "Bearer"})
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -73,7 +78,8 @@ func fakeClock(c *TokenExchangeClient) func(time.Duration) {
 	}
 }
 
-func TestTokenEndpoint_TransientFailureNotCached(t *testing.T) {
+// Spec row 8 (token exchange): transient discovery errors gate new fetches until expiry.
+func TestTokenEndpoint_TransientFailurePacesRetry(t *testing.T) {
 	cases := map[string]func(*discoveryServer){
 		"500": func(ds *discoveryServer) { ds.status(http.StatusInternalServerError) },
 		"503": func(ds *discoveryServer) { ds.status(http.StatusServiceUnavailable) },
@@ -94,17 +100,28 @@ func TestTokenEndpoint_TransientFailureNotCached(t *testing.T) {
 			fail(ds)
 
 			client := NewTokenExchangeClient(ds.URL)
-			if _, err := client.TokenEndpoint(context.Background()); err == nil {
-				t.Fatal("expected a discovery error")
+			advance := fakeClock(client)
+			request := func() (*TokenResponse, error) {
+				return client.ExchangeToken(context.Background(), TokenExchangeRequest{SubjectToken: "subject"})
+			}
+			var disc *TokenEndpointDiscoveryError
+			if _, err := request(); !errors.As(err, &disc) {
+				t.Fatalf("want discovery error, got %v", err)
 			}
 
 			ds.recover()
-			ep, err := client.TokenEndpoint(context.Background())
+			if name != "429" {
+				if _, err := request(); !errors.As(err, &disc) || ds.requests.Load() != 1 {
+					t.Fatalf("during backoff: requests %d, error %v", ds.requests.Load(), err)
+				}
+				advance(1200 * time.Millisecond)
+			}
+			token, err := request()
 			if err != nil {
 				t.Fatalf("TokenEndpoint after recovery: %v", err)
 			}
-			if ep != ds.URL+"/token" {
-				t.Errorf("endpoint: got %q", ep)
+			if token.AccessToken != "at" {
+				t.Errorf("access token: got %q", token.AccessToken)
 			}
 			if got := ds.requests.Load(); got != 2 {
 				t.Errorf("discovery requests: got %d, want 2", got)
@@ -113,6 +130,7 @@ func TestTokenEndpoint_TransientFailureNotCached(t *testing.T) {
 	}
 }
 
+// Spec row 5 (base): deterministic failures use only the negative TTL.
 func TestTokenEndpoint_DeterministicFailureRememberedForNegativeTTL(t *testing.T) {
 	cases := map[string]struct {
 		fail  func(*discoveryServer)
@@ -274,7 +292,16 @@ func TestTokenEndpoint_RediscoversAfterDiscoveryTTL(t *testing.T) {
 	}
 }
 
+// Spec row 6 (base): a caller deadline does not poison a shared metadata fetch.
 func TestTokenEndpoint_CancelledCallerDoesNotPoisonFetch(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deadline=%v", deadline), func(t *testing.T) {
+			checkCallerCancellation(t, deadline)
+		})
+	}
+}
+
+func checkCallerCancellation(t *testing.T, deadline bool) {
 	ds := newDiscoveryServer()
 	defer ds.Close()
 
@@ -293,7 +320,16 @@ func TestTokenEndpoint_CancelledCallerDoesNotPoisonFetch(t *testing.T) {
 
 	client := NewTokenExchangeClient(ds.URL)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	var ctx context.Context
+	var cancel context.CancelFunc
+	want := context.Canceled
+	if deadline {
+		ctx, cancel = context.WithTimeout(context.Background(), 150*time.Millisecond)
+		want = context.DeadlineExceeded
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	defer cancel()
 	firstErr := make(chan error, 1)
 	go func() {
 		_, err := client.TokenEndpoint(ctx)
@@ -301,10 +337,12 @@ func TestTokenEndpoint_CancelledCallerDoesNotPoisonFetch(t *testing.T) {
 	}()
 
 	<-started
-	cancel()
+	if !deadline {
+		cancel()
+	}
 	err := <-firstErr
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled caller: want context.Canceled, got %v", err)
+	if !errors.Is(err, want) {
+		t.Fatalf("cancelled caller: want %v, got %v", want, err)
 	}
 	var disc *TokenEndpointDiscoveryError
 	if !errors.As(err, &disc) {
@@ -369,6 +407,7 @@ func TestTokenEndpoint_FetchTimeoutBoundsDetachedFetch(t *testing.T) {
 	})
 
 	client := NewTokenExchangeClient(ds.URL)
+	advance := fakeClock(client)
 	client.endpoint.fetchTimeout = 50 * time.Millisecond
 	_, err := client.TokenEndpoint(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -376,12 +415,17 @@ func TestTokenEndpoint_FetchTimeoutBoundsDetachedFetch(t *testing.T) {
 	}
 
 	ds.recover()
+	if _, err := client.TokenEndpoint(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout during backoff: %v", err)
+	}
+	advance(1200 * time.Millisecond)
 	if _, err := client.TokenEndpoint(context.Background()); err != nil {
-		t.Fatalf("timeout must not be cached: %v", err)
+		t.Fatalf("timeout must not be returned after backoff: %v", err)
 	}
 }
 
-func TestClientCredentialsClient_TransientDiscoveryFailureNotCached(t *testing.T) {
+// Spec row 7 (client credentials): transient discovery errors pace recovery.
+func TestClientCredentialsClient_TransientDiscoveryFailurePacesRetry(t *testing.T) {
 	var discoveryRequests atomic.Int32
 	var failFirst atomic.Bool
 	failFirst.Store(true)
@@ -404,12 +448,18 @@ func TestClientCredentialsClient_TransientDiscoveryFailureNotCached(t *testing.T
 	client := NewClientCredentialsClient(srv.URL,
 		WithCCDiscoveryTTL(time.Hour),
 		WithCCNegativeTTL(time.Minute))
+	clock := newFakeDeviceClock()
+	client.endpoint.now = clock.Now
 
 	_, err := client.RequestToken(context.Background(), ClientCredentialsRequest{})
 	var disc *TokenEndpointDiscoveryError
 	if !errors.As(err, &disc) {
 		t.Fatalf("want *TokenEndpointDiscoveryError, got %v", err)
 	}
+	if _, err := client.RequestToken(context.Background(), ClientCredentialsRequest{}); !errors.As(err, &disc) || discoveryRequests.Load() != 1 {
+		t.Fatalf("during backoff: requests %d, error %v", discoveryRequests.Load(), err)
+	}
+	clock.advance(1200 * time.Millisecond)
 
 	resp, err := client.RequestToken(context.Background(), ClientCredentialsRequest{})
 	if err != nil {

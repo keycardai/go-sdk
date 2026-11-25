@@ -59,7 +59,8 @@ type fakeZone struct {
 	omitDeviceEndpoint atomic.Bool
 	// discoveryStatus, when set, is the status of every discovery response, with no
 	// body.
-	discoveryStatus atomic.Int32
+	discoveryStatus     atomic.Int32
+	discoveryRetryAfter string
 	// delay holds each discovery, device authorization, and token response back this
 	// long, or until the client gives up on the request. Set it before the first
 	// request. mu does not guard it.
@@ -96,6 +97,7 @@ func newFakeZone(t *testing.T) *fakeZone {
 			return
 		}
 		if status := z.discoveryStatus.Load(); status != 0 {
+			w.Header().Set("Retry-After", z.discoveryRetryAfter)
 			w.WriteHeader(int(status))
 			return
 		}
