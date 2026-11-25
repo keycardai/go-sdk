@@ -115,6 +115,26 @@ func TestTokenExchangeClient_BasicAuth(t *testing.T) {
 	}
 }
 
+func TestTokenExchangeClient_UnconfiguredCredentialIssuer(t *testing.T) {
+	zone := newFakeZone(t)
+	zone.script(stepToken)
+	credential, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		"https://other.example.com": {ClientID: "client", ClientSecret: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewTokenExchangeClient(zone.URL, WithTokenExchangeCredential(credential))
+	_, err = client.ExchangeToken(context.Background(), TokenExchangeRequest{SubjectToken: "subject"})
+	var configError *ClientSecretConfigurationError
+	if !errors.As(err, &configError) {
+		t.Errorf("got error %v, want ClientSecretConfigurationError", err)
+	}
+	if got := len(zone.tokenCalls()); got != 0 {
+		t.Errorf("got %d token POSTs, want 0", got)
+	}
+}
+
 type exchangeAssertionCredential struct {
 	prepare func(string, string, *PrepareOptions) (*TokenExchangeRequest, error)
 }

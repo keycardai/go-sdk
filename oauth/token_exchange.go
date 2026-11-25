@@ -150,11 +150,12 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 			if err != nil {
 				return nil, err
 			}
-			if prepared != nil {
-				req.ClientAssertion = prepared.ClientAssertion
-				req.ClientAssertionType = prepared.ClientAssertionType
-				req.ClientID = prepared.ClientID
+			if prepared == nil || prepared.ClientAssertion == "" {
+				return nil, &ClientSecretConfigurationError{Message: fmt.Sprintf("no client credentials configured for zone %q", c.issuerURL)}
 			}
+			req.ClientAssertion = prepared.ClientAssertion
+			req.ClientAssertionType = prepared.ClientAssertionType
+			req.ClientID = prepared.ClientID
 		}
 	}
 
