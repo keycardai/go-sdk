@@ -1,3 +1,10 @@
+## v0.34.1 (2026-11-25)
+
+
+- fix(oauth): treat an oversized 2xx metadata response as retryable (#83)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.34.0 (2026-11-25)
 
 
