@@ -156,3 +156,42 @@ func TestFetchAuthorizationServerMetadata_DeviceAuthorizationEndpoint(t *testing
 		})
 	}
 }
+
+// Spec row 12: advertised revocation fields are typed and do not appear in Extra.
+// Spec row 13: omitted revocation fields are empty without an error.
+func TestFetchAuthorizationServerMetadata_Revocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		methods    []string
+	}{
+		{"present", "/custom/revoke", []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"}},
+		{"absent", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				issuer := "http://" + r.Host
+				doc := map[string]any{"issuer": issuer, "custom_extension": true}
+				if tc.path != "" {
+					doc["revocation_endpoint"] = issuer + tc.path
+					doc["revocation_endpoint_auth_methods_supported"] = tc.methods
+				}
+				_ = json.NewEncoder(w).Encode(doc)
+			}))
+			defer server.Close()
+			md, err := FetchAuthorizationServerMetadata(context.Background(), server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEndpoint := ""
+			if tc.path != "" {
+				wantEndpoint = server.URL + tc.path
+			}
+			if md.RevocationEndpoint != wantEndpoint || !reflect.DeepEqual(md.RevocationEndpointAuthMethodsSupported, tc.methods) {
+				t.Errorf("revocation metadata = %q, %v; want %q, %v", md.RevocationEndpoint, md.RevocationEndpointAuthMethodsSupported, wantEndpoint, tc.methods)
+			}
+			if want := map[string]any{"custom_extension": true}; !reflect.DeepEqual(md.Extra, want) {
+				t.Errorf("Extra = %v, want %v", md.Extra, want)
+			}
+		})
+	}
+}

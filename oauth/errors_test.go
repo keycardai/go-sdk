@@ -128,6 +128,7 @@ func TestKeycardErrorMarker(t *testing.T) {
 		{"ConfigurationError", &ConfigurationError{Message: "bad config"}, true},
 		{"DeviceAuthorizationDiscoveryError", &DeviceAuthorizationDiscoveryError{Message: "discovery", Err: errors.New("reset")}, true},
 		{"HTTPError", &HTTPError{Message: "not found", Status: 404}, true},
+		{"NetworkError", &NetworkError{Message: "request failed", Err: errors.New("reset")}, true},
 		{"OAuthError", &OAuthError{ErrorCode: "invalid_grant", Message: "expired"}, true},
 		{"InvalidTokenError", &InvalidTokenError{Message: "bad signature"}, true},
 		{"InsufficientScopeError", &InsufficientScopeError{Message: "need scope"}, true},
