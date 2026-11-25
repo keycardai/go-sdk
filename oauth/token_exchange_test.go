@@ -11,6 +11,106 @@ import (
 	"testing"
 )
 
+// Spec row 4f: reject a request ClientID with Basic before cold discovery.
+// This client does not expose an actor source.
+func TestTokenExchangeClient_RejectsClientIDWithBasic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	client := NewTokenExchangeClient(server.URL, WithClientCredentials("configured", "secret"))
+	_, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{
+		SubjectToken: "subject",
+		ClientID:     "request-id",
+	})
+	var configErr *ConfigurationError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("expected ConfigurationError, got %v", err)
+	}
+}
+
+// Spec row 4f: a ClientSecretCredential with a request ClientID is rejected before discovery.
+func TestTokenExchangeClient_RejectsClientIDWithCredentialBasic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	credential, err := NewClientSecret("configured", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewTokenExchangeClient(server.URL, WithTokenExchangeCredential(credential))
+	_, err = client.ExchangeToken(context.Background(), TokenExchangeRequest{
+		SubjectToken: "subject",
+		ClientID:     "request-id",
+	})
+	var configErr *ConfigurationError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("expected ConfigurationError, got %v", err)
+	}
+}
+
+// Spec row 4g: an explicit assertion suppresses Basic with or without a request ClientID.
+func TestTokenExchangeClient_AssertionTakesPrecedenceOverBasic(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		clientID string
+	}{
+		{name: "with client ID", clientID: "request-id"},
+		{name: "without client ID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/.well-known/oauth-authorization-server" {
+					json.NewEncoder(w).Encode(map[string]string{
+						"issuer":         "http://" + r.Host,
+						"token_endpoint": "http://" + r.Host + "/token",
+					})
+					return
+				}
+				if r.URL.Path != "/token" || r.Method != http.MethodPost {
+					t.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Errorf("parse token request: %v", err)
+					http.Error(w, "invalid form", http.StatusBadRequest)
+					return
+				}
+				if _, present := r.Header["Authorization"]; present {
+					t.Error("token request sent an Authorization header")
+				}
+				if r.PostForm.Get("client_assertion") != "assertion" ||
+					r.PostForm.Get("client_assertion_type") != assertionType {
+					t.Error("token request did not preserve the assertion and its type")
+				}
+				if r.PostForm.Get("client_id") != tc.clientID || r.PostForm.Has("client_id") != (tc.clientID != "") {
+					t.Errorf("unexpected client_id form values: %q", r.PostForm["client_id"])
+				}
+				json.NewEncoder(w).Encode(map[string]string{"access_token": "issued"})
+			}))
+			defer server.Close()
+
+			client := NewTokenExchangeClient(server.URL, WithClientCredentials("configured", "secret"))
+			_, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{
+				SubjectToken:        "subject",
+				ClientAssertion:     "assertion",
+				ClientAssertionType: assertionType,
+				ClientID:            tc.clientID,
+			})
+			if err != nil {
+				t.Fatalf("exchange: %v", err)
+			}
+		})
+	}
+}
+
 func TestTokenExchangeClient_ExchangeToken(t *testing.T) {
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
