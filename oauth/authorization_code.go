@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -456,6 +457,9 @@ func ResolveIssuerFromChallenge(ctx context.Context, wwwAuthenticateHeader strin
 
 	data, err := readBoundedBody(resp.Body)
 	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return "", oversizedOAuthError(resp.StatusCode)
+		}
 		return "", fmt.Errorf("reading resource metadata: %w", err)
 	}
 
