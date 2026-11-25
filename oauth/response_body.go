@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 )
 
 // MaxResponseBodyBytes is the maximum number of decoded bytes read from an
@@ -26,6 +27,22 @@ func readBoundedBody(r io.Reader) ([]byte, error) {
 		return nil, ErrResponseBodyTooLarge
 	}
 	return data, nil
+}
+
+func readMetadataBody(resp *http.Response) ([]byte, error) {
+	if !isSuccessStatus(resp.StatusCode) {
+		return nil, nil
+	}
+	data, err := readBoundedBody(resp.Body)
+	if errors.Is(err, ErrResponseBodyTooLarge) {
+		status := &HTTPError{Status: resp.StatusCode, Message: "reading metadata response"}
+		return nil, fmt.Errorf("%w: %w", status, err)
+	}
+	return data, err
+}
+
+func isSuccessStatus(status int) bool {
+	return status >= http.StatusOK && status < http.StatusMultipleChoices
 }
 
 func oversizedOAuthError(status int) *OAuthError {

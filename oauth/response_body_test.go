@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -145,6 +147,7 @@ func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 		wantNegativeCached bool
 	}{
 		{http.StatusOK, false},
+		{http.StatusCreated, false},
 		{http.StatusTooManyRequests, false},
 		{http.StatusServiceUnavailable, false},
 		{http.StatusBadRequest, true},
@@ -185,14 +188,23 @@ func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 			srv.Close()
 			t.Fatalf("status %d: want *TokenEndpointDiscoveryError, got %T: %v", tc.status, err, err)
 		}
+		if got := discoveryErr.Retryable(); got == tc.wantNegativeCached {
+			t.Errorf("status %d: Retryable() = %v, want %v", tc.status, got, !tc.wantNegativeCached)
+		}
+		var httpErr *HTTPError
+		if !errors.As(err, &httpErr) || httpErr.Status != tc.status {
+			t.Errorf("status %d: expected matching HTTPError in %v", tc.status, err)
+		}
 		if calls.Load() != 1 {
 			srv.Close()
 			t.Fatalf("status %d: calls = %d, want 1", tc.status, calls.Load())
 		}
 
 		failFirst.Store(false)
-		// Past any retry delay (at most 1.2s for a first 5xx), well inside negative_ttl.
-		advance(2 * time.Second)
+		if tc.status == http.StatusServiceUnavailable {
+			// Past the initial retry delay, well inside negative_ttl.
+			advance(2 * time.Second)
+		}
 		ep, err := client.TokenEndpoint(context.Background())
 		srv.Close()
 
@@ -217,14 +229,27 @@ func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 	}
 }
 
-// Spec row 1a: JWKS discovery overflow maps to JWKSDiscoveryError and JWKS fetch overflow maps to JWKSFetchError.
+// Spec row 1a: oversized JWKS discovery and key set responses are retryable without a delay.
 func TestResponseBodyLimit_JWKS(t *testing.T) {
-	var mode atomic.Int32 // 0 = oversized discovery, 1 = oversized jwks
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{http.StatusOK, http.StatusCreated} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			testResponseBodyLimitJWKS(t, privateKey, status)
+		})
+	}
+}
+
+func testResponseBodyLimitJWKS(t *testing.T, privateKey *rsa.PrivateKey, status int) {
+	t.Helper()
+	var discoveryCalls, jwksCalls atomic.Int32
 	var srvURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/.well-known/oauth-authorization-server" {
-			if mode.Load() == 0 {
+			if discoveryCalls.Add(1) == 1 {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(makeOversizedJSON(1024))
 				return
@@ -235,20 +260,33 @@ func TestResponseBodyLimit_JWKS(t *testing.T) {
 			})
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(makeOversizedJSON(1024))
+		if jwksCalls.Add(1) == 1 {
+			w.WriteHeader(status)
+			_, _ = w.Write(makeOversizedJSON(1024))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+			"kty": "RSA", "kid": "k1", "n": Base64URLEncode(privateKey.N.Bytes()), "e": "AQAB",
+		}}})
 	}))
 	defer srv.Close()
 	srvURL = srv.URL
 
 	kr := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()))
+	kr.now = newFakeDeviceClock().Now
 	_, err := kr.Key(context.Background(), srv.URL, "k1")
 	var discErr *JWKSDiscoveryError
 	if !errors.As(err, &discErr) {
 		t.Fatalf("oversized discovery: want *JWKSDiscoveryError, got %T: %v", err, err)
 	}
+	if !discErr.Retryable() || !errors.Is(err, ErrResponseBodyTooLarge) {
+		t.Errorf("expected retryable oversized discovery error, got %v", err)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusOK {
+		t.Errorf("expected HTTP 200 in %v", err)
+	}
 
-	mode.Store(1)
 	_, err = kr.Key(context.Background(), srv.URL, "k1")
 	var fetchErr *JWKSFetchError
 	if !errors.As(err, &fetchErr) {
@@ -256,6 +294,63 @@ func TestResponseBodyLimit_JWKS(t *testing.T) {
 	}
 	if !errors.Is(err, ErrResponseBodyTooLarge) {
 		t.Errorf("expected ErrResponseBodyTooLarge in JWKSFetchError chain, got %v", err)
+	}
+	if !fetchErr.Retryable() {
+		t.Errorf("expected retryable JWKSFetchError, got %v", err)
+	}
+	if !errors.As(err, &httpErr) || httpErr.Status != status {
+		t.Errorf("expected HTTP %d in %v", status, err)
+	}
+
+	key, err := kr.Key(context.Background(), srv.URL, "k1")
+	if err != nil || key == nil {
+		t.Errorf("immediate key lookup = (%v, %v), want a key", key, err)
+	}
+	if got := discoveryCalls.Load(); got != 2 {
+		t.Errorf("discovery requests = %d, want 2", got)
+	}
+	if got := jwksCalls.Load(); got != 2 {
+		t.Errorf("JWKS requests = %d, want 2", got)
+	}
+}
+
+// Spec row 1a: oversized device discovery is retryable without a delay.
+func TestResponseBodyLimit_DeviceDiscovery(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "60")
+			_, _ = w.Write(makeOversizedJSON(1024))
+			return
+		}
+		issuer := "http://" + r.Host
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer": issuer, "token_endpoint": issuer + "/token",
+			"device_authorization_endpoint": issuer + "/device",
+		})
+	}))
+	defer srv.Close()
+	client, err := NewDeviceAuthorizationClient(srv.URL,
+		WithDevicePublicClient("cid"), WithDeviceHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.metadata.now = newFakeDeviceClock().Now
+
+	_, err = client.resolveMetadata(context.Background())
+	var discoveryErr *DeviceAuthorizationDiscoveryError
+	if !errors.As(err, &discoveryErr) || !errors.Is(err, ErrResponseBodyTooLarge) {
+		t.Fatalf("want oversized device discovery error, got %v", err)
+	}
+	if !discoveryErr.Retryable() {
+		t.Errorf("expected retryable device discovery error, got %v", err)
+	}
+	md, err := client.resolveMetadata(context.Background())
+	if err != nil || md == nil || md.DeviceAuthorizationEndpoint != srv.URL+"/device" {
+		t.Errorf("immediate discovery = (%v, %v), want device metadata", md, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("discovery requests = %d, want 2", got)
 	}
 }
 

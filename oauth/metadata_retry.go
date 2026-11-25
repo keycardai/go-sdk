@@ -26,7 +26,8 @@ func (e *metadataHTTPError) Unwrap() error { return e.HTTPError }
 func retryableMetadataFailure(err error) bool {
 	var status *HTTPError
 	if errors.As(err, &status) {
-		return status.Status == 429 || (status.Status >= 500 && status.Status < 600)
+		return status.Status == 429 || (status.Status >= 500 && status.Status < 600) ||
+			(isSuccessStatus(status.Status) && errors.Is(err, ErrResponseBodyTooLarge))
 	}
 	var cert *tls.CertificateVerificationError
 	var unknownAuthority x509.UnknownAuthorityError
@@ -81,7 +82,10 @@ func (r metadataRetry) record(now time.Time, err error) metadataRetry {
 		return r
 	}
 	var status *HTTPError
-	if errors.As(err, &status) && (status.Status == 429 || status.Status == 503) {
+	if errors.As(err, &status) && isSuccessStatus(status.Status) {
+		return r
+	}
+	if status != nil && (status.Status == 429 || status.Status == 503) {
 		var response *metadataHTTPError
 		if errors.As(err, &response) {
 			if delay, ok := metadataRetryAfter(now, response.retryAfter); ok {

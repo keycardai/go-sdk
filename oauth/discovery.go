@@ -108,6 +108,12 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 	}
 	defer resp.Body.Close()
 
+	// Read the body once so we can decode the typed fields and also capture any
+	// unknown ones for forward compatibility.
+	data, err := readMetadataBody(resp)
+	if errors.Is(err, ErrResponseBodyTooLarge) {
+		return nil, &InvalidMetadataError{Message: fmt.Sprintf("authorization server metadata from %s exceeded size limit", url), Err: err}
+	}
 	if resp.StatusCode != http.StatusOK {
 		status := &HTTPError{
 			Message: fmt.Sprintf("discovery endpoint returned HTTP %d for %s", resp.StatusCode, url),
@@ -119,13 +125,7 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 		return nil, status
 	}
 
-	// Read the body once so we can decode the typed fields and also capture any
-	// unknown ones for forward compatibility.
-	data, err := readBoundedBody(resp.Body)
 	if err != nil {
-		if errors.Is(err, ErrResponseBodyTooLarge) {
-			return nil, &InvalidMetadataError{Message: fmt.Sprintf("authorization server metadata from %s exceeded size limit", url), Err: err}
-		}
 		return nil, fmt.Errorf("reading authorization server metadata: %w", err)
 	}
 
