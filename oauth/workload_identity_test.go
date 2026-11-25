@@ -473,6 +473,30 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 	})
 }
 
+// Spec row 4f: reading the configured or unset client ID does not fetch a token.
+func TestWorkloadIdentity_ClientIDGetter(t *testing.T) {
+	source := IdentityTokenFunc(func(_ context.Context) (string, error) {
+		t.Fatal("reading the client ID must not call the token source")
+		return "", nil
+	})
+
+	configured, err := NewWorkloadIdentity(source, WithWorkloadClientID("acr_123"))
+	if err != nil {
+		t.Fatalf("constructing credential: %v", err)
+	}
+	if got := configured.ClientID(); got != "acr_123" {
+		t.Errorf("configured client ID: got %q, want %q", got, "acr_123")
+	}
+
+	unconfigured, err := NewWorkloadIdentity(source)
+	if err != nil {
+		t.Fatalf("constructing credential: %v", err)
+	}
+	if got := unconfigured.ClientID(); got != "" {
+		t.Errorf("unconfigured client ID: got %q, want empty", got)
+	}
+}
+
 func TestWorkloadIdentity_ClientID(t *testing.T) {
 	source := IdentityTokenFunc(func(_ context.Context) (string, error) { return "platform-token", nil })
 

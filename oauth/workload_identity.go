@@ -69,6 +69,11 @@ func NewWorkloadIdentity(source IdentityTokenSource, opts ...WorkloadIdentityOpt
 	return w, nil
 }
 
+// ClientID returns the configured client ID, or an empty string if unset.
+func (w *WorkloadIdentityCredential) ClientID() string {
+	return w.clientID
+}
+
 // Auth returns nil (workload identity uses assertion-based auth, not basic auth).
 func (w *WorkloadIdentityCredential) Auth(_ string) *ClientAuth {
 	return nil
