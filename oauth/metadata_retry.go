@@ -23,10 +23,14 @@ type metadataHTTPError struct {
 
 func (e *metadataHTTPError) Unwrap() error { return e.HTTPError }
 
+func retryableHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests || (status >= http.StatusInternalServerError && status < 600)
+}
+
 func retryableMetadataFailure(err error) bool {
 	var status *HTTPError
 	if errors.As(err, &status) {
-		return status.Status == 429 || (status.Status >= 500 && status.Status < 600) ||
+		return retryableHTTPStatus(status.Status) ||
 			(isSuccessStatus(status.Status) && errors.Is(err, ErrResponseBodyTooLarge))
 	}
 	var cert *tls.CertificateVerificationError

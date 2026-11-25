@@ -3,7 +3,6 @@ package oauth
 import (
 	"context"
 	"errors"
-	"net/http"
 )
 
 // WebIdentityConfigurationError indicates a WebIdentity client assertion could not be
@@ -66,7 +65,7 @@ func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
 	var status *HTTPError
 	if errors.As(e.Err, &status) {
-		return status.Status >= http.StatusInternalServerError && status.Status < 600
+		return retryableHTTPStatus(status.Status)
 	}
 	return e.Err != nil && !errors.Is(e.Err, context.Canceled) && retryableMetadataFailure(e.Err)
 }
