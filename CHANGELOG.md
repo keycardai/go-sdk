@@ -1,3 +1,15 @@
+## v0.31.0 (2026-11-25)
+
+
+- feat(oauth): accept an assertion credential for token exchange (#78)
+- * fix(oauth): prepare missing token exchange assertions
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * fix(oauth): require exchange credentials for the resolved issuer
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.30.1 (2026-11-25)
 
 
