@@ -12,7 +12,7 @@ Packages (dependency direction in parentheses):
 - `mcp`: MCP server/client auth: `RequireBearerAuth` (`net/http` middleware), `AuthMetadataHandler`, `AuthProvider`/`AccessContext`, `Grant` (depends on oauth). Re-exports moved credential types as deprecated aliases.
 - `a2a`: agent-to-agent delegation client: card discovery, token exchange, JSON-RPC invoke (depends on oauth).
 - `policy`: Cedar policy bundle encode/decode, digest, evaluation (depends on cedar-go and jcs, no sibling).
-- `spiffe`: SPIFFE JWT-SVID workload identity source (depends on oauth). The optional `github.com/keycardai/go-sdk/spiffe` module (Go 1.24.0) keeps go-spiffe and gRPC out of the root module. Its `replace github.com/keycardai/go-sdk => ..` directive tests against the root checkout; downstream consumers use the declared root requirement.
+- `spiffe`: SPIFFE JWT-SVID workload identity source (depends on oauth). The optional `github.com/keycardai/go-sdk/spiffe` module (Go 1.25.0) keeps go-spiffe and gRPC out of the root module. Its `replace github.com/keycardai/go-sdk => ..` directive tests against the root checkout; downstream consumers use the declared root requirement.
 - `examples/*`: runnable examples. Most are in the root module; `examples/mcp-server-official` and `examples/mcp-server-mark3labs` are separate modules with `replace github.com/keycardai/go-sdk => ../..`.
 
 ## Build, test, lint
