@@ -7,16 +7,15 @@ import (
 )
 
 // IdentityTokenSource supplies a platform-signed OIDC token for use as a client
-// assertion during token exchange. It is the only per-platform piece of a
+// assertion or an actor token. It is the only per-platform piece of a
 // workload identity credential: [FileTokenSource] covers platforms that
 // project the token to a file (EKS, AKS, Kubernetes projected service-account
 // tokens), [GCPMetadataTokenSource] covers platforms that serve it from the
 // GCP metadata endpoint (GKE, GCE, Cloud Run), and [IdentityTokenFunc] adapts
 // any custom fetch.
 //
-// IdentityToken is called on every token exchange. Implementations must return
-// the current token; platforms rotate these tokens, so returning a stale
-// cached value risks an expired assertion.
+// Implementations return the current token on every call. Platforms rotate
+// these tokens, so returning a stale cached value risks using an expired token.
 type IdentityTokenSource interface {
 	IdentityToken(ctx context.Context) (string, error)
 }
@@ -85,7 +84,7 @@ func (w *WorkloadIdentityCredential) Auth(_ string) *ClientAuth {
 // other source error is wrapped in a WorkloadIdentityRuntimeError with
 // Source "custom".
 func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Context, subjectToken, resource string, _ *PrepareOptions) (*TokenExchangeRequest, error) {
-	assertion, err := w.identityToken(ctx)
+	assertion, err := fetchIdentityToken(ctx, w.source)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +99,14 @@ func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Con
 	}, nil
 }
 
-// identityToken fetches the current token from the source. A source error that is
+// fetchIdentityToken fetches the current token from the source. A source error that is
 // not one of this package's typed errors is wrapped in a WorkloadIdentityRuntimeError
 // with Source "custom".
-func (w *WorkloadIdentityCredential) identityToken(ctx context.Context) (string, error) {
-	token, err := w.source.IdentityToken(ctx)
+func fetchIdentityToken(ctx context.Context, source IdentityTokenSource) (string, error) {
+	if f, ok := source.(IdentityTokenFunc); ok && f == nil {
+		return "", &WorkloadIdentityConfigurationError{Message: "identity token source function must not be nil"}
+	}
+	token, err := source.IdentityToken(ctx)
 	if err != nil {
 		var cfgErr *WorkloadIdentityConfigurationError
 		var runtimeErr *WorkloadIdentityRuntimeError

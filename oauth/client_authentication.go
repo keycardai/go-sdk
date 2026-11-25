@@ -84,7 +84,7 @@ func (w *WebIdentityCredential) ClientAuthentication(ctx context.Context, _, end
 // WorkloadIdentityRuntimeError. Any other source error is wrapped in a
 // WorkloadIdentityRuntimeError with Source "custom".
 func (w *WorkloadIdentityCredential) ClientAuthentication(ctx context.Context, _, _ string) (*ClientAuthentication, error) {
-	assertion, err := w.identityToken(ctx)
+	assertion, err := fetchIdentityToken(ctx, w.source)
 	if err != nil {
 		return nil, err
 	}

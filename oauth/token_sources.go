@@ -231,7 +231,8 @@ func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, err
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
 			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: fmt.Sprintf("metadata server returned status %d", resp.StatusCode),
+			Message: "metadata server returned a non-200 response",
+			Err:     &HTTPError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)},
 		}
 	}
 
@@ -338,7 +339,8 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
 			Source:  WorkloadIdentitySourceFly,
-			Message: fmt.Sprintf("Machines API returned status %d", resp.StatusCode),
+			Message: "Machines API returned a non-200 response",
+			Err:     &HTTPError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)},
 		}
 	}
 

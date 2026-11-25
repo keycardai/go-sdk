@@ -1,5 +1,11 @@
 package oauth
 
+import (
+	"context"
+	"errors"
+	"net/http"
+)
+
 // WebIdentityConfigurationError indicates a WebIdentity client assertion could not be
 // prepared because a required value was missing at request time: the client id (iss/sub)
 // or the token endpoint (aud).
@@ -34,11 +40,9 @@ func (e *WorkloadIdentityConfigurationError) Error() string {
 
 func (e *WorkloadIdentityConfigurationError) Unwrap() error { return e.Err }
 
-// WorkloadIdentityRuntimeError indicates the subject token could not be
-// obtained at request time (e.g. the token file was rotated away or emptied
-// after construction, or the platform endpoint was unreachable). It is
-// distinct from WorkloadIdentityConfigurationError, which is a
-// construction-time fault. Source identifies the token source ("file",
+// WorkloadIdentityRuntimeError indicates that the identity token source fails
+// at request time (e.g. the token file is empty or the platform endpoint is
+// unreachable). Source identifies the token source ("file",
 // "gcp-metadata", "fly", or "custom" for a source whose error is not one of
 // this package's typed errors). Err carries the
 // underlying cause for errors.Is/errors.As, and is nil when there is no
@@ -57,6 +61,15 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 }
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
+
+// Retryable reports whether the source fails with a transient transport error.
+func (e *WorkloadIdentityRuntimeError) Retryable() bool {
+	var status *HTTPError
+	if errors.As(e.Err, &status) {
+		return status.Status >= http.StatusInternalServerError && status.Status < 600
+	}
+	return e.Err != nil && !errors.Is(e.Err, context.Canceled) && retryableMetadataFailure(e.Err)
+}
 
 // ClientSecretConfigurationError means a ClientSecretCredential is misconfigured.
 // Returned by constructors when client_id, client_secret or zone map are empty.

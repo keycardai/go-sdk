@@ -50,6 +50,7 @@ type tokenExchangeConfig struct {
 	clientID       string
 	clientSecret   string
 	credential     ApplicationCredential
+	actor          IdentityTokenSource
 	httpClient     *http.Client
 	discoveryTTL   time.Duration
 	negativeTTL    time.Duration
@@ -69,6 +70,13 @@ func WithTokenExchangeCredential(credential ApplicationCredential) TokenExchange
 	return func(cfg *tokenExchangeConfig) {
 		cfg.credential = credential
 	}
+}
+
+// WithTokenExchangeActor sets the source of the actor JWT for token exchanges.
+// The client fetches a token for each exchange that does not supply its own
+// actor token and skips the source for impersonation. A nil source disables it.
+func WithTokenExchangeActor(source IdentityTokenSource) TokenExchangeClientOption {
+	return func(cfg *tokenExchangeConfig) { cfg.actor = source }
 }
 
 // WithTokenExchangeHTTPClient sets the HTTP client for token exchange requests.
@@ -134,6 +142,10 @@ func (c *TokenExchangeClient) TokenEndpoint(ctx context.Context) (string, error)
 // ExchangeToken performs a token exchange request. A request assertion takes
 // precedence over configured HTTP Basic credentials. A request ClientID with
 // HTTP Basic returns a ConfigurationError before discovery.
+// A configured [WithTokenExchangeActor] source provides an actor JWT unless the
+// request supplies one or uses the substitute-user token type. A source failure
+// returns a WorkloadIdentityConfigurationError or WorkloadIdentityRuntimeError
+// before any request to the authorization server.
 func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchangeRequest) (*TokenResponse, error) {
 	auth := &ClientAuth{ClientID: c.cfg.clientID, ClientSecret: c.cfg.clientSecret}
 	if c.cfg.credential != nil {
@@ -142,6 +154,15 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	useBasic := req.ClientAssertion == "" && auth != nil && auth.ClientID != "" && auth.ClientSecret != ""
 	if useBasic && req.ClientID != "" {
 		return nil, &ConfigurationError{Message: "token exchange client_id cannot be sent with HTTP Basic"}
+	}
+
+	if c.cfg.actor != nil && req.ActorToken == "" && req.SubjectTokenType != SubstituteUserTokenType {
+		token, err := fetchIdentityToken(ctx, c.cfg.actor)
+		if err != nil {
+			return nil, err
+		}
+		req.ActorToken = token
+		req.ActorTokenType = "urn:ietf:params:oauth:token-type:jwt"
 	}
 
 	tokenEndpoint, err := c.endpoint.Endpoint(ctx)
