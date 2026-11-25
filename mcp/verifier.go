@@ -26,9 +26,13 @@ type AuthInfo struct {
 	// of grant type or which credential authenticated. It is a Keycard claim and is
 	// empty on tokens from other issuers.
 	KeycardAppID string
-	Scopes       []string
-	Resource     string
-	ExpiresAt    int64
+	// Aud holds the verified audiences.
+	Aud []string
+	// Act holds the issued actor claim, including nested actors, when present.
+	Act       map[string]any
+	Scopes    []string
+	Resource  string
+	ExpiresAt int64
 	// Issuer is the verified token's iss claim. It identifies the zone that minted
 	// the token and is used to route the outbound exchange in a multi-zone provider.
 	Issuer string
@@ -87,7 +91,12 @@ func (v *JWTOAuthTokenVerifier) VerifyAccessToken(ctx context.Context, token str
 		Subject:  claims.Subject,
 		Scopes:   parseScopes(claims.Scope),
 		Issuer:   claims.Issuer,
+		Aud:      claims.Audience,
 	}
+	if info.Aud == nil {
+		info.Aud = []string{}
+	}
+	info.Act, _ = claims.Extra["act"].(map[string]any)
 
 	if claims.Expiry != 0 {
 		info.ExpiresAt = claims.Expiry
