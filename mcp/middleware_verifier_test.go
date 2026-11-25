@@ -310,6 +310,48 @@ func TestBearerMiddleware_WrongAudienceRejected(t *testing.T) {
 	}
 }
 
+func TestBearerMiddleware_AudienceIntersection(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := RequireBearerAuth(
+		zoneVerifier(t, &key.PublicKey, oauth.WithAudiences("resource-a", "resource-b")),
+	)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, tt := range []struct {
+		name   string
+		aud    []string
+		status int
+	}{
+		// Spec row 8a: a scalar audience matches the second configured value.
+		{"scalar match", []string{"resource-b"}, http.StatusOK},
+		// Spec row 8b: a scalar audience matches none of the configured values.
+		{"scalar mismatch", []string{"resource-c"}, http.StatusUnauthorized},
+		// Spec row 8c: an array audience intersects the configured values.
+		{"array match", []string{"resource-c", "resource-b"}, http.StatusOK},
+		// Spec row 8d: an array audience does not intersect the configured values.
+		{"array mismatch", []string{"resource-c", "resource-d"}, http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now().Unix()
+			token := mintToken(t, key, testZone, oauth.JWTClaims{
+				Subject: "user-1", ClientID: "client-1", Audience: tt.aud,
+				IssuedAt: now, Expiry: now + 3600,
+			})
+			rec := serve(handler, token)
+			if rec.Code != tt.status {
+				t.Fatalf("status: got %d, want %d", rec.Code, tt.status)
+			}
+			if tt.status == http.StatusUnauthorized && !strings.Contains(rec.Header().Get("WWW-Authenticate"), "invalid_token") {
+				t.Errorf("expected invalid_token challenge, got %q", rec.Header().Get("WWW-Authenticate"))
+			}
+		})
+	}
+}
+
 func TestBearerMiddleware_NonBearerSchemeRejected(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	handler := RequireBearerAuth(

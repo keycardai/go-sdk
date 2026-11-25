@@ -454,6 +454,14 @@ func captureDefaultSlog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// Spec row 8e: an explicit empty audience list is a configuration error.
+func TestNewJWTVerifier_RejectsEmptyAudiences(t *testing.T) {
+	_, err := NewJWTVerifier(nil, []string{"https://issuer.example"}, WithAudiences())
+	if _, ok := err.(*ConfigurationError); !ok {
+		t.Fatalf("expected ConfigurationError, got %T: %v", err, err)
+	}
+}
+
 func TestNewJWTVerifier_WarnsOnceWithoutAudiences(t *testing.T) {
 	buf := captureDefaultSlog(t)
 
