@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,7 +39,27 @@ func retryableMetadataFailure(err error) bool {
 	var timeout interface{ Timeout() bool }
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) ||
-		errors.As(err, &operation) || (errors.As(err, &timeout) && timeout.Timeout())
+		errors.As(err, &operation) || (errors.As(err, &timeout) && timeout.Timeout()) || http2TransportFailure(err)
+}
+
+func http2TransportFailure(err error) bool {
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		// net/http does not export its bundled HTTP/2 transport error types.
+		kind := reflect.TypeOf(cause)
+		switch kind.PkgPath() {
+		case "net/http":
+			switch kind.Name() {
+			case "http2StreamError", "http2ConnectionError", "http2GoAwayError":
+				return true
+			}
+		case "golang.org/x/net/http2":
+			switch kind.Name() {
+			case "StreamError", "ConnectionError", "GoAwayError":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type metadataRetry struct {
@@ -96,7 +117,7 @@ func metadataRetryAfter(now time.Time, value string) (time.Duration, bool) {
 		n, _ := strconv.Atoi(significant)
 		return min(time.Minute, time.Duration(n)*time.Second), true
 	}
-	for _, format := range []string{http.TimeFormat, "Monday, 02-Jan-06 15:04:05 GMT", time.ANSIC} {
+	for _, format := range []string{http.TimeFormat, "Monday, 02-Jan-06 15:04:05 GMT", time.ANSIC, "Mon Jan 02 15:04:05 2006"} {
 		date, err := time.Parse(format, value)
 		if err != nil {
 			continue

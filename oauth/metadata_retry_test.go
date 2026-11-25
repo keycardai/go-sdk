@@ -111,6 +111,39 @@ func TestMetadataRetryTransportClassification(t *testing.T) {
 	}
 }
 
+// Spec row 3 (base): a peer stream reset before headers is a network failure.
+func TestMetadataRetryHTTP2StreamReset(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		panic(http.ErrAbortHandler)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	keyring := NewJWKSOAuthKeyring(WithKeyringHTTPClient(server.Client()))
+	keyring.now = newFakeDeviceClock().Now
+	_, first := keyring.Key(context.Background(), server.URL, "key")
+	_, gated := keyring.Key(context.Background(), server.URL, "key")
+	if first == nil || !strings.Contains(first.Error(), "INTERNAL_ERROR") {
+		t.Fatalf("expected HTTP/2 INTERNAL_ERROR, got %v", first)
+	}
+	if first != gated || requests.Load() != 1 {
+		t.Fatalf("HTTP/2 stream reset did not pace the next fetch: requests=%d, errors=%v and %v", requests.Load(), first, gated)
+	}
+}
+
+// Spec row 2 (base): the asctime HTTP-date grammar allows both day representations.
+func TestMetadataRetryAsctimeDays(t *testing.T) {
+	now := time.Date(2024, 11, 6, 12, 0, 0, 0, time.UTC)
+	for _, header := range []string{"Wed Nov  6 12:00:05 2024", "Wed Nov 06 12:00:05 2024"} {
+		if delay, ok := metadataRetryAfter(now, header); !ok || delay != 5*time.Second {
+			t.Errorf("Retry-After %q: (%s, %t), want (5s, true)", header, delay, ok)
+		}
+	}
+}
+
 // Spec row 2 (base): an invalid HTTP-date cannot start a 429 delay.
 func TestMetadataRetryRejectsInvalidHTTPDate(t *testing.T) {
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
