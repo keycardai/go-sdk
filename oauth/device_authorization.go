@@ -548,9 +548,13 @@ func (c *DeviceAuthorizationClient) resolveMetadata(ctx context.Context) (*Autho
 		return c.cfg.metadata, nil
 	}
 	md, err := c.metadata.get(ctx, func(fetchCtx context.Context) (*AuthorizationServerMetadata, error) {
-		md, err := FetchAuthorizationServerMetadata(fetchCtx, c.issuer, WithDiscoveryHTTPClient(c.cfg.httpClient))
+		md, err := FetchAuthorizationServerMetadata(fetchCtx, c.issuer, WithDiscoveryHTTPClient(c.cfg.httpClient), cachedDiscovery)
 		if err != nil {
-			return nil, err
+			var configuration *ConfigurationError
+			if errors.As(err, &configuration) {
+				return nil, err
+			}
+			return nil, &DeviceAuthorizationDiscoveryError{Message: fmt.Sprintf("discovering authorization server metadata for %q", c.issuer), Err: err}
 		}
 		if err := checkDeviceMetadata(c.issuer, md); err != nil {
 			return nil, err
@@ -558,8 +562,9 @@ func (c *DeviceAuthorizationClient) resolveMetadata(ctx context.Context) (*Autho
 		return md, nil
 	})
 	var cfgErr *ConfigurationError
+	var discoveryErr *DeviceAuthorizationDiscoveryError
 	switch {
-	case errors.As(err, &cfgErr):
+	case errors.As(err, &cfgErr), errors.As(err, &discoveryErr):
 		return nil, err
 	case err != nil:
 		return nil, &DeviceAuthorizationDiscoveryError{Message: fmt.Sprintf("discovering authorization server metadata for %q", c.issuer), Err: err}
@@ -599,7 +604,10 @@ func (e *DeviceAuthorizationDiscoveryError) Error() string {
 	return e.Message
 }
 func (e *DeviceAuthorizationDiscoveryError) Unwrap() error { return e.Err }
-func (*DeviceAuthorizationDiscoveryError) keycardError()   {}
+
+// Retryable reports whether the failure is transient.
+func (e *DeviceAuthorizationDiscoveryError) Retryable() bool { return retryableMetadataFailure(e.Err) }
+func (*DeviceAuthorizationDiscoveryError) keycardError()     {}
 
 // authenticate adds the client authentication for a request to endpoint.
 func (c *DeviceAuthorizationClient) authenticate(ctx context.Context, endpoint string, header http.Header, form url.Values) error {

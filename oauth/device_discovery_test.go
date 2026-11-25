@@ -60,15 +60,16 @@ func TestDeviceDiscovery_MissingEndpointCachedForNegativeTTL(t *testing.T) {
 	}
 }
 
-// A discovery failure is a *DeviceAuthorizationDiscoveryError with the cause. A 5xx is
-// transient, so the next call discovers again.
-func TestDeviceDiscovery_FailureIsTypedAndTransientIsNotCached(t *testing.T) {
+// Spec row 37 (device authorization): a 503 Retry-After gates only later discovery.
+func TestDeviceDiscovery_RetryAfter(t *testing.T) {
 	zone := newFakeZone(t)
 	zone.discoveryStatus.Store(http.StatusServiceUnavailable)
+	zone.discoveryRetryAfter = "5"
+	clock := newFakeDeviceClock()
 	client := mustDeviceClient(t, zone.URL,
 		WithDeviceHTTPClient(zone.httpClient()),
 		WithDevicePublicClient("public-1"),
-		WithDeviceClock(newFakeDeviceClock()))
+		WithDeviceClock(clock))
 
 	for call := 1; call <= 2; call++ {
 		_, err := client.RequestDeviceAuthorization(context.Background(), DeviceAuthorizationRequest{})
@@ -78,11 +79,19 @@ func TestDeviceDiscovery_FailureIsTypedAndTransientIsNotCached(t *testing.T) {
 			t.Fatalf("call %d: error %v (%T), want *DeviceAuthorizationDiscoveryError", call, err, err)
 		}
 		wantHTTPError(t, err, http.StatusServiceUnavailable)
-		if got := zone.discoveryRequests.Load(); got != int32(call) {
-			t.Errorf("call %d: discovery requests: got %d, want %d", call, got, call)
+		if got := zone.discoveryRequests.Load(); got != 1 {
+			t.Errorf("call %d: discovery requests: got %d, want 1", call, got)
 		}
 	}
 	if n := len(zone.deviceCalls()); n != 0 {
 		t.Errorf("device authorization requests: got %d, want 0", n)
+	}
+	clock.advance(5 * time.Second)
+	zone.discoveryStatus.Store(0)
+	if _, err := client.RequestDeviceAuthorization(context.Background(), DeviceAuthorizationRequest{}); err != nil {
+		t.Fatalf("at expiry: %v", err)
+	}
+	if got := zone.discoveryRequests.Load(); got != 2 {
+		t.Errorf("discovery requests: got %d, want 2", got)
 	}
 }

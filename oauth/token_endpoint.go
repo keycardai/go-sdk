@@ -45,7 +45,7 @@ func sharedFetch(ctx context.Context, g *singleflight.Group, key string, timeout
 
 // discoveryCache holds one discovered value for an issuer. A success is kept for
 // discoveryTTL. A deterministic failure is kept for at most negativeTTL, never longer
-// than discoveryTTL. Transient failures are never kept. Concurrent callers on a cold
+// than discoveryTTL. Transient failures can pace new fetches. Concurrent callers on a cold
 // cache share one fetch.
 type discoveryCache[T any] struct {
 	discoveryTTL time.Duration
@@ -57,6 +57,7 @@ type discoveryCache[T any] struct {
 	value     T
 	err       error
 	expiresAt time.Time
+	retry     metadataRetry
 	group     singleflight.Group
 }
 
@@ -70,16 +71,15 @@ func newDiscoveryCache[T any](discoveryTTL, negativeTTL, fetchTimeout time.Durat
 }
 
 func (c *discoveryCache[T]) get(ctx context.Context, fetch func(context.Context) (T, error)) (T, error) {
-	c.mu.Lock()
-	if c.now().Before(c.expiresAt) {
-		v, err := c.value, c.err
-		c.mu.Unlock()
-		return v, err
+	if value, err, ok := c.lookup(); ok {
+		return value, err
 	}
-	c.mu.Unlock()
 
 	var zero T
 	v, err := sharedFetch(ctx, &c.group, "", c.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+		if value, err, ok := c.lookup(); ok {
+			return value, err
+		}
 		v, err := fetch(fetchCtx)
 		c.store(v, err)
 		return v, err
@@ -88,6 +88,18 @@ func (c *discoveryCache[T]) get(ctx context.Context, fetch func(context.Context)
 		return zero, err
 	}
 	return v.(T), nil
+}
+
+func (c *discoveryCache[T]) lookup() (T, error, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if now.Before(c.expiresAt) {
+		return c.value, c.err, true
+	}
+	var zero T
+	err := c.retry.failure(now)
+	return zero, err, err != nil
 }
 
 func (c *discoveryCache[T]) store(value T, err error) {
@@ -99,9 +111,12 @@ func (c *discoveryCache[T]) store(value T, err error) {
 	case err == nil:
 		c.value, c.err = value, nil
 		c.expiresAt = c.now().Add(c.discoveryTTL)
+		c.retry = metadataRetry{}
 	case c.negativeTTL > 0 && isDeterministicDiscoveryFailure(err):
 		c.value, c.err = zero, err
 		c.expiresAt = c.now().Add(min(c.negativeTTL, c.discoveryTTL))
+	default:
+		c.retry = c.retry.record(c.now(), err)
 	}
 }
 
@@ -133,7 +148,8 @@ func (r *tokenEndpointResolver) Endpoint(ctx context.Context) (string, error) {
 	return ep, nil
 }
 
-// Transport errors, timeouts, 5xx, 429, and 2xx/429/5xx size overflows are transient and never cached.
+// Transport errors, timeouts, 5xx, 429, and 2xx/429/5xx size overflows are not
+// eligible for negative caching.
 func isDeterministicDiscoveryFailure(err error) bool {
 	if errors.Is(err, ErrResponseBodyTooLarge) {
 		return false
@@ -159,7 +175,7 @@ func isDeterministicDiscoveryFailure(err error) bool {
 }
 
 func resolveTokenEndpoint(ctx context.Context, issuer string, httpClient *http.Client) (string, error) {
-	metadata, err := FetchAuthorizationServerMetadata(ctx, issuer, WithDiscoveryHTTPClient(httpClient))
+	metadata, err := FetchAuthorizationServerMetadata(ctx, issuer, WithDiscoveryHTTPClient(httpClient), cachedDiscovery)
 	if err != nil {
 		return "", &TokenEndpointDiscoveryError{Message: "discovering token endpoint", Err: err}
 	}

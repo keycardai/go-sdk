@@ -109,7 +109,7 @@ func TestJWKSOAuthKeyring_ConcurrentMissesForDifferentKidsShareOneFetch(t *testi
 	var fetches atomic.Int32
 	srv := cooldownZone(t, &kids, &fetches)
 	k := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()))
-	if _, err := k.resolveJWKSURI(context.Background(), srv.URL); err != nil {
+	if _, err := k.resolveJWKSURI(context.Background(), srv.URL, 0); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup

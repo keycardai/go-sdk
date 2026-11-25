@@ -141,11 +141,15 @@ type jwksSetEntry struct {
 // single caller's cancellation so one caller cannot poison it for the others.
 type JWKSOAuthKeyring struct {
 	cfg jwksKeyringConfig
+	now func() time.Time
 
 	mu             sync.Mutex
+	generation     uint64
 	discoveryCache map[string]cacheEntry[string]
 	keyCache       map[string]cacheEntry[crypto.PublicKey]
 	jwksCache      map[string]jwksSetEntry // jwks_uri -> last fetched key set
+	discoveryRetry map[string]metadataRetry
+	jwksRetry      map[string]metadataRetry
 
 	discoveryGroup singleflight.Group
 	jwksGroup      singleflight.Group // keyed by jwks_uri, whatever kid each caller wants
@@ -167,15 +171,21 @@ func NewJWKSOAuthKeyring(opts ...JWKSOAuthKeyringOption) *JWKSOAuthKeyring {
 
 	return &JWKSOAuthKeyring{
 		cfg:            cfg,
+		now:            time.Now,
 		discoveryCache: make(map[string]cacheEntry[string]),
 		keyCache:       make(map[string]cacheEntry[crypto.PublicKey]),
 		jwksCache:      make(map[string]jwksSetEntry),
+		discoveryRetry: make(map[string]metadataRetry),
+		jwksRetry:      make(map[string]metadataRetry),
 	}
 }
 
 // Key resolves a public key by issuer and key ID.
 func (k *JWKSOAuthKeyring) Key(ctx context.Context, issuer, kid string) (crypto.PublicKey, error) {
 	cacheKey := issuer + "::" + kid
+	k.mu.Lock()
+	started := k.generation
+	k.mu.Unlock()
 
 	// Check key cache
 	if key, ok := k.getCached(cacheKey, true); ok {
@@ -183,13 +193,13 @@ func (k *JWKSOAuthKeyring) Key(ctx context.Context, issuer, kid string) (crypto.
 	}
 
 	// Resolve JWKS URI
-	jwksURI, err := k.resolveJWKSURI(ctx, issuer)
+	jwksURI, err := k.resolveJWKSURI(ctx, issuer, started)
 	if err != nil {
 		return nil, err
 	}
 
 	// Resolve key
-	return k.resolveKey(ctx, issuer, kid, jwksURI, cacheKey)
+	return k.resolveKey(ctx, issuer, kid, jwksURI, cacheKey, started)
 }
 
 // Invalidate removes cached entries for the given issuer and key ID.
@@ -197,24 +207,35 @@ func (k *JWKSOAuthKeyring) Invalidate(issuer, kid string) {
 	cacheKey := issuer + "::" + kid
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.generation++
 	delete(k.keyCache, cacheKey)
 	if uri, ok := k.discoveryCache[issuer]; ok {
 		delete(k.jwksCache, uri.value)
+		delete(k.jwksRetry, uri.value)
 	}
 	delete(k.discoveryCache, issuer)
+	delete(k.discoveryRetry, issuer)
 }
 
-func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (string, error) {
+func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string, started uint64) (string, error) {
 	// Check discovery cache
 	if uri, ok := k.getCached(issuer, false); ok {
 		return uri.(string), nil
 	}
 
-	result, err := sharedFetch(ctx, &k.discoveryGroup, issuer, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+	result, err := sharedFetch(ctx, &k.discoveryGroup, fmt.Sprintf("%d:%s", started, issuer), k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+		if uri, ok := k.getCached(issuer, false); ok {
+			return uri, nil
+		}
+		if err := k.retryFailure(k.discoveryRetry, issuer); err != nil {
+			return nil, err
+		}
 		metadata, err := FetchAuthorizationServerMetadata(fetchCtx, issuer,
-			WithDiscoveryHTTPClient(k.cfg.httpClient))
+			WithDiscoveryHTTPClient(k.cfg.httpClient), cachedDiscovery)
 		if err != nil {
-			return nil, &JWKSDiscoveryError{Message: fmt.Sprintf("discovering JWKS URI for %q", issuer), Err: err}
+			return nil, k.recordRetry(k.discoveryRetry, issuer, &JWKSDiscoveryError{
+				Message: fmt.Sprintf("discovering JWKS URI for %q", issuer), Err: err,
+			}, started)
 		}
 
 		if metadata.JWKSURI == "" {
@@ -226,9 +247,12 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 		}
 
 		k.mu.Lock()
-		k.discoveryCache[issuer] = cacheEntry[string]{
-			value:     metadata.JWKSURI,
-			expiresAt: time.Now().Add(k.cfg.discoveryTTL),
+		if k.generation == started {
+			delete(k.discoveryRetry, issuer)
+			k.discoveryCache[issuer] = cacheEntry[string]{
+				value:     metadata.JWKSURI,
+				expiresAt: k.now().Add(k.cfg.discoveryTTL),
+			}
 		}
 		k.mu.Unlock()
 
@@ -244,26 +268,29 @@ func (k *JWKSOAuthKeyring) resolveJWKSURI(ctx context.Context, issuer string) (s
 	return result.(string), nil
 }
 
-func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI, cacheKey string) (crypto.PublicKey, error) {
+func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI, cacheKey string, started uint64) (crypto.PublicKey, error) {
 	// The cached key set first: a kid it holds imports with no fetch, and a kid it
 	// lacks refetches at most once per cooldown.
 	k.mu.Lock()
 	set, ok := k.jwksCache[jwksURI]
-	if ok && time.Now().After(set.expiresAt) {
+	if ok && !k.now().Before(set.expiresAt) {
 		delete(k.jwksCache, jwksURI)
 		ok = false
 	}
 	k.mu.Unlock()
 	if ok {
 		if jwk, err := findKey(set.keys, kid); err == nil {
-			return k.importAndCache(jwk, kid, cacheKey)
+			return k.importAndCache(jwk, kid, cacheKey, started)
 		}
-		if time.Since(set.fetchedAt) < k.cfg.refetchCooldown {
+		if k.now().Sub(set.fetchedAt) < k.cfg.refetchCooldown {
 			return nil, &JWKSKeyNotFoundError{Message: fmt.Sprintf("key %q not found for issuer %q", kid, issuer)}
 		}
 	}
 
-	result, err := sharedFetch(ctx, &k.jwksGroup, jwksURI, k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+	result, err := sharedFetch(ctx, &k.jwksGroup, fmt.Sprintf("%d:%s", started, jwksURI), k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+		if err := k.retryFailure(k.jwksRetry, jwksURI); err != nil {
+			return nil, err
+		}
 		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, jwksURI, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating JWKS request: %w", err)
@@ -271,27 +298,42 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 
 		resp, err := k.cfg.httpClient.Do(req)
 		if err != nil {
-			return nil, &JWKSFetchError{Message: fmt.Sprintf("fetching JWKS from %q", jwksURI), Err: err}
+			return nil, k.recordRetry(k.jwksRetry, jwksURI, &JWKSFetchError{
+				Message: fmt.Sprintf("fetching JWKS from %q", jwksURI), Err: err,
+			}, started)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, &JWKSFetchError{Message: fmt.Sprintf("JWKS endpoint %q returned HTTP %d", jwksURI, resp.StatusCode)}
+			status := &metadataHTTPError{
+				HTTPError:  &HTTPError{Status: resp.StatusCode},
+				retryAfter: resp.Header.Get("Retry-After"),
+			}
+			return nil, k.recordRetry(k.jwksRetry, jwksURI, &JWKSFetchError{
+				Message: fmt.Sprintf("JWKS endpoint %q returned HTTP %d", jwksURI, resp.StatusCode), Err: status,
+			}, started)
 		}
 
 		data, err := readBoundedBody(resp.Body)
 		if err != nil {
-			return nil, &JWKSFetchError{Message: fmt.Sprintf("reading JWKS from %q", jwksURI), Err: err}
+			return nil, k.recordRetry(k.jwksRetry, jwksURI, &JWKSFetchError{
+				Message: fmt.Sprintf("reading JWKS from %q", jwksURI), Err: err,
+			}, started)
 		}
 
 		var jwkSet jwkSetJSON
 		if err := json.Unmarshal(data, &jwkSet); err != nil {
-			return nil, &JWKSFetchError{Message: fmt.Sprintf("decoding JWKS from %q", jwksURI), Err: err}
+			return nil, &JWKSFetchError{
+				Message: fmt.Sprintf("decoding JWKS from %q", jwksURI), Err: err,
+			}
 		}
 
-		now := time.Now()
+		now := k.now()
 		k.mu.Lock()
-		k.jwksCache[jwksURI] = jwksSetEntry{keys: jwkSet.Keys, fetchedAt: now, expiresAt: now.Add(k.cfg.keyTTL)}
+		if k.generation == started {
+			delete(k.jwksRetry, jwksURI)
+			k.jwksCache[jwksURI] = jwksSetEntry{keys: jwkSet.Keys, fetchedAt: now, expiresAt: now.Add(k.cfg.keyTTL)}
+		}
 		k.mu.Unlock()
 		return jwkSet.Keys, nil
 	})
@@ -306,19 +348,54 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 	if err != nil {
 		return nil, &JWKSKeyNotFoundError{Message: fmt.Sprintf("key %q not found for issuer %q", kid, issuer)}
 	}
-	return k.importAndCache(jwk, kid, cacheKey)
+	return k.importAndCache(jwk, kid, cacheKey, started)
 }
 
-func (k *JWKSOAuthKeyring) importAndCache(jwk *jwkJSON, kid, cacheKey string) (crypto.PublicKey, error) {
+func (k *JWKSOAuthKeyring) retryFailure(states map[string]metadataRetry, key string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return states[key].failure(k.now())
+}
+
+const maxMetadataRetryEntries = 128
+
+func (k *JWKSOAuthKeyring) recordRetry(states map[string]metadataRetry, key string, err error, started uint64) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.generation != started {
+		return err
+	}
+	state := states[key].record(k.now(), err)
+	if state.err != nil {
+		states[key] = state
+		if len(states) > maxMetadataRetryEntries {
+			var oldest string
+			var recordedAt time.Time
+			for other, entry := range states {
+				if other != key && (oldest == "" || entry.recordedAt.Before(recordedAt)) {
+					oldest, recordedAt = other, entry.recordedAt
+				}
+			}
+			delete(states, oldest)
+		}
+	}
+	return err
+}
+
+func (k *JWKSOAuthKeyring) importAndCache(jwk *jwkJSON, kid, cacheKey string, started uint64) (crypto.PublicKey, error) {
 	pubKey, err := importJWK(jwk)
 	if err != nil {
 		return nil, fmt.Errorf("importing JWK %q: %w", kid, err)
 	}
 
 	k.mu.Lock()
+	if k.generation != started {
+		k.mu.Unlock()
+		return pubKey, nil
+	}
 	k.keyCache[cacheKey] = cacheEntry[crypto.PublicKey]{
 		value:     pubKey,
-		expiresAt: time.Now().Add(k.cfg.keyTTL),
+		expiresAt: k.now().Add(k.cfg.keyTTL),
 	}
 	// Bound the key cache: once over the configured size, evict entries other than
 	// the one just inserted. Eviction order is unspecified (the spec permits this).
@@ -346,7 +423,7 @@ func (k *JWKSOAuthKeyring) getCached(key string, isKey bool) (any, bool) {
 
 	if isKey {
 		entry, ok := k.keyCache[key]
-		if !ok || time.Now().After(entry.expiresAt) {
+		if !ok || !k.now().Before(entry.expiresAt) {
 			delete(k.keyCache, key)
 			return nil, false
 		}
@@ -354,7 +431,7 @@ func (k *JWKSOAuthKeyring) getCached(key string, isKey bool) (any, bool) {
 	}
 
 	entry, ok := k.discoveryCache[key]
-	if !ok || time.Now().After(entry.expiresAt) {
+	if !ok || !k.now().Before(entry.expiresAt) {
 		delete(k.discoveryCache, key)
 		return nil, false
 	}

@@ -169,6 +169,9 @@ func (e *JWKSDiscoveryError) Error() string {
 func (e *JWKSDiscoveryError) Unwrap() error { return e.Err }
 func (*JWKSDiscoveryError) keycardError()   {}
 
+// Retryable reports whether the failure is transient.
+func (e *JWKSDiscoveryError) Retryable() bool { return retryableMetadataFailure(e.Err) }
+
 // JWKSUriValidationError indicates the discovered JWKS URI failed validation, such as
 // not sharing an origin with the issuer.
 type JWKSUriValidationError struct {
@@ -194,6 +197,9 @@ func (e *JWKSFetchError) Error() string {
 }
 func (e *JWKSFetchError) Unwrap() error { return e.Err }
 func (*JWKSFetchError) keycardError()   {}
+
+// Retryable reports whether the failure is transient.
+func (e *JWKSFetchError) Retryable() bool { return retryableMetadataFailure(e.Err) }
 
 // JWKSKeyNotFoundError indicates no key matching the requested key ID was present in
 // the issuer's JWKS.
@@ -289,3 +295,6 @@ func (e *TokenEndpointDiscoveryError) Error() string {
 }
 func (e *TokenEndpointDiscoveryError) Unwrap() error { return e.Err }
 func (*TokenEndpointDiscoveryError) keycardError()   {}
+
+// Retryable reports whether the failure is transient.
+func (e *TokenEndpointDiscoveryError) Retryable() bool { return retryableMetadataFailure(e.Err) }

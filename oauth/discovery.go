@@ -59,9 +59,12 @@ var knownASMetadataFields = []string{
 type DiscoveryOption func(*discoveryConfig)
 
 type discoveryConfig struct {
-	httpClient     *http.Client
-	requestTimeout time.Duration
+	httpClient        *http.Client
+	requestTimeout    time.Duration
+	captureRetryAfter bool
 }
+
+func cachedDiscovery(cfg *discoveryConfig) { cfg.captureRetryAfter = true }
 
 // WithDiscoveryHTTPClient sets the HTTP client used for discovery requests.
 func WithDiscoveryHTTPClient(c *http.Client) DiscoveryOption {
@@ -106,10 +109,14 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPError{
+		status := &HTTPError{
 			Message: fmt.Sprintf("discovery endpoint returned HTTP %d for %s", resp.StatusCode, url),
 			Status:  resp.StatusCode,
 		}
+		if cfg.captureRetryAfter {
+			return nil, &metadataHTTPError{HTTPError: status, retryAfter: resp.Header.Get("Retry-After")}
+		}
+		return nil, status
 	}
 
 	// Read the body once so we can decode the typed fields and also capture any
