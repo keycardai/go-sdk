@@ -273,8 +273,8 @@ type JWTVerifier struct {
 }
 
 // NewJWTVerifier creates a JWTVerifier that trusts tokens issued by one of issuers.
-// At least one trusted issuer is required; an empty issuers list, or an unsupported
-// algorithm, is a ConfigurationError.
+// At least one trusted issuer is required; an empty issuers list, an unsupported
+// algorithm, or WithAudiences called with no values is a ConfigurationError.
 func NewJWTVerifier(keyring OAuthKeyring, issuers []string, opts ...JWTVerifierOption) (*JWTVerifier, error) {
 	if len(issuers) == 0 {
 		return nil, &ConfigurationError{Message: "JWT verifier requires at least one trusted issuer"}
