@@ -69,7 +69,46 @@ func (e *ClientSecretConfigurationError) Error() string {
 	return e.Message
 }
 
+// CredentialDiscoveryReason identifies why DiscoverCredential cannot select a credential.
+type CredentialDiscoveryReason string
+
+const (
+	// CredentialDiscoveryAbsent means no supported credential is configured.
+	CredentialDiscoveryAbsent CredentialDiscoveryReason = "absent"
+	// CredentialDiscoveryAmbiguous means multiple types are configured without a selector.
+	CredentialDiscoveryAmbiguous CredentialDiscoveryReason = "ambiguous"
+	// CredentialDiscoveryIncomplete means a client secret is set without a client ID or selector.
+	CredentialDiscoveryIncomplete CredentialDiscoveryReason = "incomplete"
+	// CredentialDiscoveryUnknownType means the selector names an unsupported type.
+	CredentialDiscoveryUnknownType CredentialDiscoveryReason = "unknown_type"
+	// CredentialDiscoveryNotSatisfiable means the selected type lacks required inputs.
+	CredentialDiscoveryNotSatisfiable CredentialDiscoveryReason = "not_satisfiable"
+)
+
+// CredentialDiscoveryError indicates that the environment does not select one
+// usable application credential. Resolvable lists the canonical type names
+// with complete environment inputs, before constructor validation. Err holds
+// an underlying cause, if any, for errors.Is and errors.As.
+type CredentialDiscoveryError struct {
+	Reason     CredentialDiscoveryReason
+	Resolvable []string
+	Message    string
+	Err        error
+}
+
+// Error returns the discovery message and any underlying cause.
+func (e *CredentialDiscoveryError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+
+// Unwrap returns the underlying cause, if any.
+func (e *CredentialDiscoveryError) Unwrap() error { return e.Err }
+
 func (*WebIdentityConfigurationError) keycardError()      {}
 func (*WorkloadIdentityConfigurationError) keycardError() {}
 func (*WorkloadIdentityRuntimeError) keycardError()       {}
 func (*ClientSecretConfigurationError) keycardError()     {}
+func (*CredentialDiscoveryError) keycardError()           {}
