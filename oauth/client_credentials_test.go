@@ -7,9 +7,137 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func newClientCredentialsTestServer(t *testing.T, check func(*http.Request)) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]string{
+				"issuer":         "http://" + r.Host,
+				"token_endpoint": "http://" + r.Host + "/token",
+			})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parsing form: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			check(r)
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "token", "token_type": "bearer"})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// Spec row 4b: apply configured workload authentication with an optional client ID.
+func TestClientCredentialsClient_WorkloadIdentity(t *testing.T) {
+	for _, id := range []string{"workload-client", ""} {
+		t.Run("client-id="+id, func(t *testing.T) {
+			server := newClientCredentialsTestServer(t, func(r *http.Request) {
+				want := url.Values{
+					"grant_type":            {"client_credentials"},
+					"scope":                 {"read"},
+					"client_assertion":      {"workload-jwt"},
+					"client_assertion_type": {clientAssertionTypeJWTBearer},
+				}
+				if id != "" {
+					want.Set("client_id", id)
+				}
+				if got := r.PostForm.Encode(); got != want.Encode() {
+					t.Errorf("form: got %q, want %q", got, want.Encode())
+				}
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Errorf("unexpected Authorization: %q", got)
+				}
+			})
+			calls := 0
+			cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+				calls++
+				return "workload-jwt", nil
+			}), WithWorkloadClientID(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := NewClientCredentialsClient(server.URL, WithCCCredential(cred))
+			if _, err := client.RequestToken(context.Background(), ClientCredentialsRequest{Scope: "read"}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Errorf("token source calls: got %d, want 1", calls)
+			}
+		})
+	}
+}
+
+// Spec row 4c: reject mixed credential and Basic configuration without HTTP.
+func TestClientCredentialsClient_RejectsMixedAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request: %s", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	cred, err := NewClientSecret("credential-id", "credential-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := []ClientCredentialsClientOption{WithCCCredential(cred), WithCCBasicAuth("basic-id", "basic-secret")}
+	for range 2 {
+		client := NewClientCredentialsClient(server.URL, opts...)
+		_, err := client.RequestToken(context.Background(), ClientCredentialsRequest{})
+		var configErr *ConfigurationError
+		if !errors.As(err, &configErr) {
+			t.Errorf("got %v, want ConfigurationError", err)
+		}
+		slices.Reverse(opts)
+	}
+}
+
+// Spec row 4d: a request assertion bypasses configured credentials and Basic auth.
+func TestClientCredentialsClient_RequestAssertionPrecedence(t *testing.T) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		t.Error("configured credential must not be called")
+		return "configured-jwt", nil
+	}), WithWorkloadClientID("configured-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, opt := range map[string]ClientCredentialsClientOption{
+		"credential": WithCCCredential(cred),
+		"basic":      WithCCBasicAuth("basic-id", "basic-secret"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newClientCredentialsTestServer(t, func(r *http.Request) {
+				want := url.Values{
+					"grant_type":            {"client_credentials"},
+					"client_id":             {"request-id"},
+					"client_assertion":      {"request-jwt"},
+					"client_assertion_type": {clientAssertionTypeJWTBearer},
+				}
+				if got := r.PostForm.Encode(); got != want.Encode() {
+					t.Errorf("form: got %q, want %q", got, want.Encode())
+				}
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Errorf("unexpected Authorization: %q", got)
+				}
+			})
+			client := NewClientCredentialsClient(server.URL, opt)
+			if _, err := client.RequestToken(context.Background(), ClientCredentialsRequest{
+				ClientID: "request-id", ClientAssertion: "request-jwt", ClientAssertionType: clientAssertionTypeJWTBearer,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func TestClientCredentialsClient_RequestToken(t *testing.T) {
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

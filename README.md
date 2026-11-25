@@ -27,6 +27,7 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **JWT signing/verification**: `JWTSigner`, `JWTVerifier`
 - **JWKS keyring**: `JWKSOAuthKeyring` with two-level caching and request deduplication
 - **Token exchange**: `TokenExchangeClient` (RFC 8693)
+- **Client credentials grant**: `ClientCredentialsClient` (RFC 6749) accepts `WithCCCredential` or the `WithCCBasicAuth` shorthand
 - **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including the OIDC `userinfo_endpoint` and `end_session_endpoint`, and `device_authorization_endpoint` (RFC 8628)
 - **Device authorization grant**: `DeviceAuthorizationClient` (RFC 8628) for processes with no browser; see [`examples/device-authorization`](examples/device-authorization)
 - **Refresh**: `RefreshAuthorization` redeems a refresh token as a public client, a confidential client, or with a credential, optionally narrowed to some resources or scopes
