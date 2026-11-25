@@ -1,3 +1,12 @@
+## v0.28.0 (2026-11-25)
+
+
+- feat(oauth): support ordered resources in authorize URLs (#74)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- ci: workflows default to a read-only token (#70)
+- Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.27.1 (2026-11-22)
 
 
