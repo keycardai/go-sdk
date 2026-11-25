@@ -330,6 +330,26 @@ func TestRevokeToken_TransportAndHTTPFailures(t *testing.T) {
 	}
 }
 
+// Spec row 8: a discovery transport failure is retryable and stops the operation.
+func TestRevokeToken_DiscoveryTransportFailure(t *testing.T) {
+	const issuer = "https://zone.example"
+	cause := errors.New("discovery connection failed")
+	calls := 0
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.String() != issuer+"/.well-known/oauth-authorization-server" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		return nil, cause
+	})}
+	err := RevokeToken(context.Background(), issuer, RevokeTokenRequest{Token: "test-token", ClientID: "client-a"},
+		WithRevocationHTTPClient(client))
+	var got *NetworkError
+	if calls != 1 || !errors.As(err, &got) || !errors.Is(err, cause) || !got.Retryable() {
+		t.Fatalf("want one request and retryable discovery network error wrapping cause, got %d requests and %v", calls, err)
+	}
+}
+
 func revokeWithResponse(t *testing.T, token string, response func() (*http.Response, error)) (int, error) {
 	t.Helper()
 	md := &AuthorizationServerMetadata{Issuer: "https://zone.example", RevocationEndpoint: "https://zone.example/revoke"}

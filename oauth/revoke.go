@@ -94,7 +94,11 @@ func RevokeToken(ctx context.Context, issuer string, req RevokeTokenRequest, opt
 		md, err = FetchAuthorizationServerMetadata(ctx, issuer,
 			WithDiscoveryHTTPClient(cfg.httpClient), WithDiscoveryRequestTimeout(cfg.requestTimeout))
 		if err != nil {
-			return err
+			var typed KeycardError
+			if errors.As(err, &typed) {
+				return err
+			}
+			return &NetworkError{Message: "discovering revocation endpoint", Err: err}
 		}
 	}
 	if md.RevocationEndpoint == "" {
