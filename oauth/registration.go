@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -117,8 +118,16 @@ func RegisterClient(ctx context.Context, issuer string, req RegistrationRequest,
 		return nil, &HTTPError{Message: "client registration failed", Status: resp.StatusCode}
 	}
 
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, oversizedOAuthError(resp.StatusCode)
+		}
+		return nil, fmt.Errorf("reading registration response: %w", err)
+	}
+
 	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("decoding registration response: %w", err)
 	}
 

@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -45,13 +46,14 @@ type OAuthError struct {
 	ErrorCode string
 	Message   string
 	ErrorURI  string
-	Err       error
+	// Status is the HTTP status code of the response that carried the error, or 0
+	// when the error did not come from an HTTP response.
+	Status int
+	Err    error
 	// ErrorDescription is the server's optional error_description.
 	ErrorDescription *string
 	// Reason is the server's optional machine-readable reason.
 	Reason *string
-
-	status int
 }
 
 func (e *OAuthError) Error() string {
@@ -69,8 +71,11 @@ func (e *OAuthError) Unwrap() error { return e.Err }
 
 // Retryable reports whether repeating the request unchanged could succeed.
 func (e *OAuthError) Retryable() bool {
-	if e.status == http.StatusTooManyRequests || e.status >= http.StatusInternalServerError {
+	if e.Status == http.StatusTooManyRequests || e.Status >= http.StatusInternalServerError {
 		return true
+	}
+	if errors.Is(e.Err, ErrResponseBodyTooLarge) {
+		return e.Status >= http.StatusOK && e.Status < http.StatusMultipleChoices
 	}
 	switch e.ErrorCode {
 	case "access_denied", "expired_token", "insufficient_authorization", "invalid_client":
@@ -238,15 +243,22 @@ func (*UserInfoFetchError) keycardError()   {}
 // "error" field, or nil otherwise so the caller can fall back to a generic HTTP error.
 // It does not close resp.Body.
 func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return oversizedOAuthError(resp.StatusCode)
+		}
+		return nil
+	}
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return nil
 	}
 	code, ok := body["error"].(string)
 	if !ok {
 		return nil
 	}
-	oauthErr := &OAuthError{ErrorCode: code, Message: code, status: resp.StatusCode}
+	oauthErr := &OAuthError{ErrorCode: code, Message: code, Status: resp.StatusCode}
 	if desc, ok := body["error_description"].(string); ok {
 		oauthErr.Message = desc
 		oauthErr.ErrorDescription = &desc

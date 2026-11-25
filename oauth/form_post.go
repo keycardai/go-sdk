@@ -23,8 +23,9 @@ func newFormRequest(ctx context.Context, endpoint string, header http.Header, fo
 
 func isSuccess(status int) bool { return status >= 200 && status < 300 }
 
-// errorFromResponse returns an *OAuthError for an RFC 6749 section 5.2 error body, and
-// an *HTTPError otherwise.
+// errorFromResponse returns an *OAuthError for an RFC 6749 section 5.2 error body, an
+// *OAuthError with code invalid_response for a body that exceeds MaxResponseBodyBytes,
+// and an *HTTPError otherwise.
 func errorFromResponse(resp *http.Response, what string) error {
 	if oauthErr := parseOAuthErrorResponse(resp); oauthErr != nil {
 		return oauthErr

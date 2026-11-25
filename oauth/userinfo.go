@@ -3,8 +3,8 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -153,8 +153,11 @@ func FetchUserInfo(ctx context.Context, issuer, accessToken string, opts ...User
 		}
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedBody(resp.Body)
 	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, oversizedOAuthError(resp.StatusCode)
+		}
 		return nil, &UserInfoFetchError{Message: "reading UserInfo response", Err: err}
 	}
 

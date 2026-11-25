@@ -219,10 +219,11 @@ func NewDeviceAuthorizationClient(issuer string, opts ...DeviceAuthorizationOpti
 // A failed discovery is a *DeviceAuthorizationDiscoveryError. Metadata whose
 // device_authorization_endpoint or token_endpoint is missing, or is not an http or
 // https URL, is a ConfigurationError, and the request is not sent. An OAuth error
-// response is an *OAuthError. Any other non-2xx response is an *HTTPError. A 2xx
-// response that is not valid JSON, lacks device_code, user_code, verification_uri, or
-// expires_in, or has an interval that is not a positive integer is an *OAuthError with
-// code invalid_response.
+// response is an *OAuthError. A non-2xx response whose body exceeds
+// MaxResponseBodyBytes is an *OAuthError with code invalid_response, and any other
+// non-2xx response is an *HTTPError. A 2xx response that is not valid JSON, lacks
+// device_code, user_code, verification_uri, or expires_in, or has an interval that is
+// not a positive integer is an *OAuthError with code invalid_response.
 func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Context, req DeviceAuthorizationRequest) (*DeviceAuthorization, error) {
 	md, err := c.resolveMetadata(ctx)
 	if err != nil {
@@ -256,8 +257,15 @@ func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Conte
 }
 
 func (c *DeviceAuthorizationClient) parseDeviceAuthorization(resp *http.Response) (*DeviceAuthorization, error) {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, oversizedOAuthError(resp.StatusCode)
+		}
+		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "reading device authorization response", Err: err}
+	}
 	var body deviceAuthorizationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "decoding device authorization response", Err: err}
 	}
 	var missing []string
@@ -306,8 +314,10 @@ func secondsToDuration(s int) time.Duration {
 // PollToken polls the token endpoint once with auth.DeviceCode. It returns the token
 // when the person has approved. An OAuth error response is an *OAuthError with the
 // server's code and error_description, including authorization_pending and
-// slow_down. Any other non-2xx response is an *HTTPError. A 2xx response that is not
-// a valid token response is an *OAuthError with code invalid_response.
+// slow_down. A non-2xx response whose body exceeds MaxResponseBodyBytes is an
+// *OAuthError with code invalid_response, and any other non-2xx response is an
+// *HTTPError. A 2xx response that is not a valid token response is an *OAuthError
+// with code invalid_response.
 //
 // It returns the same discovery and configuration errors as
 // RequestDeviceAuthorization.
@@ -370,6 +380,10 @@ func (c *DeviceAuthorizationClient) poll(ctx context.Context, md *AuthorizationS
 	}
 	token, err := deserializeTokenResponse(resp)
 	if err != nil {
+		var oauthErr *OAuthError
+		if errors.As(err, &oauthErr) {
+			return nil, pollOther, oauthErr
+		}
 		return nil, pollOther, &OAuthError{ErrorCode: "invalid_response", Message: "invalid token response", Err: err}
 	}
 	return token, pollOther, nil
@@ -615,8 +629,10 @@ func (c *DeviceAuthorizationClient) postForm(ctx context.Context, endpoint strin
 		return nil, true, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedBody(resp.Body)
 	switch {
+	case errors.Is(err, ErrResponseBodyTooLarge):
+		resp.Body = io.NopCloser(errReader{ErrResponseBodyTooLarge})
 	case isCorruptCompression(err):
 		resp.Body = io.NopCloser(errReader{fmt.Errorf("reading response: %w", err)})
 	case err != nil:
