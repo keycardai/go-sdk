@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,51 @@ func TestBearerMiddleware_ValidTokenPopulatesAuthInfo(t *testing.T) {
 	}
 	if got.ExpiresAt == 0 {
 		t.Error("expiry should be populated")
+	}
+}
+
+func TestBearerMiddleware_VerifiedCallerClaims(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := map[string]any{"sub": "actor", "act": map[string]any{"sub": "previous"}}
+	for _, tc := range []struct {
+		name string
+		aud  []string
+		act  map[string]any
+	}{
+		{name: "row_4a", aud: []string{"resource-a", "resource-b"}, act: actor},
+		{name: "row_4b", aud: []string{"resource-a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().Unix()
+			claims := oauth.JWTClaims{
+				Subject: "caller", ClientID: "client", Audience: tc.aud,
+				IssuedAt: now, Expiry: now + 300,
+			}
+			if tc.act != nil {
+				claims.Extra = map[string]any{"act": tc.act}
+			}
+			token := mintToken(t, key, testZone, claims)
+			verifier := zoneVerifier(t, &key.PublicKey, oauth.WithAudiences("resource-a"))
+			var caller *AuthInfo
+			handler := RequireBearerAuth(verifier)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				caller = AuthInfoFromRequest(r)
+			}))
+
+			rec := serve(handler, token)
+
+			if rec.Code != http.StatusOK || caller == nil {
+				t.Fatalf("expected verified caller, got status %d", rec.Code)
+			}
+			if !reflect.DeepEqual(caller.Aud, tc.aud) {
+				t.Errorf("aud: got %v, want %v", caller.Aud, tc.aud)
+			}
+			if !reflect.DeepEqual(caller.Act, tc.act) {
+				t.Errorf("act: got %v, want %v", caller.Act, tc.act)
+			}
+		})
 	}
 }
 
