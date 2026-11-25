@@ -1,3 +1,10 @@
+## v0.33.0 (2026-11-25)
+
+
+- feat(oauth): add WorkloadIdentityCredential.ClientID() getter (SDK-146) (#80)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.32.0 (2026-11-25)
 
 
