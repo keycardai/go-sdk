@@ -26,7 +26,9 @@ func (f metadataTestTransport) RoundTrip(r *http.Request) (*http.Response, error
 	return f(r)
 }
 
-// Spec rows 10, 11, 20 (JWKS caching): pace discovery and key-set fetches independently of kid.
+// Spec row 10 (JWKS caching): a JWKS network failure gates lookups until its backoff elapses.
+// Spec row 11 (JWKS caching): a discovery network failure gates lookups until its backoff elapses.
+// Spec row 20 (JWKS caching): a 429 with Retry-After gates lookups for another kid of the same key set.
 func TestKeyringMetadataRetry(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -97,7 +99,9 @@ func TestKeyringMetadataRetry(t *testing.T) {
 	}
 }
 
-// Spec rows 3, 5 and 6 (base): only transport failures start retry pacing.
+// Spec row 3 (base): network failures start retry pacing.
+// Spec row 5 (base): deterministic failures start no transient backoff.
+// Spec row 6 (base): a caller deadline starts no retry delay.
 func TestMetadataRetryTransportClassification(t *testing.T) {
 	now := time.Now()
 	for _, cause := range []error{errors.New("unsupported protocol scheme"), errors.New("stopped after 10 redirects"), x509.UnknownAuthorityError{}} {
@@ -154,7 +158,8 @@ func TestMetadataRetryRejectsInvalidHTTPDate(t *testing.T) {
 	}
 }
 
-// Spec rows 3 and 11: bounded discovery cooldowns do not survive invalidation.
+// Spec row 3 (base): discovery cooldowns are bounded.
+// Spec row 11 (JWKS caching): discovery cooldowns do not survive invalidation.
 func TestKeyringMetadataRetryBoundAndInvalidate(t *testing.T) {
 	keyring := NewJWKSOAuthKeyring()
 	clock := newFakeDeviceClock()
@@ -262,5 +267,39 @@ func TestMetadataRetryResetsOnSuccess(t *testing.T) {
 	ds.recover()
 	if _, err := client.TokenEndpoint(context.Background()); err != nil {
 		t.Fatalf("refresh backoff was not reset: %v", err)
+	}
+}
+
+// Spec row 1a (base): an oversized 429 without Retry-After starts no retry delay.
+func TestMetadataRetryOversized429WithoutRetryAfter(t *testing.T) {
+	now := time.Now()
+	if retry := (metadataRetry{}).record(now, oversizedOAuthError(http.StatusTooManyRequests)); retry.failure(now) != nil || !retry.until.IsZero() {
+		t.Fatalf("oversized 429 error started a delay until %s", retry.until)
+	}
+
+	var requests atomic.Int32
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write(makeOversizedJSON(1024))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srvURL, "token_endpoint": srvURL + "/token"})
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	client := NewTokenExchangeClient(srv.URL, WithTokenExchangeHTTPClient(srv.Client()))
+	fakeClock(client)
+	if _, err := client.TokenEndpoint(context.Background()); err == nil {
+		t.Fatal("expected a discovery error for the oversized 429")
+	}
+	if ep, err := client.TokenEndpoint(context.Background()); err != nil || ep != srvURL+"/token" {
+		t.Fatalf("second lookup with the clock unchanged: endpoint %q, error %v", ep, err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Errorf("requests = %d, want 2 (no delay started)", got)
 	}
 }

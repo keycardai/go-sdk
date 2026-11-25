@@ -177,11 +177,13 @@ func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 			WithTokenExchangeHTTPClient(srv.Client()),
 			WithTokenExchangeNegativeTTL(time.Minute),
 		)
+		advance := fakeClock(client)
 
 		_, err := client.TokenEndpoint(context.Background())
-		if err == nil {
+		var discoveryErr *TokenEndpointDiscoveryError
+		if !errors.As(err, &discoveryErr) {
 			srv.Close()
-			t.Fatalf("status %d: expected discovery error", tc.status)
+			t.Fatalf("status %d: want *TokenEndpointDiscoveryError, got %T: %v", tc.status, err, err)
 		}
 		if calls.Load() != 1 {
 			srv.Close()
@@ -189,6 +191,8 @@ func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 		}
 
 		failFirst.Store(false)
+		// Past any retry delay (at most 1.2s for a first 5xx), well inside negative_ttl.
+		advance(2 * time.Second)
 		ep, err := client.TokenEndpoint(context.Background())
 		srv.Close()
 
