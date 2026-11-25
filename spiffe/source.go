@@ -158,6 +158,7 @@ func (s *SpiffeJwtSvidSource) connection() (*grpc.ClientConn, error) {
 }
 
 func waitForConnection(ctx context.Context, conn *grpc.ClientConn) error {
+	resetBackoff := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -170,6 +171,11 @@ func waitForConnection(ctx context.Context, conn *grpc.ClientConn) error {
 			return errors.New("the SPIFFE Workload API connection is closed")
 		case connectivity.Idle:
 			conn.Connect()
+		case connectivity.TransientFailure:
+			if !resetBackoff {
+				conn.ResetConnectBackoff()
+				resetBackoff = true
+			}
 		}
 		if !conn.WaitForStateChange(ctx, state) {
 			return ctx.Err()

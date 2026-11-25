@@ -39,6 +39,18 @@ func TestLazyConnectionAndTimeout(t *testing.T) {
 	}
 }
 
+func TestFetchRetriesWhenAgentStarts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.sock")
+	source := newSource(t, WithSocketPath(path), WithInitTimeout(250*time.Millisecond))
+	_, err := source.IdentityToken(fetchContext(t))
+	requireRuntimeError(t, err, true)
+
+	serveWorkloadAPIAt(t, path, func(context.Context, *workload.JWTSVIDRequest) (*workload.JWTSVIDResponse, error) {
+		return svidResponse("header.payload.signature"), nil
+	})
+	requireToken(t, source, "header.payload.signature")
+}
+
 // Spec row 12: a missing audience fails construction.
 func TestMissingAudience(t *testing.T) {
 	for _, value := range []string{"", " \t"} {
@@ -181,6 +193,12 @@ func (f fakeWorkloadAPI) FetchJWTSVID(ctx context.Context, req *workload.JWTSVID
 func serveWorkloadAPI(t *testing.T, fetch func(context.Context, *workload.JWTSVIDRequest) (*workload.JWTSVIDResponse, error)) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "agent.sock")
+	serveWorkloadAPIAt(t, path, fetch)
+	return path
+}
+
+func serveWorkloadAPIAt(t *testing.T, path string, fetch func(context.Context, *workload.JWTSVIDRequest) (*workload.JWTSVIDResponse, error)) {
+	t.Helper()
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +207,6 @@ func serveWorkloadAPI(t *testing.T, fetch func(context.Context, *workload.JWTSVI
 	workload.RegisterSpiffeWorkloadAPIServer(server, fakeWorkloadAPI{fetch: fetch})
 	t.Cleanup(server.Stop)
 	go func() { _ = server.Serve(listener) }()
-	return path
 }
 
 func svidResponse(tokens ...string) *workload.JWTSVIDResponse {
