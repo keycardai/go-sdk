@@ -304,7 +304,8 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
+		data, err := readMetadataBody(resp)
+		if resp.StatusCode != http.StatusOK && !errors.Is(err, ErrResponseBodyTooLarge) {
 			status := &metadataHTTPError{
 				HTTPError:  &HTTPError{Status: resp.StatusCode},
 				retryAfter: resp.Header.Get("Retry-After"),
@@ -314,7 +315,6 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 			}, started)
 		}
 
-		data, err := readBoundedBody(resp.Body)
 		if err != nil {
 			return nil, k.recordRetry(k.jwksRetry, jwksURI, &JWKSFetchError{
 				Message: fmt.Sprintf("reading JWKS from %q", jwksURI), Err: err,
