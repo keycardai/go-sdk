@@ -102,6 +102,23 @@ func TestWorkloadIdentity_WrapsCustomSourceError(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Errorf("errors.Is(cause): cause was dropped, got %v", err)
 	}
+	if runtimeErr.Retryable() {
+		t.Error("unclassified custom error is marked retryable")
+	}
+}
+
+func TestWorkloadIdentity_WrapsCustomTimeoutAsRetryable(t *testing.T) {
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		return "", context.DeadlineExceeded
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cred.PrepareTokenExchangeRequest(context.Background(), "subject-token", "https://resource.example.com", nil)
+	var runtimeErr *WorkloadIdentityRuntimeError
+	if !errors.As(err, &runtimeErr) || !runtimeErr.Retryable() || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want retryable runtime error wrapping the timeout", err)
+	}
 }
 
 func TestWorkloadIdentity_PassesThroughTypedSourceError(t *testing.T) {
@@ -349,6 +366,88 @@ func TestGCPMetadataTokenSource_RuntimeErrorWhenUnreachable(t *testing.T) {
 	if runtimeErr.Err == nil {
 		t.Error("Err: got nil, want the underlying transport error preserved")
 	}
+	if !runtimeErr.Retryable() {
+		t.Error("unreachable metadata server is not marked retryable")
+	}
+}
+
+func TestIdentitySourceHTTPRetryability(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		retryable bool
+	}{
+		{"empty token", http.StatusOK, false},
+		{"not found", http.StatusNotFound, false},
+		{"rate limited", http.StatusTooManyRequests, true},
+		{"unavailable", http.StatusServiceUnavailable, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			})
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			gcp, err := NewGCPMetadataTokenSource("https://zone.example.com", WithGCPMetadataURL(server.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Run("gcp", func(t *testing.T) { requireIdentityRetryability(t, gcp, tc.retryable) })
+			t.Run("fly", func(t *testing.T) {
+				fly := NewFlyTokenSource(WithFlySocketPath(startFlySocketServer(t, handler)))
+				requireIdentityRetryability(t, fly, tc.retryable)
+			})
+		})
+	}
+}
+
+func TestGCPMetadataTokenSource_TransportRetryability(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"unknown host", &net.DNSError{IsNotFound: true}, false},
+		{"timeout", context.DeadlineExceeded, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gcp, err := NewGCPMetadataTokenSource("https://zone.example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			gcp.httpClient.Transport = metadataTestTransport(func(*http.Request) (*http.Response, error) {
+				return nil, &net.OpError{Op: "dial", Err: tc.err}
+			})
+			requireIdentityRetryability(t, gcp, tc.retryable)
+		})
+	}
+}
+
+func TestFileTokenSource_MissingAfterConstructionIsNotRetryable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity")
+	if err := os.WriteFile(path, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewFileTokenSource(WithFileTokenPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	requireIdentityRetryability(t, source, false)
+}
+
+func requireIdentityRetryability(t *testing.T, source IdentityTokenSource, want bool) {
+	t.Helper()
+	_, err := source.IdentityToken(context.Background())
+	var runtimeErr *WorkloadIdentityRuntimeError
+	if !errors.As(err, &runtimeErr) {
+		t.Fatalf("error = %v, want WorkloadIdentityRuntimeError", err)
+	}
+	if got := runtimeErr.Retryable(); got != want {
+		t.Errorf("Retryable() = %v, want %v for %v", got, want, err)
+	}
 }
 
 func TestNewWorkloadIdentity_RejectsNilFunc(t *testing.T) {
@@ -469,6 +568,9 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 		}
 		if runtimeErr.Err == nil {
 			t.Error("Err: got nil, want the underlying dial error preserved")
+		}
+		if runtimeErr.Retryable() {
+			t.Error("missing socket is marked retryable")
 		}
 	})
 }

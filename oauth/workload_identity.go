@@ -111,7 +111,12 @@ func (w *WorkloadIdentityCredential) identityToken(ctx context.Context) (string,
 		if errors.As(err, &runtimeErr) || errors.As(err, &cfgErr) {
 			return "", err
 		}
-		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "fetching identity token", Err: err}
+		return "", &WorkloadIdentityRuntimeError{
+			Source:    WorkloadIdentitySourceCustom,
+			Message:   "fetching identity token",
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
+		}
 	}
 	if strings.TrimSpace(token) == "" {
 		return "", &WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceCustom, Message: "identity token source returned an empty token"}

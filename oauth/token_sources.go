@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -125,9 +126,10 @@ func (f *FileTokenSource) IdentityToken(_ context.Context) (string, error) {
 	data, err := os.ReadFile(f.tokenFilePath)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFile,
-			Message: fmt.Sprintf("reading token file %q", f.tokenFilePath),
-			Err:     err,
+			Source:    WorkloadIdentitySourceFile,
+			Message:   fmt.Sprintf("reading token file %q", f.tokenFilePath),
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
 		}
 	}
 
@@ -213,9 +215,10 @@ func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, err
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: fmt.Sprintf("calling metadata server at %s (is this running on GCP?)", g.metadataURL),
-			Err:     err,
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   fmt.Sprintf("calling metadata server at %s (is this running on GCP?)", g.metadataURL),
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -223,15 +226,17 @@ func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, err
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: "reading metadata response",
-			Err:     err,
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   "reading metadata response",
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: fmt.Sprintf("metadata server returned status %d", resp.StatusCode),
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   fmt.Sprintf("metadata server returned status %d", resp.StatusCode),
+			Transient: retryableIdentityHTTPStatus(resp.StatusCode),
 		}
 	}
 
@@ -320,9 +325,10 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: fmt.Sprintf("calling Machines API socket %s (is this running on a Fly Machine?)", f.socketPath),
-			Err:     err,
+			Source:    WorkloadIdentitySourceFly,
+			Message:   fmt.Sprintf("calling Machines API socket %s (is this running on a Fly Machine?)", f.socketPath),
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -330,15 +336,17 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: "reading token response",
-			Err:     err,
+			Source:    WorkloadIdentitySourceFly,
+			Message:   "reading token response",
+			Err:       err,
+			Transient: retryableIdentityTransport(err),
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: fmt.Sprintf("Machines API returned status %d", resp.StatusCode),
+			Source:    WorkloadIdentitySourceFly,
+			Message:   fmt.Sprintf("Machines API returned status %d", resp.StatusCode),
+			Transient: retryableIdentityHTTPStatus(resp.StatusCode),
 		}
 	}
 
@@ -350,4 +358,22 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 		}
 	}
 	return token, nil
+}
+
+func retryableIdentityTransport(err error) bool {
+	var dns *net.DNSError
+	var addr *net.AddrError
+	var invalidAddr net.InvalidAddrError
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) ||
+		errors.As(err, &addr) || errors.As(err, &invalidAddr) {
+		return false
+	}
+	if errors.As(err, &dns) {
+		return !dns.IsNotFound && (dns.Timeout() || dns.Temporary())
+	}
+	return retryableMetadataFailure(err)
+}
+
+func retryableIdentityHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests || (status >= 500 && status < 600)
 }

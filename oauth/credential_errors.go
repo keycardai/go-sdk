@@ -60,9 +60,9 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// Retryable reports whether the failure is transient.
+// Retryable reports whether the source classifies the failure as transient.
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
-	return e.Transient || retryableMetadataFailure(e.Err)
+	return e.Transient
 }
 
 // ClientSecretConfigurationError means a ClientSecretCredential is misconfigured.
