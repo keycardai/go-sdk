@@ -39,7 +39,7 @@ func ExampleBuildAuthorizeURL() {
 func ExampleRevokeToken() {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}), oauth.WithRevocationHTTPClient(server.Client()))
+	}))
 	defer server.Close()
 
 	err := oauth.RevokeToken(context.Background(), "", oauth.RevokeTokenRequest{
@@ -48,7 +48,7 @@ func ExampleRevokeToken() {
 	}, oauth.WithRevocationMetadata(&oauth.AuthorizationServerMetadata{
 		Issuer:             server.URL,
 		RevocationEndpoint: server.URL + "/revoke",
-	}))
+	}), oauth.WithRevocationHTTPClient(server.Client()))
 	if err != nil {
 		panic(err)
 	}
