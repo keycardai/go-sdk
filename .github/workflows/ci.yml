@@ -41,6 +41,20 @@ jobs:
       - run: go test -race -count=1 ./...
       - run: go build ./examples/...
 
+  test-spiffe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spiffe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: spiffe/go.mod
+          cache-dependency-path: spiffe/go.sum
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
   # MCP framework examples live in their own modules (with a replace directive
   # to the root) so the root module stays free of MCP framework dependencies.
   # Their tests integration-test the SDK against each framework, including
