@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ type DelegationClient struct {
 	httpClient    *http.Client
 	wire          wireProtocol
 	invokeTimeout time.Duration
+	peerLimit     int64
 }
 
 // DelegationOption configures a DelegationClient.
@@ -52,6 +54,7 @@ type delegationConfig struct {
 	discovery       *ServiceDiscovery
 	protocolVersion string
 	invokeTimeout   time.Duration
+	peerLimit       int64
 }
 
 // WithHTTPClient sets the HTTP client used for the token exchange and the agent
@@ -59,6 +62,13 @@ type delegationConfig struct {
 // client also governs agent-card discovery. The default client has a 30 second timeout.
 func WithHTTPClient(c *http.Client) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.httpClient = c }
+}
+
+// WithMaxPeerResponseBytes configures the decoded limit for agent-card and invocation
+// replies read by default HTTP clients. The limit defaults to 64 MiB and must be
+// positive. It does not affect token exchange or caller-supplied HTTP clients.
+func WithMaxPeerResponseBytes(limit int64) DelegationOption {
+	return func(cfg *delegationConfig) { cfg.peerLimit = limit }
 }
 
 // WithInvokeTimeout bounds the total time for a single Invoke call (discovery, token
@@ -104,9 +114,13 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	cfg := delegationConfig{
 		protocolVersion: defaultProtocolVersion,
 		invokeTimeout:   defaultInvokeTimeout,
+		peerLimit:       defaultPeerResponseBytes,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.peerLimit <= 0 {
+		return nil, &ConfigurationError{Message: "peer response limit must be positive"}
 	}
 
 	wire, ok := wireFor(cfg.protocolVersion)
@@ -115,13 +129,15 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	}
 
 	httpClient := cfg.httpClient
+	peerLimit := int64(0)
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultInvokeTimeout}
+		peerLimit = cfg.peerLimit
 	}
 
 	discovery := cfg.discovery
 	if discovery == nil {
-		var dopts []DiscoveryOption
+		dopts := []DiscoveryOption{WithDiscoveryMaxPeerResponseBytes(cfg.peerLimit)}
 		if cfg.httpClient != nil {
 			// A caller-supplied client governs discovery too (e.g. a shared proxy).
 			dopts = append(dopts, WithDiscoveryHTTPClient(cfg.httpClient))
@@ -140,6 +156,7 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 		httpClient:    httpClient,
 		wire:          wire,
 		invokeTimeout: cfg.invokeTimeout,
+		peerLimit:     peerLimit,
 	}, nil
 }
 
@@ -259,12 +276,20 @@ func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, 
 	}
 	defer resp.Body.Close()
 
+	var responseBody io.Reader = resp.Body
+	if c.peerLimit > 0 {
+		responseBody, err = readPeerBody(resp, c.peerLimit, true)
+		if err != nil {
+			return Message{}, nil, &InvocationError{Message: "reading response", Err: err}
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("agent %s returned HTTP %d", endpoint, resp.StatusCode)}
 	}
 
 	var rpcResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(responseBody).Decode(&rpcResp); err != nil {
 		return Message{}, nil, &InvocationError{Message: "decoding response", Err: err}
 	}
 	if rpcResp.Error != nil {
