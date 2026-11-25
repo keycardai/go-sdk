@@ -1,3 +1,15 @@
+## v0.29.0 (2026-11-25)
+
+
+- feat(oauth): preserve authorization server error reasons (#75)
+- * fix(oauth): preserve authorization server error reasons
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * test(oauth): cite spec rows one per line
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.28.0 (2026-11-25)
 
 
