@@ -184,6 +184,33 @@ func TestRevokeToken_RejectsPlaintextEndpoint(t *testing.T) {
 	}
 }
 
+func TestRevokeToken_DoesNotFollowRedirect(t *testing.T) {
+	for _, status := range []int{
+		http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/revoke" {
+					t.Errorf("unexpected redirected request: %s %s", r.Method, r.URL)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.Header().Set("Location", "/redirected")
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			md := &AuthorizationServerMetadata{Issuer: server.URL, RevocationEndpoint: server.URL + "/revoke"}
+			err := RevokeToken(context.Background(), "", RevokeTokenRequest{Token: "test-token", ClientID: "client-a"},
+				WithRevocationMetadata(md), WithRevocationHTTPClient(server.Client()))
+			var got *HTTPError
+			if !errors.As(err, &got) || got.Status != status || got.Retryable() {
+				t.Fatalf("want a non-retryable HTTP %d error, got %v", status, err)
+			}
+		})
+	}
+}
+
 // Spec row 9: conflicting or unsupported client authentication fails before any request.
 // Spec row 11: a missing token fails before any request.
 func TestRevokeToken_InvalidInput(t *testing.T) {

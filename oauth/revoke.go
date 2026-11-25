@@ -54,7 +54,7 @@ func WithRevocationRequestTimeout(d time.Duration) RevocationOption {
 // RevokeToken sends an RFC 7009 request to the issuer's advertised revocation
 // endpoint, which must use HTTPS. If WithRevocationMetadata supplies metadata,
 // issuer may be empty.
-// The operation does not cache discovery or retry requests.
+// The operation does not cache discovery, retry requests, or follow revocation redirects.
 //
 // HTTP 200 succeeds without reading a body, including for unknown, expired,
 // or already revoked tokens. Keycard revokes the session when the token
@@ -129,7 +129,11 @@ func RevokeToken(ctx context.Context, issuer string, req RevokeTokenRequest, opt
 	if err != nil {
 		return &ConfigurationError{Message: fmt.Sprintf("creating revocation request: %v", err)}
 	}
-	resp, err := cfg.httpClient.Do(httpReq)
+	client := *cfg.httpClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return &NetworkError{Message: "revocation request failed", Err: err}
 	}
