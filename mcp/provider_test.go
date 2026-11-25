@@ -173,7 +173,7 @@ func TestAuthProvider_ExchangeTokens_PassesTokenEndpoint(t *testing.T) {
 	}
 }
 
-// Spec row 5a of access-context.
+// Spec row 5a: access-context preserves the resource error reason.
 func TestAuthProvider_ExchangeTokens_PreservesResourceReason(t *testing.T) {
 	const resource = "https://api.example.com"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// Spec rows 6a and 6b of token-exchange and client-credentials.
+// Spec row 6a: token-exchange and client-credentials denial preserves the reason.
+// Spec row 6b: token-exchange and client-credentials denial without a reason leaves it empty.
 func TestGrantDenialReason(t *testing.T) {
 	grants := []struct {
 		name string
