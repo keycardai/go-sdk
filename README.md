@@ -51,7 +51,9 @@ One agent calling another on the user's behalf: discover the target agent's card
 
 ### `spiffe`: SPIFFE JWT-SVID Workload Identity
 
-Install the optional module with `go get github.com/keycardai/go-sdk/spiffe`.
+The optional module is installable with `go get github.com/keycardai/go-sdk/spiffe`
+starting with its first `spiffe/vX.Y.Z` tag. That tag requires the go-sdk
+release that adds `WorkloadIdentityRuntimeError.Retryable()`.
 It uses the official go-spiffe library and keeps gRPC out of the core SDK.
 
 ```go
