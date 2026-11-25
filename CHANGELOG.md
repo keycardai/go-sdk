@@ -1,3 +1,19 @@
+## v0.34.0 (2026-11-25)
+
+
+- feat(oauth): pace retries for cached metadata fetches (#82)
+- * fix(oauth): pace retries for cached metadata fetches
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * fix(oauth): distinguish transport failures and protect metadata pacing
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * fix(oauth): pace HTTP/2 resets and accept zero-padded asctime dates
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * test(oauth): cite pacing spec rows one per line and cover oversized 429
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.33.1 (2026-11-25)
 
 
