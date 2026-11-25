@@ -130,7 +130,9 @@ func TestBearerMiddleware_VerifiedCallerClaims(t *testing.T) {
 		aud  []string
 		act  map[string]any
 	}{
+		// Spec row 4a:
 		{name: "row_4a", aud: []string{"resource-a", "resource-b"}, act: actor},
+		// Spec row 4b:
 		{name: "row_4b", aud: []string{"resource-a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
