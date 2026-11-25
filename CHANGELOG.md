@@ -1,3 +1,17 @@
+## v0.30.0 (2026-11-25)
+
+
+- feat(mcp): expose verified audience and actor claims (#76)
+- * feat(mcp): expose verified audience and actor claims
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * test(mcp): cite bearer caller spec rows
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * test(mcp): cite spec rows on the table cases
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.29.0 (2026-11-25)
 
 
