@@ -1,3 +1,15 @@
+## v0.30.1 (2026-11-25)
+
+
+- fix(oauth): reject explicitly empty verifier audiences (#77)
+- * fix(oauth): reject explicitly empty verifier audiences
+- Co-Authored-By: Larry Osakwe <larry@keycard.ai>
+- * docs(oauth): note the empty audience error on NewJWTVerifier
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.30.0 (2026-11-25)
 
 
