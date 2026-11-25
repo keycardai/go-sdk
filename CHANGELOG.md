@@ -1,3 +1,10 @@
+## v0.32.0 (2026-11-25)
+
+
+- fix(oauth)!: reject request client IDs with Basic token exchange (#79)
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.31.0 (2026-11-25)
 
 
