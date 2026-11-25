@@ -167,6 +167,23 @@ func TestRevokeToken_MissingEndpoint(t *testing.T) {
 	}
 }
 
+func TestRevokeToken_RejectsPlaintextEndpoint(t *testing.T) {
+	md := &AuthorizationServerMetadata{
+		Issuer: "https://zone.example", RevocationEndpoint: "http://zone.example/revoke",
+	}
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		return nil, nil
+	})}
+	err := RevokeToken(context.Background(), "", RevokeTokenRequest{
+		Token: "test-token", ClientID: "client-a", ClientSecret: "test-secret",
+	}, WithRevocationMetadata(md), WithRevocationHTTPClient(client))
+	var cfg *ConfigurationError
+	if !errors.As(err, &cfg) || !strings.Contains(cfg.Message, "HTTPS") {
+		t.Fatalf("want configuration error requiring HTTPS, got %v", err)
+	}
+}
+
 // Spec row 9: conflicting or unsupported client authentication fails before any request.
 // Spec row 11: a missing token fails before any request.
 func TestRevokeToken_InvalidInput(t *testing.T) {

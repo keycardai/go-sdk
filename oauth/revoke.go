@@ -52,7 +52,8 @@ func WithRevocationRequestTimeout(d time.Duration) RevocationOption {
 }
 
 // RevokeToken sends an RFC 7009 request to the issuer's advertised revocation
-// endpoint. If WithRevocationMetadata supplies metadata, issuer may be empty.
+// endpoint, which must use HTTPS. If WithRevocationMetadata supplies metadata,
+// issuer may be empty.
 // The operation does not cache discovery or retry requests.
 //
 // HTTP 200 succeeds without reading a body, including for unknown, expired,
@@ -99,8 +100,9 @@ func RevokeToken(ctx context.Context, issuer string, req RevokeTokenRequest, opt
 	if md.RevocationEndpoint == "" {
 		return &ConfigurationError{Message: fmt.Sprintf("authorization server %q does not advertise a revocation_endpoint", issuer)}
 	}
-	if err := checkEndpoint("revocation_endpoint", md.RevocationEndpoint); err != nil {
-		return err
+	endpoint, err := url.Parse(md.RevocationEndpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" {
+		return &ConfigurationError{Message: "revocation_endpoint must be an absolute HTTPS URL"}
 	}
 
 	hint := req.TokenTypeHint

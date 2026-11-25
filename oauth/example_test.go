@@ -37,9 +37,9 @@ func ExampleBuildAuthorizeURL() {
 }
 
 func ExampleRevokeToken() {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	}), oauth.WithRevocationHTTPClient(server.Client()))
 	defer server.Close()
 
 	err := oauth.RevokeToken(context.Background(), "", oauth.RevokeTokenRequest{
