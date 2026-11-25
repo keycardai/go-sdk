@@ -227,9 +227,10 @@ var supportedVerifyAlgorithms = map[string]bool{
 
 // jwtVerifierConfig holds the optional verifier settings applied via JWTVerifierOption.
 type jwtVerifierConfig struct {
-	audiences  []string
-	algorithms []string
-	leeway     time.Duration
+	audiences    []string
+	audiencesSet bool
+	algorithms   []string
+	leeway       time.Duration
 }
 
 // JWTVerifierOption configures a JWTVerifier.
@@ -238,8 +239,12 @@ type JWTVerifierOption func(*jwtVerifierConfig)
 // WithAudiences sets the accepted audience values. When set, a verified token's aud
 // claim must be present and intersect this set; when unset, audience is not checked
 // and NewJWTVerifier logs one warning through the default slog logger.
+// Calling WithAudiences without values is a construction error.
 func WithAudiences(audiences ...string) JWTVerifierOption {
-	return func(c *jwtVerifierConfig) { c.audiences = audiences }
+	return func(c *jwtVerifierConfig) {
+		c.audiences = audiences
+		c.audiencesSet = true
+	}
 }
 
 // WithAlgorithms sets the allowed JWT signing algorithms. Defaults to ["RS256"].
@@ -289,7 +294,10 @@ func NewJWTVerifier(keyring OAuthKeyring, issuers []string, opts ...JWTVerifierO
 		}
 	}
 
-	if len(cfg.audiences) == 0 {
+	if cfg.audiencesSet && len(cfg.audiences) == 0 {
+		return nil, &ConfigurationError{Message: "WithAudiences requires at least one audience"}
+	}
+	if !cfg.audiencesSet {
 		slog.Default().Warn("keycard: JWT verifier has no audience configured; it accepts a token minted for any resource in the zone. Pass oauth.WithAudiences with this server's resource identifier.")
 	}
 
