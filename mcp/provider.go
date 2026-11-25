@@ -273,7 +273,7 @@ func (p *AuthProvider) exchange(ctx context.Context, issuer, subjectToken, userI
 		if s, ok := scopesByResource[resource]; ok {
 			resourceScopes = s
 		}
-		resp, err := p.exchangeResource(ctx, client, subjectToken, userIdentifier, resourceScopes, resource, tokenEndpoint)
+		resp, err := p.exchangeResource(ctx, client, zone, subjectToken, userIdentifier, resourceScopes, resource, tokenEndpoint)
 		if err != nil {
 			ac.SetResourceError(resource, exchangeErrorDetail(resource, err))
 			continue
@@ -289,7 +289,7 @@ func (p *AuthProvider) exchange(ctx context.Context, issuer, subjectToken, userI
 // userIdentifier it performs an RFC 8693 substitute-user impersonation; otherwise it
 // exchanges the caller's subject token, building the request via the application
 // credential when one is configured.
-func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.TokenExchangeClient, subjectToken, userIdentifier string, scopes []string, resource, tokenEndpoint string) (*oauth.TokenResponse, error) {
+func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.TokenExchangeClient, zone, subjectToken, userIdentifier string, scopes []string, resource, tokenEndpoint string) (*oauth.TokenResponse, error) {
 	if userIdentifier != "" {
 		return client.Impersonate(ctx, oauth.ImpersonateRequest{
 			UserIdentifier: userIdentifier,
@@ -300,7 +300,7 @@ func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.Token
 
 	var req *oauth.TokenExchangeRequest
 	if p.credential != nil {
-		r, err := p.credential.PrepareTokenExchangeRequest(ctx, subjectToken, resource, &PrepareOptions{TokenEndpoint: tokenEndpoint})
+		r, err := p.credential.PrepareTokenExchangeRequest(ctx, subjectToken, resource, &PrepareOptions{Issuer: zone, TokenEndpoint: tokenEndpoint})
 		if err != nil {
 			return nil, err
 		}

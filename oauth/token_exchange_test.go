@@ -71,6 +71,7 @@ func TestTokenExchangeClient_ExchangeToken(t *testing.T) {
 	}
 }
 
+// Spec row 3: Basic authenticates without a body client ID.
 func TestTokenExchangeClient_BasicAuth(t *testing.T) {
 	var receivedAuth string
 
@@ -83,6 +84,9 @@ func TestTokenExchangeClient_BasicAuth(t *testing.T) {
 			})
 		case "/token":
 			receivedAuth = r.Header.Get("Authorization")
+			if err := r.ParseForm(); err != nil || r.PostForm.Has("client_id") {
+				t.Errorf("unexpected Basic form: %v (error %v)", r.PostForm, err)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"access_token": "token",
@@ -108,6 +112,115 @@ func TestTokenExchangeClient_BasicAuth(t *testing.T) {
 	}
 	if receivedAuth != "Basic bXktY2xpZW50Om15LXNlY3JldA==" {
 		t.Errorf("unexpected Authorization header: %s", receivedAuth)
+	}
+}
+
+func TestTokenExchangeClient_UnconfiguredCredentialIssuer(t *testing.T) {
+	zone := newFakeZone(t)
+	zone.script(stepToken)
+	credential, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		"https://other.example.com": {ClientID: "client", ClientSecret: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewTokenExchangeClient(zone.URL, WithTokenExchangeCredential(credential))
+	_, err = client.ExchangeToken(context.Background(), TokenExchangeRequest{SubjectToken: "subject"})
+	var configError *ClientSecretConfigurationError
+	if !errors.As(err, &configError) {
+		t.Errorf("got error %v, want ClientSecretConfigurationError", err)
+	}
+	if got := len(zone.tokenCalls()); got != 0 {
+		t.Errorf("got %d token POSTs, want 0", got)
+	}
+}
+
+type exchangeAssertionCredential struct {
+	prepare func(string, string, *PrepareOptions) (*TokenExchangeRequest, error)
+}
+
+func (c exchangeAssertionCredential) Auth(string) *ClientAuth { return nil }
+
+func (c exchangeAssertionCredential) PrepareTokenExchangeRequest(_ context.Context, subject, resource string, opts *PrepareOptions) (*TokenExchangeRequest, error) {
+	return c.prepare(subject, resource, opts)
+}
+
+func TestTokenExchangeClient_AssertionCredential(t *testing.T) {
+	const (
+		resource      = "https://api.example.com"
+		assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+	)
+	sourceError := errors.New("identity source failed")
+	for _, tc := range []struct {
+		name, callerAssertion, callerID, preparedID, wantID string
+		sourceError                                         error
+	}{
+		// Spec row 4b: prepared authentication preserves caller scope and resource.
+		{name: "prepare", preparedID: "credential-id", wantID: "credential-id"},
+		// Spec row 4c: a supplied assertion skips preparation.
+		{name: "caller assertion", callerAssertion: "caller-assertion", callerID: "caller-id", wantID: "caller-id"},
+		// Spec row 4d: source failure sends no token POST.
+		{name: "source failure", sourceError: sourceError},
+		// Spec row 4e: the prepared ID replaces the caller's or is omitted.
+		{name: "replace caller ID", callerID: "caller-id", preparedID: "credential-id", wantID: "credential-id"},
+		{name: "omit caller ID", callerID: "caller-id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newFakeZone(t)
+			zone.script(stepToken)
+			prepareCalls := 0
+			credential := exchangeAssertionCredential{prepare: func(subject, target string, opts *PrepareOptions) (*TokenExchangeRequest, error) {
+				prepareCalls++
+				if subject != "subject" || target != resource || opts.Issuer != zone.URL || opts.TokenEndpoint != zone.URL+"/token" {
+					t.Errorf("unexpected preparation arguments: %q, %q, %+v", subject, target, opts)
+				}
+				if tc.sourceError != nil {
+					return nil, tc.sourceError
+				}
+				return &TokenExchangeRequest{
+					SubjectToken: "ignored", Resource: "ignored", Scope: "ignored",
+					ClientAssertion: "prepared-assertion", ClientAssertionType: assertionType, ClientID: tc.preparedID,
+				}, nil
+			}}
+			client := NewTokenExchangeClient(zone.URL, WithTokenExchangeCredential(credential))
+			req := TokenExchangeRequest{
+				SubjectToken: "subject", Resource: resource, Scope: "read",
+				ClientAssertion: tc.callerAssertion, ClientID: tc.callerID,
+			}
+			if tc.callerAssertion != "" {
+				req.ClientAssertionType = assertionType
+			}
+			_, err := client.ExchangeToken(context.Background(), req)
+			calls := zone.tokenCalls()
+			if tc.sourceError != nil {
+				if !errors.Is(err, tc.sourceError) || len(calls) != 0 {
+					t.Fatalf("got error %v and %d token POSTs", err, len(calls))
+				}
+				return
+			}
+			if err != nil || len(calls) != 1 {
+				t.Fatalf("got error %v and %d token POSTs", err, len(calls))
+			}
+			wantAssertion, wantPrepareCalls := "prepared-assertion", 1
+			if tc.callerAssertion != "" {
+				wantAssertion, wantPrepareCalls = tc.callerAssertion, 0
+			}
+			if prepareCalls != wantPrepareCalls {
+				t.Errorf("got %d preparation calls, want %d", prepareCalls, wantPrepareCalls)
+			}
+			call := calls[0]
+			for key, want := range map[string]string{
+				"subject_token": "subject", "resource": resource, "scope": "read",
+				"client_assertion": wantAssertion, "client_assertion_type": assertionType, "client_id": tc.wantID,
+			} {
+				if got := call.form.Get(key); got != want || (want == "" && call.form.Has(key)) {
+					t.Errorf("%s: got %q, want %q", key, got, want)
+				}
+			}
+			if call.header.Get("Authorization") != "" {
+				t.Error("assertion request sent Authorization")
+			}
+		})
 	}
 }
 

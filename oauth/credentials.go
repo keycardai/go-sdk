@@ -17,6 +17,8 @@ type ClientAuth struct {
 
 // PrepareOptions provides optional context for token exchange request preparation.
 type PrepareOptions struct {
+	// Issuer is the resolved zone issuer URL.
+	Issuer        string
 	TokenEndpoint string
 	AuthInfo      map[string]string
 }

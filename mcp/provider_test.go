@@ -171,6 +171,9 @@ func TestAuthProvider_ExchangeTokens_PassesTokenEndpoint(t *testing.T) {
 	if cred.capturedOpts.TokenEndpoint != expectedEndpoint {
 		t.Errorf("TokenEndpoint: got %q, want %q", cred.capturedOpts.TokenEndpoint, expectedEndpoint)
 	}
+	if cred.capturedOpts.Issuer != tokenServer.URL {
+		t.Errorf("Issuer: got %q, want %q", cred.capturedOpts.Issuer, tokenServer.URL)
+	}
 }
 
 // Spec row 5a: access-context preserves the resource error reason.
