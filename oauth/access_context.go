@@ -16,7 +16,10 @@ type ErrorDetail struct {
 	Message     string `json:"message"`
 	Code        string `json:"code,omitempty"`
 	Description string `json:"description,omitempty"`
-	RawError    string `json:"raw_error,omitempty"`
+	// Reason is the authorization server's reason from the underlying *OAuthError,
+	// empty when it had none.
+	Reason   string `json:"reason,omitempty"`
+	RawError string `json:"raw_error,omitempty"`
 }
 
 // ResourceAccessError is returned when a resource's token is unavailable.

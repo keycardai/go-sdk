@@ -526,6 +526,7 @@ func runLoopbackFlow(ctx context.Context, listener net.Listener, redirectURI, wa
 			oe := &OAuthError{ErrorCode: oauthErr, Message: oauthErr}
 			if desc := q.Get("error_description"); desc != "" {
 				oe.Message = desc
+				oe.ErrorDescription = desc
 			}
 			resultCh <- result{err: oe}
 			return

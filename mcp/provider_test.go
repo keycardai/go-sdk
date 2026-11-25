@@ -248,3 +248,49 @@ func TestAuthProvider_ExchangeTokens(t *testing.T) {
 		t.Errorf("slack token: got %q", slackToken.AccessToken)
 	}
 }
+
+// Spec row 5a (access-context spec-version 2): a resource exchange that fails with
+// reason=policy_denied records that reason on the resource error.
+func TestAuthProvider_ExchangeTokens_RecordsReason(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]string{
+				"issuer":         "http://" + r.Host,
+				"token_endpoint": "http://" + r.Host + "/token",
+			})
+		case "/token":
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":             "access_denied",
+				"error_description": "Denied",
+				"reason":            "policy_denied",
+			})
+		}
+	}))
+	defer tokenServer.Close()
+
+	provider, err := NewAuthProvider(
+		WithZoneURL(tokenServer.URL),
+		WithApplicationCredential(mustClientSecret(t, "client-id", "client-secret")),
+	)
+	if err != nil {
+		t.Fatalf("creating provider: %v", err)
+	}
+
+	ac := provider.ExchangeTokens(context.Background(), "user-token", "https://api.github.com")
+
+	got := ac.GetResourceError("https://api.github.com")
+	if got == nil {
+		t.Fatal("expected a resource error")
+	}
+	want := ErrorDetail{
+		Message:     "Token exchange failed for https://api.github.com",
+		Code:        "access_denied",
+		Description: "Denied",
+		Reason:      "policy_denied",
+	}
+	if *got != want {
+		t.Errorf("resource error: got %+v, want %+v", *got, want)
+	}
+}

@@ -87,12 +87,14 @@ func TestKeycardErrorMarker(t *testing.T) {
 
 func TestParseOAuthErrorResponse(t *testing.T) {
 	tests := []struct {
-		name     string
-		body     string
-		wantNil  bool
-		wantCode string
-		wantMsg  string
-		wantURI  string
+		name       string
+		body       string
+		wantNil    bool
+		wantCode   string
+		wantMsg    string
+		wantURI    string
+		wantDesc   string
+		wantReason string
 	}{
 		{
 			name:     "full RFC 6749 error",
@@ -100,12 +102,34 @@ func TestParseOAuthErrorResponse(t *testing.T) {
 			wantCode: "invalid_grant",
 			wantMsg:  "token expired",
 			wantURI:  "https://e.example/err",
+			wantDesc: "token expired",
 		},
 		{
 			name:     "error code only falls back to code as message",
 			body:     `{"error":"server_error"}`,
 			wantCode: "server_error",
 			wantMsg:  "server_error",
+		},
+		{
+			name:       "reason passes through unchanged",
+			body:       `{"error":"access_denied","error_description":"Denied","reason":"custom_denial"}`,
+			wantCode:   "access_denied",
+			wantMsg:    "Denied",
+			wantDesc:   "Denied",
+			wantReason: "custom_denial",
+		},
+		{
+			name:       "reason without a description",
+			body:       `{"error":"invalid_grant","reason":"policy_denied"}`,
+			wantCode:   "invalid_grant",
+			wantMsg:    "invalid_grant",
+			wantReason: "policy_denied",
+		},
+		{
+			name:     "non-string reason is ignored",
+			body:     `{"error":"access_denied","reason":42}`,
+			wantCode: "access_denied",
+			wantMsg:  "access_denied",
 		},
 		{name: "no error field", body: `{"status":"ok"}`, wantNil: true},
 		{name: "invalid json", body: `not json`, wantNil: true},
@@ -126,6 +150,9 @@ func TestParseOAuthErrorResponse(t *testing.T) {
 			}
 			if got.ErrorCode != tt.wantCode || got.Message != tt.wantMsg || got.ErrorURI != tt.wantURI {
 				t.Errorf("got {%q,%q,%q}, want {%q,%q,%q}", got.ErrorCode, got.Message, got.ErrorURI, tt.wantCode, tt.wantMsg, tt.wantURI)
+			}
+			if got.ErrorDescription != tt.wantDesc || got.Reason != tt.wantReason {
+				t.Errorf("description, reason: got {%q,%q}, want {%q,%q}", got.ErrorDescription, got.Reason, tt.wantDesc, tt.wantReason)
 			}
 		})
 	}

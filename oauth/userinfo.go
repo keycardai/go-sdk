@@ -173,6 +173,7 @@ func FetchUserInfo(ctx context.Context, issuer, accessToken string, opts ...User
 			oauthErr := &OAuthError{ErrorCode: code, Message: code}
 			if desc, ok := claims["error_description"].(string); ok {
 				oauthErr.Message = desc
+				oauthErr.ErrorDescription = desc
 			}
 			if uri, ok := claims["error_uri"].(string); ok {
 				oauthErr.ErrorURI = uri

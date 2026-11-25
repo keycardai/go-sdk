@@ -320,7 +320,7 @@ func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.Token
 }
 
 // exchangeErrorDetail builds an ErrorDetail from a failed exchange, surfacing an OAuth
-// error's code/description when present and otherwise the raw error.
+// error's code, description and reason when present and otherwise the raw error.
 func exchangeErrorDetail(resource string, err error) oauth.ErrorDetail {
 	detail := oauth.ErrorDetail{Message: fmt.Sprintf("Token exchange failed for %s", resource)}
 	var oauthErr *oauth.OAuthError
@@ -329,6 +329,7 @@ func exchangeErrorDetail(resource string, err error) oauth.ErrorDetail {
 		if oauthErr.Message != "" {
 			detail.Description = oauthErr.Message
 		}
+		detail.Reason = oauthErr.Reason
 	} else {
 		detail.RawError = err.Error()
 	}

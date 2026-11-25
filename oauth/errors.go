@@ -41,11 +41,18 @@ func (e *HTTPError) Error() string {
 // OAuthError represents an OAuth protocol error with an error code. Err carries the
 // underlying cause, when there is one (e.g. a JSON decode failure behind an
 // invalid_response), for errors.Is/errors.As.
+//
+// ErrorDescription is the server's error_description, empty when it sent none.
+// Reason is the authorization server's reason, passed through unchanged and empty when
+// the response omits it. Branch on Reason rather than on the description text. Reason
+// is not checked against a fixed list and does not affect retryability.
 type OAuthError struct {
-	ErrorCode string
-	Message   string
-	ErrorURI  string
-	Err       error
+	ErrorCode        string
+	Message          string
+	ErrorURI         string
+	ErrorDescription string
+	Reason           string
+	Err              error
 }
 
 func (e *OAuthError) Error() string {
@@ -230,9 +237,13 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 	oauthErr := &OAuthError{ErrorCode: code, Message: code}
 	if desc, ok := body["error_description"].(string); ok {
 		oauthErr.Message = desc
+		oauthErr.ErrorDescription = desc
 	}
 	if uri, ok := body["error_uri"].(string); ok {
 		oauthErr.ErrorURI = uri
+	}
+	if reason, ok := body["reason"].(string); ok {
+		oauthErr.Reason = reason
 	}
 	return oauthErr
 }

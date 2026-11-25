@@ -346,3 +346,54 @@ func TestClientCredentialsClient_Scope(t *testing.T) {
 		t.Errorf("response scope: got %v", resp.Scope)
 	}
 }
+
+// Spec rows 6a and 6b (client-credentials spec-version 5): an OAuth error exposes reason
+// and error_description unchanged, and reason is empty when the response omits it.
+func TestClientCredentialsClient_ErrorReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       map[string]string
+		wantReason string
+	}{
+		{
+			name:       "reason present",
+			body:       map[string]string{"error": "access_denied", "error_description": "Denied", "reason": "custom_denial"},
+			wantReason: "custom_denial",
+		},
+		{
+			name: "reason absent",
+			body: map[string]string{"error": "access_denied", "error_description": "Denied"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/.well-known/oauth-authorization-server":
+					json.NewEncoder(w).Encode(map[string]string{
+						"issuer":         "http://" + r.Host,
+						"token_endpoint": "http://" + r.Host + "/token",
+					})
+				case "/token":
+					w.WriteHeader(http.StatusBadRequest)
+					json.NewEncoder(w).Encode(tt.body)
+				}
+			}))
+			defer tokenServer.Close()
+
+			client := NewClientCredentialsClient(tokenServer.URL)
+			_, err := client.RequestToken(context.Background(), ClientCredentialsRequest{})
+
+			var oauthErr *OAuthError
+			if !errors.As(err, &oauthErr) {
+				t.Fatalf("expected *OAuthError, got %T: %v", err, err)
+			}
+			if oauthErr.Reason != tt.wantReason {
+				t.Errorf("reason: got %q, want %q", oauthErr.Reason, tt.wantReason)
+			}
+			if oauthErr.ErrorDescription != "Denied" {
+				t.Errorf("error description: got %q, want Denied", oauthErr.ErrorDescription)
+			}
+		})
+	}
+}
