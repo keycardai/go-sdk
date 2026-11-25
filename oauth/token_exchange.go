@@ -48,6 +48,7 @@ type TokenExchangeClientOption func(*tokenExchangeConfig)
 type tokenExchangeConfig struct {
 	clientID       string
 	clientSecret   string
+	credential     ApplicationCredential
 	httpClient     *http.Client
 	discoveryTTL   time.Duration
 	negativeTTL    time.Duration
@@ -59,6 +60,13 @@ func WithClientCredentials(clientID, clientSecret string) TokenExchangeClientOpt
 	return func(cfg *tokenExchangeConfig) {
 		cfg.clientID = clientID
 		cfg.clientSecret = clientSecret
+	}
+}
+
+// WithTokenExchangeCredential uses credential instead of static Basic credentials.
+func WithTokenExchangeCredential(credential ApplicationCredential) TokenExchangeClientOption {
+	return func(cfg *tokenExchangeConfig) {
+		cfg.credential = credential
 	}
 }
 
@@ -129,19 +137,36 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 		return nil, err
 	}
 
-	body := serializeTokenExchangeRequest(req)
-
 	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
 	defer cancel()
 
+	auth := &ClientAuth{ClientID: c.cfg.clientID, ClientSecret: c.cfg.clientSecret}
+	if credential := c.cfg.credential; credential != nil {
+		auth = credential.Auth(c.issuerURL)
+		if auth == nil && req.ClientAssertion == "" {
+			prepared, err := credential.PrepareTokenExchangeRequest(ctx, req.SubjectToken, req.Resource, &PrepareOptions{
+				Issuer: c.issuerURL, TokenEndpoint: tokenEndpoint,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if prepared != nil {
+				req.ClientAssertion = prepared.ClientAssertion
+				req.ClientAssertionType = prepared.ClientAssertionType
+				req.ClientID = prepared.ClientID
+			}
+		}
+	}
+
+	body := serializeTokenExchangeRequest(req)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("creating token exchange request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	if c.cfg.clientID != "" && c.cfg.clientSecret != "" {
-		setBasicAuth(httpReq.Header, c.cfg.clientID, c.cfg.clientSecret)
+	if auth != nil && auth.ClientID != "" && auth.ClientSecret != "" {
+		setBasicAuth(httpReq.Header, auth.ClientID, auth.ClientSecret)
 	}
 
 	resp, err := c.cfg.httpClient.Do(httpReq)
