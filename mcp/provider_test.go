@@ -173,6 +173,36 @@ func TestAuthProvider_ExchangeTokens_PassesTokenEndpoint(t *testing.T) {
 	}
 }
 
+// Spec row 5a: access-context preserves the resource error reason.
+func TestAuthProvider_ExchangeTokens_PreservesResourceReason(t *testing.T) {
+	const resource = "https://api.example.com"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			json.NewEncoder(w).Encode(map[string]string{
+				"issuer": "http://" + r.Host, "token_endpoint": "http://" + r.Host + "/token",
+			})
+		case "/token":
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "access_denied", "error_description": "Denied", "reason": "policy_denied",
+			})
+		}
+	}))
+	defer server.Close()
+
+	provider, err := NewAuthProvider(WithZoneURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := provider.ExchangeTokens(context.Background(), "subject", resource)
+
+	detail := access.GetResourceError(resource)
+	if detail == nil || detail.Reason == nil || *detail.Reason != "policy_denied" {
+		t.Fatalf("expected policy_denied resource reason: %#v", detail)
+	}
+}
+
 func TestNewAuthProvider_RequiresZoneURL(t *testing.T) {
 	_, err := NewAuthProvider()
 	if err == nil {

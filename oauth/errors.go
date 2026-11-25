@@ -46,6 +46,12 @@ type OAuthError struct {
 	Message   string
 	ErrorURI  string
 	Err       error
+	// ErrorDescription is the server's optional error_description.
+	ErrorDescription *string
+	// Reason is the server's optional machine-readable reason.
+	Reason *string
+
+	status int
 }
 
 func (e *OAuthError) Error() string {
@@ -60,6 +66,19 @@ func (e *OAuthError) Error() string {
 }
 
 func (e *OAuthError) Unwrap() error { return e.Err }
+
+// Retryable reports whether repeating the request unchanged could succeed.
+func (e *OAuthError) Retryable() bool {
+	if e.status == http.StatusTooManyRequests || e.status >= http.StatusInternalServerError {
+		return true
+	}
+	switch e.ErrorCode {
+	case "access_denied", "expired_token", "insufficient_authorization", "invalid_client":
+		return false
+	default:
+		return true
+	}
+}
 
 // InvalidTokenError indicates the token is invalid (expired, malformed, or bad signature).
 type InvalidTokenError struct {
@@ -227,9 +246,13 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 	if !ok {
 		return nil
 	}
-	oauthErr := &OAuthError{ErrorCode: code, Message: code}
+	oauthErr := &OAuthError{ErrorCode: code, Message: code, status: resp.StatusCode}
 	if desc, ok := body["error_description"].(string); ok {
 		oauthErr.Message = desc
+		oauthErr.ErrorDescription = &desc
+	}
+	if reason, ok := body["reason"].(string); ok {
+		oauthErr.Reason = &reason
 	}
 	if uri, ok := body["error_uri"].(string); ok {
 		oauthErr.ErrorURI = uri

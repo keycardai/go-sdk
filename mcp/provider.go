@@ -326,7 +326,10 @@ func exchangeErrorDetail(resource string, err error) oauth.ErrorDetail {
 	var oauthErr *oauth.OAuthError
 	if errors.As(err, &oauthErr) {
 		detail.Code = oauthErr.ErrorCode
-		if oauthErr.Message != "" {
+		detail.Reason = oauthErr.Reason
+		if oauthErr.ErrorDescription != nil {
+			detail.Description = *oauthErr.ErrorDescription
+		} else if oauthErr.Message != "" {
 			detail.Description = oauthErr.Message
 		}
 	} else {

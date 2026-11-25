@@ -1,13 +1,78 @@
 package oauth
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+// Spec row 6a: token-exchange and client-credentials denial preserves the reason.
+// Spec row 6b: token-exchange and client-credentials denial without a reason leaves it empty.
+func TestGrantDenialReason(t *testing.T) {
+	grants := []struct {
+		name string
+		call func(string) error
+	}{
+		{"token exchange", func(issuer string) error {
+			_, err := NewTokenExchangeClient(issuer).ExchangeToken(context.Background(), TokenExchangeRequest{
+				SubjectToken: "subject",
+			})
+			return err
+		}},
+		{"client credentials", func(issuer string) error {
+			_, err := NewClientCredentialsClient(issuer).RequestToken(context.Background(), ClientCredentialsRequest{})
+			return err
+		}},
+	}
+	for _, grant := range grants {
+		t.Run(grant.name, func(t *testing.T) {
+			for _, tc := range []struct{ row, reason string }{
+				{"6a", "custom_denial"},
+				{"6b", ""},
+			} {
+				t.Run(tc.row, func(t *testing.T) {
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path == "/.well-known/oauth-authorization-server" {
+							json.NewEncoder(w).Encode(map[string]string{
+								"issuer": "http://" + r.Host, "token_endpoint": "http://" + r.Host + "/token",
+							})
+							return
+						}
+						body := map[string]string{"error": "access_denied", "error_description": "Denied"}
+						if tc.reason != "" {
+							body["reason"] = tc.reason
+						}
+						w.WriteHeader(http.StatusBadRequest)
+						json.NewEncoder(w).Encode(body)
+					}))
+					defer server.Close()
+
+					err := grant.call(server.URL)
+					var denial *OAuthError
+					if !errors.As(err, &denial) {
+						t.Fatalf("expected *OAuthError, got %T: %v", err, err)
+					}
+					if denial.ErrorDescription == nil || *denial.ErrorDescription != "Denied" || denial.Retryable() {
+						t.Fatalf("expected separate description and nonretryable denial: %#v", denial)
+					}
+					if tc.reason == "" {
+						if denial.Reason != nil {
+							t.Fatalf("reason = %q, want nil", *denial.Reason)
+						}
+					} else if denial.Reason == nil || *denial.Reason != tc.reason {
+						t.Fatalf("expected reason %q: %#v", tc.reason, denial)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestHTTPError(t *testing.T) {
 	err := &HTTPError{Message: "not found", Status: 404}
