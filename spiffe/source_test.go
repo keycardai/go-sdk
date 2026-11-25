@@ -155,6 +155,12 @@ func TestConfigurationErrors(t *testing.T) {
 	requireConfigurationError(t, err)
 }
 
+func TestUnixSocketURIRejectsHost(t *testing.T) {
+	source := newSource(t, WithSocketPath("unix://host/path"), WithInitTimeout(50*time.Millisecond))
+	_, err := source.IdentityToken(fetchContext(t))
+	requireConfigurationError(t, err)
+}
+
 func TestEmptyToken(t *testing.T) {
 	path := serveWorkloadAPI(t, func(context.Context, *workload.JWTSVIDRequest) (*workload.JWTSVIDResponse, error) {
 		return svidResponse(""), nil

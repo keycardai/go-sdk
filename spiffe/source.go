@@ -142,6 +142,13 @@ func (s *SpiffeJwtSvidSource) connection() (*grpc.ClientConn, error) {
 	if !strings.HasPrefix(target, "unix:") {
 		return nil, configurationError("the SPIFFE Workload API address must use a Unix socket", nil)
 	}
+	socket, err := url.Parse(target)
+	if err != nil {
+		return nil, configurationError("invalid SPIFFE Workload API socket address", err)
+	}
+	if socket.Host != "" {
+		return nil, configurationError("the SPIFFE Workload API Unix socket address must not include a host", nil)
+	}
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, configurationError("invalid SPIFFE Workload API socket address", err)
