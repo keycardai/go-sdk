@@ -46,8 +46,10 @@ type OAuthError struct {
 	ErrorCode string
 	Message   string
 	ErrorURI  string
-	Status    int
-	Err       error
+	// Status is the HTTP status code of the response that carried the error, or 0
+	// when the error did not come from an HTTP response.
+	Status int
+	Err    error
 	// ErrorDescription is the server's optional error_description.
 	ErrorDescription *string
 	// Reason is the server's optional machine-readable reason.

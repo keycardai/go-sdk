@@ -141,8 +141,8 @@ func TestResponseBodyLimit_ExactBoundary(t *testing.T) {
 // Spec row 1a: cached discovery lookup receives oversized bodies with 200, 429, 503, or 400; transient statuses are not negatively cached while 400 may be cached.
 func TestResponseBodyLimit_DiscoveryNegativeCaching(t *testing.T) {
 	cases := []struct {
-		status              int
-		wantNegativeCached  bool
+		status             int
+		wantNegativeCached bool
 	}{
 		{http.StatusOK, false},
 		{http.StatusTooManyRequests, false},
@@ -421,5 +421,82 @@ func TestResponseBodyLimit_DCRAndUserInfo(t *testing.T) {
 	oauthErr = nil
 	if !errors.As(err, &oauthErr) || oauthErr.ErrorCode != "invalid_response" {
 		t.Errorf("UserInfo oversized: want *OAuthError(invalid_response), got %T: %v", err, err)
+	}
+}
+
+// Spec row 1c: an oversized body on a non-2xx status other than 429 or 5xx is not retryable.
+func TestResponseBodyLimit_OversizedRetryable(t *testing.T) {
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{http.StatusOK, true},
+		{http.StatusBadRequest, false},
+		{http.StatusUnauthorized, false},
+		{http.StatusNotFound, false},
+		{http.StatusTooManyRequests, true},
+		{http.StatusInternalServerError, true},
+		{http.StatusServiceUnavailable, true},
+	}
+	for _, tc := range cases {
+		if got := oversizedOAuthError(tc.status).Retryable(); got != tc.want {
+			t.Errorf("status %d: Retryable() = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+// Spec row 36: device authorization WaitForToken returns invalid_response directly for an oversized 200 or 400.
+func TestResponseBodyLimit_WaitForTokenOversized(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		var polls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			polls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write(makeOversizedJSON(512))
+		}))
+		clk := newFakeDeviceClock()
+		md := &AuthorizationServerMetadata{
+			Issuer:                      srv.URL,
+			DeviceAuthorizationEndpoint: srv.URL + "/device",
+			TokenEndpoint:               srv.URL + "/token",
+		}
+		client, err := NewDeviceAuthorizationClient(srv.URL,
+			WithDevicePublicClient("cid"),
+			WithDeviceMetadata(md),
+			WithDeviceHTTPClient(srv.Client()),
+			WithDeviceClock(clk),
+		)
+		if err != nil {
+			srv.Close()
+			t.Fatalf("NewDeviceAuthorizationClient: %v", err)
+		}
+		_, err = client.WaitForToken(context.Background(), DeviceAuthorization{
+			DeviceCode:      "dev-1",
+			UserCode:        "ABCD-1234",
+			VerificationURI: srv.URL + "/verify",
+			ExpiresIn:       600,
+			Interval:        5,
+			ExpiresAt:       clk.Now().Add(600 * time.Second),
+		})
+		srv.Close()
+
+		var pollErr *DevicePollError
+		if errors.As(err, &pollErr) {
+			t.Fatalf("status %d: got *DevicePollError %v, want *OAuthError directly", status, err)
+		}
+		oauthErr, ok := err.(*OAuthError)
+		if !ok {
+			t.Fatalf("status %d: want *OAuthError, got %T: %v", status, err, err)
+		}
+		if oauthErr.ErrorCode != "invalid_response" || oauthErr.Status != status {
+			t.Errorf("status %d: got (%q, %d), want (invalid_response, %d)", status, oauthErr.ErrorCode, oauthErr.Status, status)
+		}
+		if !errors.Is(err, ErrResponseBodyTooLarge) {
+			t.Errorf("status %d: error does not wrap ErrResponseBodyTooLarge", status)
+		}
+		if got := polls.Load(); got != 1 {
+			t.Errorf("status %d: polls = %d, want 1", status, got)
+		}
 	}
 }

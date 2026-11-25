@@ -78,9 +78,10 @@ func WithRefreshRequestTimeout(d time.Duration) RefreshOption {
 // client authentication is returned as is, and no request is sent. An OAuth error
 // response is an *OAuthError. invalid_grant means the refresh token is expired,
 // revoked, or was issued to another client, and the only recovery is to run the
-// authorization flow again. Any other non-2xx response is an *HTTPError. A 2xx
-// response that is not a valid token response is an *OAuthError with code
-// invalid_response.
+// authorization flow again. A non-2xx response whose body exceeds
+// MaxResponseBodyBytes is an *OAuthError with code invalid_response, and any other
+// non-2xx response is an *HTTPError. A 2xx response that is not a valid token
+// response is an *OAuthError with code invalid_response.
 func RefreshAuthorization(ctx context.Context, issuer string, req RefreshAuthorizationRequest, opts ...RefreshOption) (*TokenResponse, error) {
 	cfg := refreshConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
 	for _, opt := range opts {
