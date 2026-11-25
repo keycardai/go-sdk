@@ -116,7 +116,7 @@ func RevokeToken(ctx context.Context, issuer string, req RevokeTokenRequest, opt
 
 	switch {
 	case authenticator != nil:
-		if err := addClientAuthentication(ctx, authenticator, md.Issuer, md.Issuer, header, form); err != nil {
+		if err := addClientAuthentication(ctx, authenticator, issuer, issuer, header, form); err != nil {
 			return err
 		}
 	case req.ClientSecret != "":

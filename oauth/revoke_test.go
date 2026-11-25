@@ -98,8 +98,8 @@ func TestRevokeToken_Form(t *testing.T) {
 // Spec row 3: credential authentication supplies the headers and fields, and a
 // private-key assertion uses only the issuer as its audience.
 func TestRevokeToken_Credential(t *testing.T) {
-	const issuer = "https://zone.example"
-	md := &AuthorizationServerMetadata{Issuer: issuer, RevocationEndpoint: issuer + "/revoke"}
+	const issuer = "https://zone.example/"
+	md := &AuthorizationServerMetadata{Issuer: strings.TrimSuffix(issuer, "/"), RevocationEndpoint: issuer + "revoke"}
 	web := NewWebIdentity(WithClientID("client-a"), WithStorageDir(t.TempDir()))
 	fake := &fakeAuthenticator{}
 	run := func(t *testing.T, cred ApplicationCredential, check func(*http.Request)) {
@@ -119,7 +119,7 @@ func TestRevokeToken_Credential(t *testing.T) {
 			check(r)
 			return revocationTestResponse(http.StatusOK, ""), nil
 		})}
-		err := RevokeToken(context.Background(), issuer+"/", RevokeTokenRequest{Token: "test-token", Credential: cred},
+		err := RevokeToken(context.Background(), issuer, RevokeTokenRequest{Token: "test-token", Credential: cred},
 			WithRevocationMetadata(md), WithRevocationHTTPClient(client))
 		if err != nil {
 			t.Fatal(err)
@@ -146,6 +146,29 @@ func TestRevokeToken_Credential(t *testing.T) {
 			t.Errorf("authentication calls = %v, want %v", got, want)
 		}
 	})
+}
+
+func TestRevokeToken_ExplicitIssuerSelectsCredential(t *testing.T) {
+	const issuer = "https://zone.example/"
+	cred, err := NewMultiZoneClientSecret(map[string]ClientAuth{
+		issuer: {ClientID: "client-a", ClientSecret: "test-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := &AuthorizationServerMetadata{Issuer: strings.TrimSuffix(issuer, "/"), RevocationEndpoint: issuer + "revoke"}
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		id, secret, ok := r.BasicAuth()
+		if !ok || id != "client-a" || secret != "test-secret" {
+			t.Error("want the Basic credential for the explicit issuer")
+		}
+		return revocationTestResponse(http.StatusOK, ""), nil
+	})}
+	err = RevokeToken(context.Background(), issuer, RevokeTokenRequest{Token: "test-token", Credential: cred},
+		WithRevocationMetadata(md), WithRevocationHTTPClient(client))
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Spec row 6: a missing endpoint is a configuration error and never triggers a fallback.
