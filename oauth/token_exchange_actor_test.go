@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // Spec row 23: each exchange sends the source's current token as a JWT.
@@ -136,6 +137,58 @@ func TestTokenExchangeClient_ActorFailureSendsNoRequest(t *testing.T) {
 			}
 			if got := runtimeErr.Retryable(); got != tc.retryable {
 				t.Errorf("Retryable() = %t, want %t", got, tc.retryable)
+			}
+		})
+	}
+}
+
+func TestTokenExchangeClient_ActorSourceUsesRequestTimeout(t *testing.T) {
+	zone := newFakeZone(t)
+	actor := IdentityTokenFunc(func(ctx context.Context) (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Second):
+			return "", errors.New("actor source context did not expire")
+		}
+	})
+	client := NewTokenExchangeClient(zone.URL, WithTokenExchangeActor(actor), WithTokenExchangeRequestTimeout(10*time.Millisecond))
+	_, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{SubjectToken: "subject"})
+	var runtimeErr *WorkloadIdentityRuntimeError
+	if !errors.As(err, &runtimeErr) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want WorkloadIdentityRuntimeError wrapping a deadline error", err)
+	}
+	if discovery, tokens := zone.discoveryRequests.Load(), len(zone.tokenCalls()); discovery != 0 || tokens != 0 {
+		t.Errorf("requests on actor source timeout: discovery=%d token=%d", discovery, tokens)
+	}
+}
+
+func TestTokenExchangeClient_NilActorSourceDisablesLookup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		nilSource IdentityTokenSource
+	}{
+		{name: "nil interface"},
+		{name: "nil function", nilSource: IdentityTokenFunc(nil)},
+		{name: "nil pointer", nilSource: (*FileTokenSource)(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newFakeZone(t)
+			zone.script(stepToken)
+			actor := IdentityTokenFunc(func(context.Context) (string, error) {
+				t.Fatal("actor source called after disabling it")
+				return "", nil
+			})
+			client := NewTokenExchangeClient(zone.URL, WithTokenExchangeActor(actor), WithTokenExchangeActor(tc.nilSource))
+			if _, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{SubjectToken: "subject"}); err != nil {
+				t.Fatal(err)
+			}
+			requests := zone.tokenCalls()
+			if len(requests) != 1 {
+				t.Fatalf("token requests = %d, want 1", len(requests))
+			}
+			if form := requests[0].form; form.Has("actor_token") || form.Has("actor_token_type") {
+				t.Error("request contains actor fields with a disabled source")
 			}
 		})
 	}

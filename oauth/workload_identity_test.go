@@ -293,14 +293,29 @@ func TestGCPMetadataTokenSource_RequestShape(t *testing.T) {
 
 func TestGCPMetadataTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 	cases := []struct {
-		name    string
-		handler http.HandlerFunc
+		name      string
+		handler   http.HandlerFunc
+		retryable bool
 	}{
 		{
 			name: "non-200 status",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "not found", http.StatusNotFound)
 			},
+		},
+		{
+			name: "rate limited",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "rate limited", http.StatusTooManyRequests)
+			},
+			retryable: true,
+		},
+		{
+			name: "server error",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			},
+			retryable: true,
 		},
 		{
 			name: "empty body",
@@ -327,6 +342,13 @@ func TestGCPMetadataTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 			}
 			if runtimeErr.Source != "gcp-metadata" {
 				t.Errorf("source: got %q, want %q", runtimeErr.Source, "gcp-metadata")
+			}
+			var httpErr *HTTPError
+			if errors.As(err, &httpErr) {
+				t.Errorf("source failure matches HTTPError: %v", httpErr)
+			}
+			if got := runtimeErr.Retryable(); got != tc.retryable {
+				t.Errorf("Retryable() = %t, want %t", got, tc.retryable)
 			}
 		})
 	}
@@ -456,6 +478,10 @@ func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 		}
 		if runtimeErr.Source != WorkloadIdentitySourceFly {
 			t.Errorf("source: got %q, want %q", runtimeErr.Source, WorkloadIdentitySourceFly)
+		}
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) {
+			t.Errorf("source failure matches HTTPError: %v", httpErr)
 		}
 	})
 

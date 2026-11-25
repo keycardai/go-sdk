@@ -63,6 +63,10 @@ func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
 // Retryable reports whether the source fails with a transient transport error.
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
+	var sourceStatus workloadIdentityHTTPStatusError
+	if errors.As(e.Err, &sourceStatus) {
+		return retryableHTTPStatus(int(sourceStatus))
+	}
 	var status *HTTPError
 	if errors.As(e.Err, &status) {
 		return retryableHTTPStatus(status.Status)

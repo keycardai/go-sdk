@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -74,8 +75,15 @@ func WithTokenExchangeCredential(credential ApplicationCredential) TokenExchange
 
 // WithTokenExchangeActor sets the source of the actor JWT for token exchanges.
 // The client fetches a token for each exchange that does not supply its own
-// actor token and skips the source for impersonation. A nil source disables it.
+// actor token and skips the source for impersonation. A nil source, including
+// a typed nil function or pointer, disables it.
 func WithTokenExchangeActor(source IdentityTokenSource) TokenExchangeClientOption {
+	switch value := reflect.ValueOf(source); value.Kind() {
+	case reflect.Func, reflect.Pointer:
+		if value.IsNil() {
+			source = nil
+		}
+	}
 	return func(cfg *tokenExchangeConfig) { cfg.actor = source }
 }
 
@@ -86,8 +94,9 @@ func WithTokenExchangeHTTPClient(c *http.Client) TokenExchangeClientOption {
 	}
 }
 
-// WithTokenExchangeRequestTimeout bounds each request this call makes to the authorization server when the
-// caller's context has no deadline of its own. Default: 10 seconds.
+// WithTokenExchangeRequestTimeout bounds actor token lookup and each request to
+// the authorization server when the caller's context has no deadline of its own.
+// Default: 10 seconds.
 func WithTokenExchangeRequestTimeout(d time.Duration) TokenExchangeClientOption {
 	return func(cfg *tokenExchangeConfig) { cfg.requestTimeout = d }
 }
@@ -157,7 +166,9 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	}
 
 	if c.cfg.actor != nil && req.ActorToken == "" && req.SubjectTokenType != SubstituteUserTokenType {
-		token, err := fetchIdentityToken(ctx, c.cfg.actor)
+		actorCtx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+		token, err := fetchIdentityToken(actorCtx, c.cfg.actor)
+		cancel()
 		if err != nil {
 			return nil, err
 		}

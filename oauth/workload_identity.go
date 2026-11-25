@@ -103,9 +103,6 @@ func (w *WorkloadIdentityCredential) PrepareTokenExchangeRequest(ctx context.Con
 // not one of this package's typed errors is wrapped in a WorkloadIdentityRuntimeError
 // with Source "custom".
 func fetchIdentityToken(ctx context.Context, source IdentityTokenSource) (string, error) {
-	if f, ok := source.(IdentityTokenFunc); ok && f == nil {
-		return "", &WorkloadIdentityConfigurationError{Message: "identity token source function must not be nil"}
-	}
 	token, err := source.IdentityToken(ctx)
 	if err != nil {
 		var cfgErr *WorkloadIdentityConfigurationError
