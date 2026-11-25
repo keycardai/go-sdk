@@ -118,6 +118,7 @@ func TestBearerMiddleware_ValidTokenPopulatesAuthInfo(t *testing.T) {
 	}
 }
 
+// Spec rows 4a and 4b: the caller exposes all audiences and the issued actor chain.
 func TestBearerMiddleware_VerifiedCallerClaims(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
