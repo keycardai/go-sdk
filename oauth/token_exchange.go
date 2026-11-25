@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -242,8 +243,15 @@ func serializeTokenExchangeRequest(req TokenExchangeRequest) url.Values {
 }
 
 func deserializeTokenResponse(resp *http.Response) (*TokenResponse, error) {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, oversizedOAuthError(resp.StatusCode)
+		}
+		return nil, fmt.Errorf("reading token response: %w", err)
+	}
 	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("decoding token response: %w", err)
 	}
 

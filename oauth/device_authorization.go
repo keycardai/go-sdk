@@ -256,8 +256,15 @@ func (c *DeviceAuthorizationClient) RequestDeviceAuthorization(ctx context.Conte
 }
 
 func (c *DeviceAuthorizationClient) parseDeviceAuthorization(resp *http.Response) (*DeviceAuthorization, error) {
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, oversizedOAuthError(resp.StatusCode)
+		}
+		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "reading device authorization response", Err: err}
+	}
 	var body deviceAuthorizationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "decoding device authorization response", Err: err}
 	}
 	var missing []string
@@ -370,6 +377,10 @@ func (c *DeviceAuthorizationClient) poll(ctx context.Context, md *AuthorizationS
 	}
 	token, err := deserializeTokenResponse(resp)
 	if err != nil {
+		var oauthErr *OAuthError
+		if errors.As(err, &oauthErr) {
+			return nil, pollOther, oauthErr
+		}
 		return nil, pollOther, &OAuthError{ErrorCode: "invalid_response", Message: "invalid token response", Err: err}
 	}
 	return token, pollOther, nil
@@ -615,8 +626,10 @@ func (c *DeviceAuthorizationClient) postForm(ctx context.Context, endpoint strin
 		return nil, true, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedBody(resp.Body)
 	switch {
+	case errors.Is(err, ErrResponseBodyTooLarge):
+		resp.Body = io.NopCloser(errReader{ErrResponseBodyTooLarge})
 	case isCorruptCompression(err):
 		resp.Body = io.NopCloser(errReader{fmt.Errorf("reading response: %w", err)})
 	case err != nil:

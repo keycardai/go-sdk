@@ -133,8 +133,11 @@ func (r *tokenEndpointResolver) Endpoint(ctx context.Context) (string, error) {
 	return ep, nil
 }
 
-// Transport errors, timeouts, 5xx and 429 are transient and never cached.
+// Transport errors, timeouts, 5xx, 429, and 2xx/429/5xx size overflows are transient and never cached.
 func isDeterministicDiscoveryFailure(err error) bool {
+	if errors.Is(err, ErrResponseBodyTooLarge) {
+		return false
+	}
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.Status >= 400 && httpErr.Status < 500 && httpErr.Status != http.StatusTooManyRequests

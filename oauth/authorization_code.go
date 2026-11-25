@@ -454,10 +454,15 @@ func ResolveIssuerFromChallenge(ctx context.Context, wwwAuthenticateHeader strin
 		return "", &HTTPError{Message: "fetching resource metadata", Status: resp.StatusCode}
 	}
 
+	data, err := readBoundedBody(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading resource metadata: %w", err)
+	}
+
 	var prm struct {
 		AuthorizationServers []string `json:"authorization_servers"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&prm); err != nil {
+	if err := json.Unmarshal(data, &prm); err != nil {
 		return "", fmt.Errorf("decoding resource metadata: %w", err)
 	}
 	if len(prm.AuthorizationServers) == 0 {

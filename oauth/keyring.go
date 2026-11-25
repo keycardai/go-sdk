@@ -279,8 +279,13 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 			return nil, &JWKSFetchError{Message: fmt.Sprintf("JWKS endpoint %q returned HTTP %d", jwksURI, resp.StatusCode)}
 		}
 
+		data, err := readBoundedBody(resp.Body)
+		if err != nil {
+			return nil, &JWKSFetchError{Message: fmt.Sprintf("reading JWKS from %q", jwksURI), Err: err}
+		}
+
 		var jwkSet jwkSetJSON
-		if err := json.NewDecoder(resp.Body).Decode(&jwkSet); err != nil {
+		if err := json.Unmarshal(data, &jwkSet); err != nil {
 			return nil, &JWKSFetchError{Message: fmt.Sprintf("decoding JWKS from %q", jwksURI), Err: err}
 		}
 

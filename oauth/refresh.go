@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -158,6 +159,10 @@ func RefreshAuthorization(ctx context.Context, issuer string, req RefreshAuthori
 	}
 	token, err := deserializeTokenResponse(resp)
 	if err != nil {
+		var oauthErr *OAuthError
+		if errors.As(err, &oauthErr) {
+			return nil, oauthErr
+		}
 		return nil, &OAuthError{ErrorCode: "invalid_response", Message: "invalid token response", Err: err}
 	}
 	return token, nil

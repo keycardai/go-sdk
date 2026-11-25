@@ -3,8 +3,8 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -114,8 +114,11 @@ func FetchAuthorizationServerMetadata(ctx context.Context, issuer string, opts .
 
 	// Read the body once so we can decode the typed fields and also capture any
 	// unknown ones for forward compatibility.
-	data, err := io.ReadAll(resp.Body)
+	data, err := readBoundedBody(resp.Body)
 	if err != nil {
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return nil, &InvalidMetadataError{Message: fmt.Sprintf("authorization server metadata from %s exceeded size limit", url), Err: err}
+		}
 		return nil, fmt.Errorf("reading authorization server metadata: %w", err)
 	}
 
