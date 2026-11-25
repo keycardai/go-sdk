@@ -2,12 +2,16 @@ package oauth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -23,14 +27,25 @@ func retryableMetadataFailure(err error) bool {
 	if errors.As(err, &status) {
 		return status.Status == 429 || (status.Status >= 500 && status.Status < 600)
 	}
-	var transport net.Error
-	return errors.As(err, &transport) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	var cert *tls.CertificateVerificationError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalidCert x509.CertificateInvalidError
+	if errors.As(err, &cert) || errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &invalidCert) {
+		return false
+	}
+	var operation *net.OpError
+	var timeout interface{ Timeout() bool }
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.As(err, &operation) || (errors.As(err, &timeout) && timeout.Timeout())
 }
 
 type metadataRetry struct {
-	err   error
-	until time.Time
-	next  time.Duration
+	err        error
+	until      time.Time
+	next       time.Duration
+	recordedAt time.Time
 }
 
 func (r metadataRetry) failure(now time.Time) error {
@@ -41,8 +56,6 @@ func (r metadataRetry) failure(now time.Time) error {
 }
 
 func (r metadataRetry) record(now time.Time, err error) metadataRetry {
-	r.err = nil
-	r.until = time.Time{}
 	if errors.Is(err, context.Canceled) || !retryableMetadataFailure(err) {
 		return r
 	}
@@ -52,6 +65,7 @@ func (r metadataRetry) record(now time.Time, err error) metadataRetry {
 		if errors.As(err, &response) {
 			if delay, ok := metadataRetryAfter(now, response.retryAfter); ok {
 				r.err, r.until = err, now.Add(delay)
+				r.recordedAt = now
 				return r
 			}
 		}
@@ -64,6 +78,7 @@ func (r metadataRetry) record(now time.Time, err error) metadataRetry {
 	}
 	delay := min(30*time.Second, time.Duration(float64(r.next)*(0.8+rand.Float64()*0.4)))
 	r.err, r.until = err, now.Add(delay)
+	r.recordedAt = now
 	r.next = min(64*time.Second, 2*r.next)
 	return r
 }
@@ -81,8 +96,21 @@ func metadataRetryAfter(now time.Time, value string) (time.Duration, bool) {
 		n, _ := strconv.Atoi(significant)
 		return min(time.Minute, time.Duration(n)*time.Second), true
 	}
-	if date, err := http.ParseTime(value); err == nil {
-		return min(time.Minute, max(0, date.Sub(now))), true
+	for _, format := range []string{http.TimeFormat, "Monday, 02-Jan-06 15:04:05 GMT", time.ANSIC} {
+		date, err := time.Parse(format, value)
+		if err != nil {
+			continue
+		}
+		if format == "Monday, 02-Jan-06 15:04:05 GMT" {
+			latest := now.UTC().AddDate(50, 0, 0)
+			date = date.AddDate((latest.Year()-date.Year()+10000)/100*100-10000, 0, 0)
+			if date.After(latest) {
+				date = date.AddDate(-100, 0, 0)
+			}
+		}
+		if date.Format(format) == value {
+			return min(time.Minute, max(0, date.Sub(now))), true
+		}
 	}
 	return 0, false
 }

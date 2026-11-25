@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,11 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -34,6 +38,7 @@ func TestKeyringMetadataRetry(t *testing.T) {
 		throttle  bool
 	}{
 		{name: "JWKS network error"}, {name: "discovery network error", discovery: true},
+		{name: "JWKS truncated response"}, {name: "discovery truncated response", discovery: true},
 		{name: "429 for two kids", throttle: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -58,6 +63,10 @@ func TestKeyringMetadataRetry(t *testing.T) {
 					if !failed.Swap(true) {
 						if test.throttle {
 							return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": {"120"}}, Body: http.NoBody}, nil
+						}
+						if strings.Contains(test.name, "truncated") {
+							return &http.Response{StatusCode: 200, Body: io.NopCloser(io.MultiReader(
+								strings.NewReader("{"), iotest.ErrReader(io.ErrUnexpectedEOF)))}, nil
 						}
 						return nil, io.ErrUnexpectedEOF
 					}
@@ -85,6 +94,49 @@ func TestKeyringMetadataRetry(t *testing.T) {
 				t.Fatalf("recovery: %v (%d requests)", err, requests.Load())
 			}
 		})
+	}
+}
+
+// Spec rows 3, 5 and 6 (base): only transport failures start retry pacing.
+func TestMetadataRetryTransportClassification(t *testing.T) {
+	now := time.Now()
+	for _, cause := range []error{errors.New("unsupported protocol scheme"), errors.New("stopped after 10 redirects"), x509.UnknownAuthorityError{}} {
+		err := &url.Error{Op: "Get", URL: "test://issuer", Err: cause}
+		if retryableMetadataFailure(err) || (metadataRetry{}).record(now, err).failure(now) != nil {
+			t.Errorf("configuration error marked transient: %v", err)
+		}
+	}
+	if !retryableMetadataFailure(context.Canceled) || (metadataRetry{}).record(now, context.Canceled).failure(now) != nil {
+		t.Error("caller cancellation must be retryable without recording a delay")
+	}
+}
+
+// Spec row 2 (base): an invalid HTTP-date cannot start a 429 delay.
+func TestMetadataRetryRejectsInvalidHTTPDate(t *testing.T) {
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, header := range []string{"Wed, 01 Jan 2025 00:01 GMT", "Wed, 01 Jan 2025 00:00:05.1 GMT", "Wed, 01 Jan 2025 00:00:05 GMT junk"} {
+		if _, ok := metadataRetryAfter(now, header); ok {
+			t.Errorf("accepted invalid Retry-After: %q", header)
+		}
+	}
+}
+
+// Spec rows 3 and 11: bounded discovery cooldowns do not survive invalidation.
+func TestKeyringMetadataRetryBoundAndInvalidate(t *testing.T) {
+	keyring := NewJWKSOAuthKeyring()
+	clock := newFakeDeviceClock()
+	keyring.now = clock.Now
+	for i := 0; i <= maxMetadataRetryEntries; i++ {
+		keyring.recordRetry(keyring.discoveryRetry, fmt.Sprint(i), io.ErrUnexpectedEOF, 0)
+		clock.advance(time.Millisecond)
+	}
+	if len(keyring.discoveryRetry) != maxMetadataRetryEntries || keyring.retryFailure(keyring.discoveryRetry, "0") != nil {
+		t.Fatal("oldest discovery retry was not evicted")
+	}
+	keyring.Invalidate("1", "kid")
+	keyring.recordRetry(keyring.discoveryRetry, "1", io.ErrUnexpectedEOF, 0)
+	if keyring.retryFailure(keyring.discoveryRetry, "1") != nil {
+		t.Fatal("a fetch from before invalidation restored its retry delay")
 	}
 }
 
