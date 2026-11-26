@@ -1,3 +1,17 @@
+## v0.41.1 (2026-11-26)
+
+
+- fix(a2a): enforce trusted invocation redirect origins (#93)
+- * fix(a2a): enforce trusted invocation redirect origins
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * fix(a2a): follow trusted invocation redirects
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * fix(a2a): preserve the request method on followed redirects
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+
 ## v0.41.0 (2026-11-26)
 
 
