@@ -240,8 +240,17 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 
 func endpointOrigin(raw string, requireBare bool) (string, bool) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
+	if err != nil {
 		return "", false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", false
+	}
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			return "", false
+		}
 	}
 	if requireBare {
 		path := u.EscapedPath()
@@ -267,7 +276,6 @@ func endpointOrigin(raw string, requireBare bool) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	host := u.Hostname()
 	if strings.Contains(host, ":") {
 		addr, err := netip.ParseAddr(host)
 		if err != nil {

@@ -420,22 +420,24 @@ func TestDelegationClient_Invoke_TaskResponse(t *testing.T) {
 func TestDelegationClient_EndpointOrigin(t *testing.T) {
 	const targetURL = "https://agent.example"
 	for _, tc := range []struct {
-		name, endpoint, refusedOrigin string
-		trusted                       []string
-		legacy                        bool
-		target                        string
+		name, endpoint, refusal string
+		trusted                 []string
+		legacy                  bool
+		target                  string
 	}{
 		{name: "same origin", endpoint: targetURL + "/rpc"},
-		{name: "different host", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443"},
+		{name: "different host", endpoint: "https://other.example/rpc", refusal: "https://other.example:443"},
 		{name: "trusted origin", endpoint: "https://gateway.example/rpc", trusted: []string{"HTTPS://GATEWAY.example:443/"}},
-		{name: "different port", endpoint: "https://agent.example:8443/rpc", refusedOrigin: "https://agent.example:8443"},
-		{name: "different scheme", endpoint: "http://agent.example/rpc", refusedOrigin: "http://agent.example:80"},
+		{name: "different port", endpoint: "https://agent.example:8443/rpc", refusal: "https://agent.example:8443"},
+		{name: "different scheme", endpoint: "http://agent.example/rpc", refusal: "http://agent.example:80"},
 		{name: "explicit default port", endpoint: "https://agent.example:443/rpc"},
-		{name: "legacy card", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443", legacy: true},
+		{name: "legacy card", endpoint: "https://other.example/rpc", refusal: "https://other.example:443", legacy: true},
 		{name: "mixed case", endpoint: "HTTPS://Agent.Example/rpc"},
 		{name: "equivalent IPv6 spellings", target: "https://[2001:db8::1]", endpoint: "https://[2001:0DB8:0:0:0:0:0:1]/rpc"},
 		{name: "equivalent scoped IPv6 spellings", target: "https://[fe80::1%25Eth0]", endpoint: "https://[FE80:0:0:0:0:0:0:1%25Eth0]/rpc"},
-		{name: "case-sensitive IPv6 zone", target: "https://[fe80::1%25Eth0]", endpoint: "https://[fe80::1%25eth0]/rpc", refusedOrigin: "https://[fe80::1%eth0]:443"},
+		{name: "case-sensitive IPv6 zone", target: "https://[fe80::1%25Eth0]", endpoint: "https://[fe80::1%25eth0]/rpc", refusal: "https://[fe80::1%eth0]:443"},
+		{name: "non-ASCII host", target: "https://billing.example", endpoint: "https://bİlling.example/rpc", refusal: "invalid invocation endpoint"},
+		{name: "escaped non-ASCII host", target: "https://billing.example", endpoint: "https://b%C4%B0lling.example/rpc", refusal: "invalid invocation endpoint"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := tc.target
@@ -474,10 +476,10 @@ func TestDelegationClient_EndpointOrigin(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = client.Invoke(context.Background(), target, "user-token", NewTextMessage("hi"))
-			if tc.refusedOrigin != "" {
+			if tc.refusal != "" {
 				var configErr *ConfigurationError
 				if !errors.As(err, &configErr) || configErr.Retryable() ||
-					!strings.Contains(err.Error(), tc.refusedOrigin) || !strings.Contains(err.Error(), target) {
+					!strings.Contains(err.Error(), tc.refusal) || !strings.Contains(err.Error(), target) {
 					t.Fatalf("want non-retryable origin refusal, got %v", err)
 				}
 				if zone.exchangeCount() != 0 || len(posted) != 0 {
@@ -560,7 +562,7 @@ func TestDelegationClient_JSONRPCEndpoint(t *testing.T) {
 	}
 }
 
-func TestNewDelegationClient_RejectsNonBareTrustedEndpointOrigins(t *testing.T) {
+func TestNewDelegationClient_RejectsInvalidTrustedEndpointOrigins(t *testing.T) {
 	for _, tc := range []struct{ name, origin string }{
 		{"path", "https://gateway.example/rpc"},
 		{"escaped path", "https://gateway.example/%2f"},
@@ -570,6 +572,8 @@ func TestNewDelegationClient_RejectsNonBareTrustedEndpointOrigins(t *testing.T) 
 		{"empty fragment", "https://gateway.example/#"},
 		{"userinfo", "https://user@gateway.example"},
 		{"empty userinfo", "https://@gateway.example"},
+		{"non-ASCII host", "https://bİlling.example"},
+		{"escaped non-ASCII host", "https://b%C4%B0lling.example"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewDelegationClient("https://zone.example.com", "id", "secret", WithTrustedEndpointOrigins(tc.origin))
