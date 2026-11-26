@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,8 +23,10 @@ const (
 // result. Cards are cached for a configurable TTL (default 15 minutes) and can be
 // refreshed on demand. A ServiceDiscovery is safe for concurrent use.
 type ServiceDiscovery struct {
-	httpClient *http.Client
-	ttl        time.Duration
+	httpClient  *http.Client
+	ttl         time.Duration
+	peerLimit   int64
+	defaultHTTP bool
 
 	mu    sync.Mutex
 	cache map[string]cardEntry
@@ -43,6 +46,12 @@ func WithDiscoveryHTTPClient(c *http.Client) DiscoveryOption {
 	return func(d *ServiceDiscovery) { d.httpClient = c }
 }
 
+// WithDiscoveryMaxPeerResponseBytes configures the decoded agent-card limit for
+// the default HTTP client. The limit defaults to 64 MiB and must be positive.
+func WithDiscoveryMaxPeerResponseBytes(limit int64) DiscoveryOption {
+	return func(d *ServiceDiscovery) { d.peerLimit = limit }
+}
+
 // WithCacheTTL sets how long a fetched agent card is served from cache.
 func WithCacheTTL(ttl time.Duration) DiscoveryOption {
 	return func(d *ServiceDiscovery) { d.ttl = ttl }
@@ -51,14 +60,16 @@ func WithCacheTTL(ttl time.Duration) DiscoveryOption {
 // NewServiceDiscovery creates a ServiceDiscovery with a default HTTP client and cache TTL.
 func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 	d := &ServiceDiscovery{
-		ttl:   defaultCacheTTL,
-		cache: make(map[string]cardEntry),
+		ttl:       defaultCacheTTL,
+		cache:     make(map[string]cardEntry),
+		peerLimit: defaultPeerResponseBytes,
 	}
 	for _, opt := range opts {
 		opt(d)
 	}
 	if d.httpClient == nil {
 		d.httpClient = &http.Client{Timeout: defaultDiscoveryTimeout}
+		d.defaultHTTP = true
 	}
 	return d
 }
@@ -103,6 +114,9 @@ func (d *ServiceDiscovery) cachedFresh(key string) (AgentCard, bool) {
 }
 
 func (d *ServiceDiscovery) fetchAndCache(ctx context.Context, baseURL string) (AgentCard, error) {
+	if d.defaultHTTP && d.peerLimit <= 0 {
+		return AgentCard{}, &ConfigurationError{Message: "peer response limit must be positive"}
+	}
 	key := strings.TrimRight(baseURL, "/")
 	cardURL := key + agentCardPath
 
@@ -118,12 +132,20 @@ func (d *ServiceDiscovery) fetchAndCache(ctx context.Context, baseURL string) (A
 	}
 	defer resp.Body.Close()
 
+	var responseBody io.Reader = resp.Body
+	if d.defaultHTTP {
+		responseBody, err = readPeerBody(resp, d.peerLimit, false)
+		if err != nil {
+			return AgentCard{}, &DiscoveryError{Message: fmt.Sprintf("reading agent card %s", cardURL), Err: err}
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return AgentCard{}, &DiscoveryError{Message: fmt.Sprintf("agent card %s returned HTTP %d", cardURL, resp.StatusCode)}
 	}
 
 	var card AgentCard
-	if err := json.NewDecoder(resp.Body).Decode(&card); err != nil {
+	if err := json.NewDecoder(responseBody).Decode(&card); err != nil {
 		return AgentCard{}, &DiscoveryError{Message: fmt.Sprintf("decoding agent card %s", cardURL), Err: err}
 	}
 	if strings.TrimSpace(card.Name) == "" {

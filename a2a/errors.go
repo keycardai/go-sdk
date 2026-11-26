@@ -12,6 +12,9 @@ func (e *ConfigurationError) Error() string {
 	return "a2a: " + e.Message
 }
 
+// Retryable reports whether the same configuration may succeed on retry.
+func (e *ConfigurationError) Retryable() bool { return false }
+
 // DiscoveryError indicates a target agent's card could not be resolved: the card
 // could not be fetched, was not valid JSON, or was missing the required name field.
 type DiscoveryError struct {

@@ -28,9 +28,10 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **JWKS keyring**: `JWKSOAuthKeyring` with two-level caching and request deduplication
 - **Token exchange**: `TokenExchangeClient` (RFC 8693)
 - **Client credentials grant**: `ClientCredentialsClient` (RFC 6749) accepts `WithCCCredential` or the `WithCCBasicAuth` shorthand
-- **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including the OIDC `userinfo_endpoint` and `end_session_endpoint`, and `device_authorization_endpoint` (RFC 8628)
+- **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including OIDC UserInfo and end-session endpoints, the device authorization endpoint (RFC 8628), and the revocation endpoint and its supported client authentication methods (RFC 7009). Use `RevocationEndpoint` and `RevocationEndpointAuthMethodsSupported` on `AuthorizationServerMetadata`; their corresponding JSON keys are not in `Extra`.
 - **Device authorization grant**: `DeviceAuthorizationClient` (RFC 8628) for processes with no browser; see [`examples/device-authorization`](examples/device-authorization)
 - **Refresh**: `RefreshAuthorization` redeems a refresh token as a public client, a confidential client, or with a credential, optionally narrowed to some resources or scopes
+- **Revocation**: `RevokeToken` sends a token to the issuer's advertised revocation endpoint (RFC 7009). Revoking a Keycard refresh token revokes its session.
 - **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
 - **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`. Each implements `ClientAuthenticator` for requests other than token exchange.
 
@@ -49,6 +50,17 @@ Application credentials moved to the `oauth` package; `mcp` re-exports them as d
 One agent calling another on the user's behalf: discover the target agent's card, exchange the user's token for one scoped to the target (RFC 8693), and invoke its JSON-RPC endpoint. Speaks A2A protocol 1.0 by default (`SendMessage`, `A2A-Version: 1.0`); pass `a2a.WithProtocolVersion(a2a.ProtocolVersion03)` to reach an agent still on the 0.3 generation.
 
 - **Delegation**: `DelegationClient`, `ServiceDiscovery`
+
+Delegation only accepts invocation endpoints on the target's origin by default.
+Use `a2a.WithTrustedEndpointOrigins` for trusted gateways on another origin.
+An untrusted endpoint returns a non-retryable `a2a.ConfigurationError` before
+token exchange.
+
+Default HTTP clients limit decoded peer replies to 64 MiB. Use
+`a2a.WithMaxPeerResponseBytes` for delegation or
+`a2a.WithDiscoveryMaxPeerResponseBytes` for standalone discovery. Overflow
+returns a typed `a2a.ResponseBodyTooLargeError` in the error chain. Neither
+option changes the 1 MiB token-exchange limit or caps a supplied HTTP client.
 
 ## Quick Start
 

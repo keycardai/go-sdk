@@ -20,7 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,11 +42,13 @@ const (
 // DelegationClient delegates calls from one agent to another, carrying the user's
 // identity through an RFC 8693 token exchange. Construct it once per calling agent.
 type DelegationClient struct {
-	exchange      *oauth.TokenExchangeClient
-	discovery     *ServiceDiscovery
-	httpClient    *http.Client
-	wire          wireProtocol
-	invokeTimeout time.Duration
+	exchange       *oauth.TokenExchangeClient
+	discovery      *ServiceDiscovery
+	httpClient     *http.Client
+	wire           wireProtocol
+	invokeTimeout  time.Duration
+	peerLimit      int64
+	trustedOrigins map[string]struct{}
 }
 
 // DelegationOption configures a DelegationClient.
@@ -52,6 +59,15 @@ type delegationConfig struct {
 	discovery       *ServiceDiscovery
 	protocolVersion string
 	invokeTimeout   time.Duration
+	peerLimit       int64
+	trustedOrigins  []string
+}
+
+// WithTrustedEndpointOrigins allows card endpoints on the listed HTTP or HTTPS
+// origins in addition to the target's own origin. The default list is empty.
+func WithTrustedEndpointOrigins(origins ...string) DelegationOption {
+	trusted := append([]string(nil), origins...)
+	return func(cfg *delegationConfig) { cfg.trustedOrigins = append(cfg.trustedOrigins, trusted...) }
 }
 
 // WithHTTPClient sets the HTTP client used for the token exchange and the agent
@@ -59,6 +75,15 @@ type delegationConfig struct {
 // client also governs agent-card discovery. The default client has a 30 second timeout.
 func WithHTTPClient(c *http.Client) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.httpClient = c }
+}
+
+// WithMaxPeerResponseBytes configures the decoded limit for agent-card and invocation
+// replies read by default HTTP clients. The limit defaults to 64 MiB and must be
+// positive. It does not affect token exchange or caller-supplied HTTP clients. A
+// ServiceDiscovery passed with WithServiceDiscovery keeps its own agent-card limit;
+// set that limit with WithDiscoveryMaxPeerResponseBytes.
+func WithMaxPeerResponseBytes(limit int64) DelegationOption {
+	return func(cfg *delegationConfig) { cfg.peerLimit = limit }
 }
 
 // WithInvokeTimeout bounds the total time for a single Invoke call (discovery, token
@@ -104,9 +129,21 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	cfg := delegationConfig{
 		protocolVersion: defaultProtocolVersion,
 		invokeTimeout:   defaultInvokeTimeout,
+		peerLimit:       defaultPeerResponseBytes,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.peerLimit <= 0 {
+		return nil, &ConfigurationError{Message: "peer response limit must be positive"}
+	}
+	trustedOrigins := make(map[string]struct{}, len(cfg.trustedOrigins))
+	for _, raw := range cfg.trustedOrigins {
+		origin, ok := endpointOrigin(raw, true)
+		if !ok {
+			return nil, &ConfigurationError{Message: "invalid trusted endpoint origin: expected a bare HTTP or HTTPS origin"}
+		}
+		trustedOrigins[origin] = struct{}{}
 	}
 
 	wire, ok := wireFor(cfg.protocolVersion)
@@ -115,13 +152,15 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	}
 
 	httpClient := cfg.httpClient
+	peerLimit := int64(0)
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultInvokeTimeout}
+		peerLimit = cfg.peerLimit
 	}
 
 	discovery := cfg.discovery
 	if discovery == nil {
-		var dopts []DiscoveryOption
+		dopts := []DiscoveryOption{WithDiscoveryMaxPeerResponseBytes(cfg.peerLimit)}
 		if cfg.httpClient != nil {
 			// A caller-supplied client governs discovery too (e.g. a shared proxy).
 			dopts = append(dopts, WithDiscoveryHTTPClient(cfg.httpClient))
@@ -135,11 +174,13 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	)
 
 	return &DelegationClient{
-		exchange:      exchange,
-		discovery:     discovery,
-		httpClient:    httpClient,
-		wire:          wire,
-		invokeTimeout: cfg.invokeTimeout,
+		exchange:       exchange,
+		discovery:      discovery,
+		httpClient:     httpClient,
+		wire:           wire,
+		invokeTimeout:  cfg.invokeTimeout,
+		peerLimit:      peerLimit,
+		trustedOrigins: trustedOrigins,
 	}, nil
 }
 
@@ -150,7 +191,8 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 //
 // A discovery, exchange, or invocation failure is returned as a *DiscoveryError, an
 // OAuth error from the exchange (wrapped), or an *InvocationError respectively. On an
-// exchange failure the target agent is not invoked.
+// exchange failure the target agent is not invoked. An endpoint on an untrusted
+// origin returns a *ConfigurationError before the exchange.
 func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken string, msg Message) (*Result, error) {
 	if strings.TrimSpace(subjectToken) == "" {
 		return nil, &ConfigurationError{Message: "subject_token must not be empty"}
@@ -168,6 +210,16 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 	}
 
 	audience := strings.TrimRight(target, "/")
+	endpoint := c.jsonRPCEndpoint(target, card)
+	origin, valid := endpointOrigin(endpoint, false)
+	targetOrigin, targetValid := endpointOrigin(target, false)
+	_, trusted := c.trustedOrigins[origin]
+	if !valid || !targetValid {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("invalid invocation endpoint or target URL for %q", target)}
+	}
+	if origin != targetOrigin && !trusted {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("endpoint origin %s is not trusted for target %q", origin, target)}
+	}
 	tokenResp, err := c.exchange.ExchangeToken(ctx, oauth.TokenExchangeRequest{
 		SubjectToken:     subjectToken,
 		SubjectTokenType: subjectTokenTypeAccess,
@@ -178,12 +230,62 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 		return nil, fmt.Errorf("a2a delegation: token exchange for %s: %w", audience, err)
 	}
 
-	respMsg, task, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp.AccessToken, msg)
+	respMsg, task, err := c.invoke(ctx, endpoint, tokenResp.AccessToken, msg)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Result{Message: respMsg, Task: task, AgentCard: card}, nil
+}
+
+func endpointOrigin(raw string, requireBare bool) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", false
+	}
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			return "", false
+		}
+	}
+	if requireBare {
+		path := u.EscapedPath()
+		if (path != "" && path != "/") || u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") || u.User != nil {
+			return "", false
+		}
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	default:
+		return "", false
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", false
+	}
+	if strings.Contains(host, ":") {
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return "", false
+		}
+		host = addr.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.FormatUint(number, 10)), true
 }
 
 // jsonRPCEndpoint resolves the target's JSON-RPC endpoint. A 1.0 card is searched
@@ -259,12 +361,20 @@ func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, 
 	}
 	defer resp.Body.Close()
 
+	var responseBody io.Reader = resp.Body
+	if c.peerLimit > 0 {
+		responseBody, err = readPeerBody(resp, c.peerLimit, true)
+		if err != nil {
+			return Message{}, nil, &InvocationError{Message: "reading response", Err: err}
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("agent %s returned HTTP %d", endpoint, resp.StatusCode)}
 	}
 
 	var rpcResp jsonRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(responseBody).Decode(&rpcResp); err != nil {
 		return Message{}, nil, &InvocationError{Message: "decoding response", Err: err}
 	}
 	if rpcResp.Error != nil {
