@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"log/slog"
+	"slices"
 
 	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/oauth"
@@ -74,6 +75,7 @@ type TokenVerifier interface {
 // JWTOAuthTokenVerifier implements TokenVerifier using JWT verification with JWKS.
 type JWTOAuthTokenVerifier struct {
 	verifier *oauth.JWTVerifier
+	issuers  []string
 }
 
 // NewJWTOAuthTokenVerifier creates a JWTOAuthTokenVerifier that trusts tokens issued
@@ -90,11 +92,17 @@ func NewJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring, issuers []string, opts
 }
 
 func newJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring, issuers []string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
+	issuers = slices.Clone(issuers)
 	verifier, err := oauth.NewJWTVerifier(keyring, issuers, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return &JWTOAuthTokenVerifier{verifier: verifier}, nil
+	return &JWTOAuthTokenVerifier{verifier: verifier, issuers: issuers}, nil
+}
+
+// TrustedIssuers returns a copy of the issuer allowlist.
+func (v *JWTOAuthTokenVerifier) TrustedIssuers() []string {
+	return slices.Clone(v.issuers)
 }
 
 // NewZoneTokenVerifier builds a verifier for a single Keycard zone. It trusts only

@@ -46,6 +46,32 @@ a deprecation warning naming `resource_identifier`. Share one binding for
 middleware and metadata to configure and warn once. Legacy support will not be
 removed until a release ships at least 60 days after the first warning release.
 
+## Token introspection
+
+Bearer middleware verifies tokens locally by default. To also check whether
+each token is still active, pass the protected resource's Application
+credential and enable introspection:
+
+```go
+requireBearer, err := binding.BearerAuth(
+    mcp.WithIntrospect(true),
+    mcp.WithIntrospectionCredential(credential),
+)
+```
+
+Use the same options with `NewBearerAuth` when you build your own verifier.
+When the middleware trusts multiple zones, use a credential such as
+`oauth.NewMultiZoneClientSecret` with entries keyed by issuer URL. With
+introspection enabled, every trusted issuer and credential zone key must be
+an absolute HTTPS issuer URL without user info, a query, or a fragment.
+
+Introspection runs only after local verification and required scope checks
+pass. Results are not cached. An inactive token returns a 401
+`invalid_token` challenge. A missing credential for the verified zone or a
+failed introspection request returns 503 `temporarily_unavailable` without a
+challenge. Use `WithIntrospectionRequestTimeout` to shorten the default
+10-second request timeout.
+
 ## Preserve MCP request headers at proxies and WAFs
 
 From protocol version `2026-07-28` (SEP-2243) an MCP client sends `Mcp-Method`

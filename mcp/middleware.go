@@ -55,6 +55,10 @@ type bearerAuthConfig struct {
 	requiredScopes []string
 	keyring        oauth.OAuthKeyring
 	resolveZone    func(host, target string) string
+	introspect     bool
+	credential     oauth.ApplicationCredential
+	introspectHTTP *http.Client
+	introspectTime time.Duration
 }
 
 // WithRequiredScopes sets the scopes that must all be present in the token; a token
@@ -79,6 +83,10 @@ func WithInboundZoneResolver(resolve func(host, target string) string) BearerAut
 // BearerAuth builds HTTP middleware with the binding's issuer and audience policy.
 // Per-zone mode requires WithInboundZoneResolver; shared discovery selects the
 // issuer from the token using the complete configured zone set.
+// It returns a ConfigurationError for a missing issuer, an incompatible zone
+// resolver, empty multi-resource audiences, invalid introspection credentials,
+// or a trusted issuer or credential zone key that is not an absolute HTTPS
+// issuer URL when introspection is enabled.
 func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handler) http.Handler, error) {
 	cfg := bearerOptions(opts)
 	if b.issuer == "" {
@@ -89,6 +97,14 @@ func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handle
 	}
 	if b.multi && len(b.audiences) == 0 {
 		return nil, configurationError("multi_resource requires a nonempty audience list")
+	}
+	issuers := []string{b.issuer}
+	if b.zones != nil {
+		issuers = b.trustedZoneIssuers()
+	}
+	introspection, err := cfg.newIntrospection(issuers)
+	if err != nil {
+		return nil, err
 	}
 	keyring := cfg.keyring
 	if keyring == nil {
@@ -103,7 +119,7 @@ func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handle
 			}
 			verifiers[zone] = verifier
 		}
-		return bearerAuth(cfg, func(r *http.Request) (TokenVerifier, string) {
+		return bearerAuth(cfg, introspection, func(r *http.Request) (TokenVerifier, string) {
 			zone := cfg.resolveZone(r.Host, receivedTarget(r).RequestURI())
 			verifier, ok := verifiers[zone]
 			if !ok {
@@ -113,10 +129,6 @@ func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handle
 		}), nil
 	}
 
-	issuers := []string{b.issuer}
-	if b.zones != nil {
-		issuers = b.trustedZoneIssuers()
-	}
 	audienceOption := oauth.WithAllowAnyAudience()
 	if len(b.audiences) != 0 {
 		audienceOption = oauth.WithAudiences(b.audiences...)
@@ -125,7 +137,7 @@ func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handle
 	if err != nil {
 		return nil, err
 	}
-	return bearerAuth(cfg, func(r *http.Request) (TokenVerifier, string) {
+	return bearerAuth(cfg, introspection, func(r *http.Request) (TokenVerifier, string) {
 		if b.legacy {
 			return verifier, protectedResourceMetadataURL(r)
 		}
@@ -138,18 +150,44 @@ func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handle
 // NewZoneTokenVerifier (single zone) or NewJWTOAuthTokenVerifier (custom keyring or
 // multiple issuers). On success it stores AuthInfo in the request context (read with
 // AuthInfoFromRequest); on failure it writes the appropriate WWW-Authenticate challenge
-// and HTTP status. It panics if verifier is nil, since an auth boundary with no verifier
-// is a programming error best caught at startup.
+// and HTTP status. It panics if verifier is nil or introspection configuration is
+// invalid. Use NewBearerAuth to return the configuration error instead.
 func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("mcp: RequireBearerAuth requires a non-nil TokenVerifier")
 	}
+	middleware, err := NewBearerAuth(verifier, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return middleware
+}
+
+// NewBearerAuth builds the same middleware as RequireBearerAuth and returns a
+// ConfigurationError for a nil verifier or invalid introspection configuration:
+// a missing credential, a credential without client authentication, an
+// unkeyed credential without exactly one trusted issuer, or a trusted issuer
+// or credential zone key that is not an absolute HTTPS issuer URL. A custom
+// verifier can declare its trusted issuers with a TrustedIssuers() []string method.
+func NewBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) (func(http.Handler) http.Handler, error) {
+	if verifier == nil {
+		return nil, configurationError("bearer authentication requires a non-nil TokenVerifier")
+	}
+	cfg := bearerOptions(opts)
+	var issuers []string
+	if v, ok := verifier.(interface{ TrustedIssuers() []string }); cfg.introspect && ok {
+		issuers = v.TrustedIssuers()
+	}
+	introspection, err := cfg.newIntrospection(issuers)
+	if err != nil {
+		return nil, err
+	}
 	if _, sdkVerifier := verifier.(*JWTOAuthTokenVerifier); !sdkVerifier {
 		warnLegacyResourceBinding()
 	}
-	return bearerAuth(bearerOptions(opts), func(r *http.Request) (TokenVerifier, string) {
+	return bearerAuth(cfg, introspection, func(r *http.Request) (TokenVerifier, string) {
 		return verifier, protectedResourceMetadataURL(r)
-	})
+	}), nil
 }
 
 func bearerOptions(opts []BearerAuthOption) bearerAuthConfig {
@@ -160,7 +198,7 @@ func bearerOptions(opts []BearerAuthOption) bearerAuthConfig {
 	return cfg
 }
 
-func bearerAuth(cfg bearerAuthConfig, selectBinding func(*http.Request) (TokenVerifier, string)) func(http.Handler) http.Handler {
+func bearerAuth(cfg bearerAuthConfig, introspection *bearerIntrospection, selectBinding func(*http.Request) (TokenVerifier, string)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			verifier, resourceMetadataURL := selectBinding(r)
@@ -193,9 +231,7 @@ func bearerAuth(cfg bearerAuthConfig, selectBinding func(*http.Request) (TokenVe
 			authInfo, err := verifier.VerifyAccessToken(r.Context(), token)
 			if err != nil {
 				if keysUnavailable(err) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusServiceUnavailable)
-					_, _ = w.Write([]byte(`{"error":"temporarily_unavailable"}`))
+					writeBearerUnavailable(w)
 					return
 				}
 
@@ -243,10 +279,31 @@ func bearerAuth(cfg bearerAuthConfig, selectBinding func(*http.Request) (TokenVe
 				return
 			}
 
+			if introspection != nil {
+				active, err := introspection.check(r.Context(), authInfo.Issuer, token)
+				if err != nil {
+					introspection.logFailure(authInfo.Issuer, token, err)
+					writeBearerUnavailable(w)
+					return
+				}
+				if !active {
+					writeBearerChallenge(w, resourceMetadataURL, `error="invalid_token", error_description="Token is inactive"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+			}
+
 			ctx := context.WithValue(r.Context(), authInfoKey, authInfo)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func writeBearerUnavailable(w http.ResponseWriter) {
+	w.Header().Del("WWW-Authenticate")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte(`{"error":"temporarily_unavailable"}`))
 }
 
 func writeBearerChallenge(w http.ResponseWriter, metadataURL, params string) {
