@@ -22,7 +22,9 @@ type ClientCredentialsRequest struct {
 	ClientAssertionType string
 	// ClientID names the application credential the client authenticates as,
 	// sent as the client_id form parameter beside ClientAssertion. It is never
-	// sent when the client uses HTTP Basic.
+	// sent when the client uses HTTP Basic. With a client configured through
+	// [WithCCCredential], set it only beside ClientAssertion; the credential
+	// supplies its own client_id otherwise.
 	ClientID string
 }
 
@@ -50,6 +52,8 @@ type ClientCredentialsClientOption func(*clientCredentialsConfig)
 type clientCredentialsConfig struct {
 	clientID       string
 	clientSecret   string
+	basicAuthSet   bool
+	credential     ApplicationCredential
 	httpClient     *http.Client
 	discoveryTTL   time.Duration
 	negativeTTL    time.Duration
@@ -61,7 +65,15 @@ func WithCCBasicAuth(clientID, clientSecret string) ClientCredentialsClientOptio
 	return func(cfg *clientCredentialsConfig) {
 		cfg.clientID = clientID
 		cfg.clientSecret = clientSecret
+		cfg.basicAuthSet = true
 	}
+}
+
+// WithCCCredential authenticates token requests with the credential's client
+// authentication unless the request supplies its own client assertion.
+// The credential must implement [ClientAuthenticator].
+func WithCCCredential(credential ApplicationCredential) ClientCredentialsClientOption {
+	return func(cfg *clientCredentialsConfig) { cfg.credential = credential }
 }
 
 // WithCCHTTPClient sets the HTTP client for client credentials requests.
@@ -100,6 +112,7 @@ type ClientCredentialsClient struct {
 	issuerURL string
 	cfg       clientCredentialsConfig
 	endpoint  tokenEndpointResolver
+	configErr error
 }
 
 func (c *ClientCredentialsClient) printed() printed.Struct {
@@ -124,6 +137,8 @@ func (c *ClientCredentialsClient) LogValue() slog.Value {
 }
 
 // NewClientCredentialsClient creates a new ClientCredentialsClient for the given issuer.
+// Combining [WithCCCredential] and [WithCCBasicAuth] causes RequestToken to
+// return a ConfigurationError before making any HTTP request.
 func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClientOption) *ClientCredentialsClient {
 	cfg := clientCredentialsConfig{
 		httpClient:     http.DefaultClient,
@@ -135,10 +150,15 @@ func NewClientCredentialsClient(issuerURL string, opts ...ClientCredentialsClien
 		opt(&cfg)
 	}
 
+	var configErr error
+	if cfg.credential != nil && cfg.basicAuthSet {
+		configErr = &ConfigurationError{Message: "use either WithCCCredential or WithCCBasicAuth, not both"}
+	}
 	return &ClientCredentialsClient{
 		issuerURL: issuerURL,
 		cfg:       cfg,
 		endpoint:  newTokenEndpointResolver(issuerURL, cfg.httpClient, cfg.discoveryTTL, cfg.negativeTTL, cfg.requestTimeout),
+		configErr: configErr,
 	}
 }
 
@@ -150,29 +170,51 @@ func (c *ClientCredentialsClient) TokenEndpoint(ctx context.Context) (string, er
 
 // RequestToken performs a client credentials grant request.
 func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCredentialsRequest) (*TokenResponse, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
+	var authenticator ClientAuthenticator
+	if req.ClientAssertion == "" && c.cfg.credential != nil {
+		if req.ClientID != "" {
+			return nil, &ConfigurationError{Message: "ClientID without ClientAssertion conflicts with WithCCCredential; the credential supplies its own client_id"}
+		}
+		var ok bool
+		authenticator, ok = c.cfg.credential.(ClientAuthenticator)
+		if !ok {
+			return nil, &ConfigurationError{Message: fmt.Sprintf("credential %T does not provide client authentication", c.cfg.credential)}
+		}
+	}
 	tokenEndpoint, err := c.endpoint.Endpoint(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	basicAuth := c.cfg.clientID != "" && c.cfg.clientSecret != ""
-	if basicAuth {
+	basicAuth := req.ClientAssertion == "" && c.cfg.clientID != "" && c.cfg.clientSecret != ""
+	if basicAuth || authenticator != nil {
 		req.ClientID = ""
+	}
+	if authenticator != nil {
+		req.ClientAssertionType = ""
 	}
 	body := serializeClientCredentialsRequest(req)
 
 	ctx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
 	defer cancel()
 
+	header := http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}
+	if authenticator != nil {
+		if err := addClientAuthentication(ctx, authenticator, c.issuerURL, tokenEndpoint, header, body); err != nil {
+			return nil, err
+		}
+	}
+	if basicAuth {
+		setBasicAuth(header, c.cfg.clientID, c.cfg.clientSecret)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("creating client credentials request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	if basicAuth {
-		setBasicAuth(httpReq.Header, c.cfg.clientID, c.cfg.clientSecret)
-	}
+	httpReq.Header = header
 
 	resp, err := c.cfg.httpClient.Do(httpReq)
 	if err != nil {
