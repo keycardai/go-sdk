@@ -109,9 +109,10 @@ func TestTokenExchangeClient_ActorFailureSendsNoRequest(t *testing.T) {
 		{name: "configuration", cause: &WorkloadIdentityConfigurationError{Source: "file", Message: "missing file"}, typed: true},
 		{name: "runtime", cause: &WorkloadIdentityRuntimeError{Source: "file", Message: "empty file"}, typed: true},
 		{name: "plain", cause: errors.New("source failed")},
-		{name: "timeout", cause: context.DeadlineExceeded, retryable: true},
-		{name: "rate limited", cause: &HTTPError{Status: http.StatusTooManyRequests}, retryable: true},
-		{name: "server error", cause: &HTTPError{Status: http.StatusServiceUnavailable}, retryable: true},
+		{name: "timeout", cause: context.DeadlineExceeded},
+		{name: "rate limited", cause: &HTTPError{Status: http.StatusTooManyRequests}},
+		{name: "server error", cause: &HTTPError{Status: http.StatusServiceUnavailable}},
+		{name: "marked runtime", cause: &WorkloadIdentityRuntimeError{Source: "test-source", Transient: true}, typed: true, retryable: true},
 		{name: "client error", cause: &HTTPError{Status: http.StatusBadRequest}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

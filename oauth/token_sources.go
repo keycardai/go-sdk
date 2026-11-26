@@ -125,17 +125,19 @@ func (f *FileTokenSource) IdentityToken(_ context.Context) (string, error) {
 	data, err := os.ReadFile(f.tokenFilePath)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFile,
-			Message: fmt.Sprintf("reading token file %q", f.tokenFilePath),
-			Err:     err,
+			Source:    WorkloadIdentitySourceFile,
+			Message:   fmt.Sprintf("reading token file %q", f.tokenFilePath),
+			Err:       err,
+			Transient: true,
 		}
 	}
 
 	token := strings.TrimSpace(string(data))
 	if token == "" {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFile,
-			Message: fmt.Sprintf("token file is empty: %s", f.tokenFilePath),
+			Source:    WorkloadIdentitySourceFile,
+			Message:   fmt.Sprintf("token file is empty: %s", f.tokenFilePath),
+			Transient: true,
 		}
 	}
 	return token, nil
@@ -213,9 +215,10 @@ func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, err
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: fmt.Sprintf("calling metadata server at %s (is this running on GCP?)", g.metadataURL),
-			Err:     err,
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   fmt.Sprintf("calling metadata server at %s (is this running on GCP?)", g.metadataURL),
+			Err:       err,
+			Transient: retryableMetadataFailure(err),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -223,16 +226,18 @@ func (g *GCPMetadataTokenSource) IdentityToken(ctx context.Context) (string, err
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: "reading metadata response",
-			Err:     err,
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   "reading metadata response",
+			Err:       err,
+			Transient: retryableMetadataFailure(err),
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceGCPMetadata,
-			Message: "metadata server returned a non-200 response",
-			Err:     workloadIdentityHTTPStatusError(resp.StatusCode),
+			Source:    WorkloadIdentitySourceGCPMetadata,
+			Message:   "metadata server returned a non-200 response",
+			Err:       workloadIdentityHTTPStatusError(resp.StatusCode),
+			Transient: retryableHTTPStatus(resp.StatusCode),
 		}
 	}
 
@@ -321,9 +326,10 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: fmt.Sprintf("calling Machines API socket %s (is this running on a Fly Machine?)", f.socketPath),
-			Err:     err,
+			Source:    WorkloadIdentitySourceFly,
+			Message:   fmt.Sprintf("calling Machines API socket %s (is this running on a Fly Machine?)", f.socketPath),
+			Err:       err,
+			Transient: retryableMetadataFailure(err),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -331,16 +337,18 @@ func (f *FlyTokenSource) IdentityToken(ctx context.Context) (string, error) {
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: "reading token response",
-			Err:     err,
+			Source:    WorkloadIdentitySourceFly,
+			Message:   "reading token response",
+			Err:       err,
+			Transient: retryableMetadataFailure(err),
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &WorkloadIdentityRuntimeError{
-			Source:  WorkloadIdentitySourceFly,
-			Message: "Machines API returned a non-200 response",
-			Err:     workloadIdentityHTTPStatusError(resp.StatusCode),
+			Source:    WorkloadIdentitySourceFly,
+			Message:   "Machines API returned a non-200 response",
+			Err:       workloadIdentityHTTPStatusError(resp.StatusCode),
+			Transient: retryableHTTPStatus(resp.StatusCode),
 		}
 	}
 
