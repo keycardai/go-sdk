@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -260,7 +261,17 @@ func endpointOrigin(raw string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), strconv.FormatUint(number, 10)), true
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return "", false
+		}
+		host = addr.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.FormatUint(number, 10)), true
 }
 
 // jsonRPCEndpoint resolves the target's JSON-RPC endpoint. A 1.0 card is searched

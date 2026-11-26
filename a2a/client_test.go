@@ -414,13 +414,14 @@ func TestDelegationClient_Invoke_TaskResponse(t *testing.T) {
 // A 1.0 card's JSONRPC interface is the endpoint, preferring the one matching the
 // client's protocol version.
 func TestDelegationClient_EndpointOrigin(t *testing.T) {
-	const target = "https://agent.example"
+	const targetURL = "https://agent.example"
 	for _, tc := range []struct {
 		name, endpoint, refusedOrigin string
 		trusted                       []string
 		legacy                        bool
+		target                        string
 	}{
-		{name: "row 12: same origin", endpoint: target + "/rpc"},
+		{name: "row 12: same origin", endpoint: targetURL + "/rpc"},
 		{name: "row 13: different host", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443"},
 		{name: "row 14: trusted origin", endpoint: "https://gateway.example/rpc", trusted: []string{"HTTPS://GATEWAY.example:443"}},
 		{name: "row 15: different port", endpoint: "https://agent.example:8443/rpc", refusedOrigin: "https://agent.example:8443"},
@@ -428,8 +429,15 @@ func TestDelegationClient_EndpointOrigin(t *testing.T) {
 		{name: "row 15: explicit default port", endpoint: "https://agent.example:443/rpc"},
 		{name: "row 15a: legacy card", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443", legacy: true},
 		{name: "row 15b: mixed case", endpoint: "HTTPS://Agent.Example/rpc"},
+		{name: "equivalent IPv6 spellings", target: "https://[2001:db8::1]", endpoint: "https://[2001:0DB8:0:0:0:0:0:1]/rpc"},
+		{name: "equivalent scoped IPv6 spellings", target: "https://[fe80::1%25Eth0]", endpoint: "https://[FE80:0:0:0:0:0:0:1%25Eth0]/rpc"},
+		{name: "case-sensitive IPv6 zone", target: "https://[fe80::1%25Eth0]", endpoint: "https://[fe80::1%25eth0]/rpc", refusedOrigin: "https://[fe80::1%eth0]:443"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			target := tc.target
+			if target == "" {
+				target = targetURL
+			}
 			zone := newFakeZone(t)
 			card := AgentCard{Name: "Target"}
 			opts := []DelegationOption{WithTrustedEndpointOrigins(tc.trusted...)}
