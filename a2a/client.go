@@ -21,7 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,12 +41,13 @@ const (
 // DelegationClient delegates calls from one agent to another, carrying the user's
 // identity through an RFC 8693 token exchange. Construct it once per calling agent.
 type DelegationClient struct {
-	exchange      *oauth.TokenExchangeClient
-	discovery     *ServiceDiscovery
-	httpClient    *http.Client
-	wire          wireProtocol
-	invokeTimeout time.Duration
-	peerLimit     int64
+	exchange       *oauth.TokenExchangeClient
+	discovery      *ServiceDiscovery
+	httpClient     *http.Client
+	wire           wireProtocol
+	invokeTimeout  time.Duration
+	peerLimit      int64
+	trustedOrigins map[string]struct{}
 }
 
 // DelegationOption configures a DelegationClient.
@@ -55,6 +59,14 @@ type delegationConfig struct {
 	protocolVersion string
 	invokeTimeout   time.Duration
 	peerLimit       int64
+	trustedOrigins  []string
+}
+
+// WithTrustedEndpointOrigins allows card endpoints on the listed HTTP or HTTPS
+// origins in addition to the target's own origin. The default list is empty.
+func WithTrustedEndpointOrigins(origins ...string) DelegationOption {
+	trusted := append([]string(nil), origins...)
+	return func(cfg *delegationConfig) { cfg.trustedOrigins = append(cfg.trustedOrigins, trusted...) }
 }
 
 // WithHTTPClient sets the HTTP client used for the token exchange and the agent
@@ -124,6 +136,14 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	if cfg.peerLimit <= 0 {
 		return nil, &ConfigurationError{Message: "peer response limit must be positive"}
 	}
+	trustedOrigins := make(map[string]struct{}, len(cfg.trustedOrigins))
+	for _, raw := range cfg.trustedOrigins {
+		origin, ok := endpointOrigin(raw)
+		if !ok {
+			return nil, &ConfigurationError{Message: fmt.Sprintf("invalid trusted endpoint origin %q", raw)}
+		}
+		trustedOrigins[origin] = struct{}{}
+	}
 
 	wire, ok := wireFor(cfg.protocolVersion)
 	if !ok {
@@ -153,12 +173,13 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	)
 
 	return &DelegationClient{
-		exchange:      exchange,
-		discovery:     discovery,
-		httpClient:    httpClient,
-		wire:          wire,
-		invokeTimeout: cfg.invokeTimeout,
-		peerLimit:     peerLimit,
+		exchange:       exchange,
+		discovery:      discovery,
+		httpClient:     httpClient,
+		wire:           wire,
+		invokeTimeout:  cfg.invokeTimeout,
+		peerLimit:      peerLimit,
+		trustedOrigins: trustedOrigins,
 	}, nil
 }
 
@@ -169,7 +190,8 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 //
 // A discovery, exchange, or invocation failure is returned as a *DiscoveryError, an
 // OAuth error from the exchange (wrapped), or an *InvocationError respectively. On an
-// exchange failure the target agent is not invoked.
+// exchange failure the target agent is not invoked. An endpoint on an untrusted
+// origin returns a *ConfigurationError before the exchange.
 func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken string, msg Message) (*Result, error) {
 	if strings.TrimSpace(subjectToken) == "" {
 		return nil, &ConfigurationError{Message: "subject_token must not be empty"}
@@ -187,6 +209,16 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 	}
 
 	audience := strings.TrimRight(target, "/")
+	endpoint := c.jsonRPCEndpoint(target, card)
+	origin, valid := endpointOrigin(endpoint)
+	targetOrigin, targetValid := endpointOrigin(target)
+	_, trusted := c.trustedOrigins[origin]
+	if !valid || !targetValid {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("invalid invocation endpoint or target URL for %q", target)}
+	}
+	if origin != targetOrigin && !trusted {
+		return nil, &ConfigurationError{Message: fmt.Sprintf("endpoint origin %s is not trusted for target %q", origin, target)}
+	}
 	tokenResp, err := c.exchange.ExchangeToken(ctx, oauth.TokenExchangeRequest{
 		SubjectToken:     subjectToken,
 		SubjectTokenType: subjectTokenTypeAccess,
@@ -197,12 +229,38 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 		return nil, fmt.Errorf("a2a delegation: token exchange for %s: %w", audience, err)
 	}
 
-	respMsg, task, err := c.invoke(ctx, c.jsonRPCEndpoint(target, card), tokenResp.AccessToken, msg)
+	respMsg, task, err := c.invoke(ctx, endpoint, tokenResp.AccessToken, msg)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Result{Message: respMsg, Task: task, AgentCard: card}, nil
+}
+
+func endpointOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	default:
+		return "", false
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", false
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), strconv.FormatUint(number, 10)), true
 }
 
 // jsonRPCEndpoint resolves the target's JSON-RPC endpoint. A 1.0 card is searched

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -411,6 +413,79 @@ func TestDelegationClient_Invoke_TaskResponse(t *testing.T) {
 
 // A 1.0 card's JSONRPC interface is the endpoint, preferring the one matching the
 // client's protocol version.
+func TestDelegationClient_EndpointOrigin(t *testing.T) {
+	const target = "https://agent.example"
+	for _, tc := range []struct {
+		name, endpoint, refusedOrigin string
+		trusted                       []string
+		legacy                        bool
+	}{
+		{name: "row 12: same origin", endpoint: target + "/rpc"},
+		{name: "row 13: different host", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443"},
+		{name: "row 14: trusted origin", endpoint: "https://gateway.example/rpc", trusted: []string{"HTTPS://GATEWAY.example:443"}},
+		{name: "row 15: different port", endpoint: "https://agent.example:8443/rpc", refusedOrigin: "https://agent.example:8443"},
+		{name: "row 15: different scheme", endpoint: "http://agent.example/rpc", refusedOrigin: "http://agent.example:80"},
+		{name: "row 15: explicit default port", endpoint: "https://agent.example:443/rpc"},
+		{name: "row 15a: legacy card", endpoint: "https://other.example/rpc", refusedOrigin: "https://other.example:443", legacy: true},
+		{name: "row 15b: mixed case", endpoint: "HTTPS://Agent.Example/rpc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zone := newFakeZone(t)
+			card := AgentCard{Name: "Target"}
+			opts := []DelegationOption{WithTrustedEndpointOrigins(tc.trusted...)}
+			if tc.legacy {
+				card.URL = tc.endpoint
+				opts = append(opts, WithProtocolVersion(ProtocolVersion03))
+			} else {
+				card.SupportedInterfaces = []AgentInterface{{URL: tc.endpoint, ProtocolBinding: "JSONRPC", ProtocolVersion: ProtocolVersion10}}
+			}
+			var posted []string
+			transport := originTestTransport(func(req *http.Request) (*http.Response, error) {
+				rec := httptest.NewRecorder()
+				switch req.URL.Path {
+				case agentCardPath:
+					_ = json.NewEncoder(rec).Encode(card)
+				case "/rpc":
+					posted = append(posted, req.URL.String())
+					if req.Header.Get("Authorization") != "Bearer exchanged-token" {
+						t.Error("invocation did not receive the exchanged token")
+					}
+					_, _ = io.WriteString(rec, `{"result":{"message":{"role":"ROLE_AGENT","parts":[{"text":"ok"}]}}}`)
+				default:
+					return http.DefaultTransport.RoundTrip(req)
+				}
+				return rec.Result(), nil
+			})
+			client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret",
+				append(opts, WithHTTPClient(&http.Client{Transport: transport}))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Invoke(context.Background(), target, "user-token", NewTextMessage("hi"))
+			if tc.refusedOrigin != "" {
+				var configErr *ConfigurationError
+				if !errors.As(err, &configErr) || configErr.Retryable() ||
+					!strings.Contains(err.Error(), tc.refusedOrigin) || !strings.Contains(err.Error(), target) {
+					t.Fatalf("want non-retryable origin refusal, got %v", err)
+				}
+				if zone.exchangeCount() != 0 || len(posted) != 0 {
+					t.Fatal("refused endpoint caused a token exchange or invocation")
+				}
+				return
+			}
+			if err != nil || zone.exchangeCount() != 1 || len(posted) != 1 || !strings.EqualFold(posted[0], tc.endpoint) {
+				t.Fatalf("want successful exchange and invocation of %q, got %v and %v", tc.endpoint, err, posted)
+			}
+		})
+	}
+}
+
+type originTestTransport func(*http.Request) (*http.Response, error)
+
+func (f originTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestDelegationClient_JSONRPCEndpoint(t *testing.T) {
 	cases := []struct {
 		name    string
