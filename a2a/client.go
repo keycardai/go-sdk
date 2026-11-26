@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -256,7 +257,7 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 		return nil, fmt.Errorf("a2a delegation: token exchange for %s: %w", audience, err)
 	}
 
-	respMsg, task, err := c.invoke(ctx, endpoint, tokenResp.AccessToken, msg)
+	respMsg, task, err := c.invoke(ctx, target, targetOrigin, endpoint, tokenResp.AccessToken, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +362,19 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
-func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, msg Message) (Message, *Task, error) {
+func (c *DelegationClient) checkRedirectOrigin(redirect *url.URL, target, targetOrigin string) error {
+	origin, valid := endpointOrigin(redirect.String(), false)
+	_, trusted := c.trustedOrigins[origin]
+	if valid && (origin == targetOrigin || trusted) {
+		return nil
+	}
+	if !valid {
+		origin = redirect.Scheme + "://" + redirect.Host
+	}
+	return &ConfigurationError{Message: fmt.Sprintf("redirect origin %s is not trusted for target %q", origin, target)}
+}
+
+func (c *DelegationClient) invoke(ctx context.Context, target, targetOrigin, endpoint, bearer string, msg Message) (Message, *Task, error) {
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      newUUID(),
@@ -381,8 +394,33 @@ func (c *DelegationClient) invoke(ctx context.Context, endpoint, bearer string, 
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set(c.wire.versionHeader, c.wire.version)
 
-	resp, err := c.httpClient.Do(req)
+	client := *c.httpClient
+	checkRedirect := client.CheckRedirect
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if err := c.checkRedirectOrigin(next.URL, target, targetOrigin); err != nil {
+			return err
+		}
+		if status := next.Response.StatusCode; status != http.StatusTemporaryRedirect && status != http.StatusPermanentRedirect {
+			return http.ErrUseLastResponse
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		next.Header.Set("Authorization", "Bearer "+bearer)
+		if checkRedirect != nil {
+			if err := checkRedirect(next, via); err != nil {
+				return err
+			}
+			return c.checkRedirectOrigin(next.URL, target, targetOrigin)
+		}
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		var refusal *ConfigurationError
+		if errors.As(err, &refusal) {
+			return Message{}, nil, refusal
+		}
 		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("invoking %s", endpoint), Err: err}
 	}
 	defer resp.Body.Close()

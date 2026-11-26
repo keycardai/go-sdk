@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -181,6 +182,109 @@ func (a *fakeAgent) bearer() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.lastBearer
+}
+
+func TestDelegationClient_Invoke_Redirects(t *testing.T) {
+	for _, tc := range []struct {
+		row                string
+		status             int
+		same, trusted, tls bool
+	}{
+		// Spec row 16: disallowed 307 and 302 redirects receive no request.
+		{row: "16/307", status: http.StatusTemporaryRedirect},
+		{row: "16/302", status: http.StatusFound},
+		// Spec row 17: follow a relative same-origin redirect with the token.
+		{row: "17", status: http.StatusTemporaryRedirect, same: true},
+		{row: "17/308", status: http.StatusPermanentRedirect, same: true},
+		{row: "17/301", status: http.StatusMovedPermanently, same: true},
+		{row: "17/302", status: http.StatusFound, same: true},
+		{row: "17/303", status: http.StatusSeeOther, same: true},
+		// Spec row 18: follow an allowlisted redirect with the token.
+		{row: "18", status: http.StatusTemporaryRedirect, trusted: true},
+		// Spec row 19: a scheme downgrade is a disallowed origin change.
+		{row: "19", status: http.StatusTemporaryRedirect, tls: true},
+	} {
+		t.Run(tc.row, func(t *testing.T) {
+			zone := newFakeZone(t)
+			var redirected atomic.Int32
+			redirectHandler := func(w http.ResponseWriter, r *http.Request) {
+				redirected.Add(1)
+				if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer exchanged-token" {
+					t.Errorf("redirect request method = %q, Authorization = %q", r.Method, r.Header.Get("Authorization"))
+				}
+				var request jsonRPCRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("redirect request body: %v", err)
+				}
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"message":{"messageId":"redirected","parts":[{"text":"handled"}]}}}`))
+			}
+			other := httptest.NewServer(http.HandlerFunc(redirectHandler))
+			defer other.Close()
+
+			mux := http.NewServeMux()
+			agent := httptest.NewUnstartedServer(mux)
+			if tc.tls {
+				agent.StartTLS()
+			} else {
+				agent.Start()
+			}
+			defer agent.Close()
+			destination := other.URL + "/next"
+			if tc.same {
+				destination = "/next"
+			} else if tc.tls {
+				destination = "http://" + strings.TrimPrefix(agent.URL, "https://") + "/next"
+			}
+			mux.HandleFunc(agentCardPath, func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]string{"name": "Redirecting Agent"})
+			})
+			mux.HandleFunc("/next", redirectHandler)
+			mux.HandleFunc("/a2a/jsonrpc", func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != "Bearer exchanged-token" {
+					t.Errorf("invocation Authorization = %q", got)
+				}
+				w.Header().Set("Location", destination)
+				w.WriteHeader(tc.status)
+			})
+
+			var options []DelegationOption
+			if tc.trusted {
+				options = append(options, WithTrustedEndpointOrigins(other.URL))
+			}
+			if tc.tls {
+				options = append(options, WithHTTPClient(agent.Client()))
+			}
+			client, err := NewDelegationClient(zone.URL, "agent-client", "agent-secret", options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("ping"))
+			var wantRequests int32
+			if tc.same || tc.trusted {
+				if tc.status == http.StatusTemporaryRedirect || tc.status == http.StatusPermanentRedirect {
+					wantRequests = 1
+					if err != nil || result.Message.MessageID != "redirected" {
+						t.Fatalf("wanted the redirect result; got %v, %v", result, err)
+					}
+				} else {
+					var invocationError *InvocationError
+					if !errors.As(err, &invocationError) {
+						t.Fatalf("wanted invocation error; got %v", err)
+					}
+				}
+			} else {
+				origin, _ := endpointOrigin(destination, false)
+				originError, ok := err.(*ConfigurationError)
+				if !ok || originError.Retryable() ||
+					!strings.Contains(originError.Error(), origin) || !strings.Contains(originError.Error(), agent.URL) {
+					t.Fatalf("wanted non-retryable refusal for %q on %q; got %v", origin, agent.URL, err)
+				}
+			}
+			if redirected.Load() != wantRequests || zone.exchangeCount() != 1 {
+				t.Fatalf("redirect requests = %d, exchanges = %d", redirected.Load(), zone.exchangeCount())
+			}
+		})
+	}
 }
 
 // Spec test 3: a valid user token is exchanged for a target-scoped token and the agent
