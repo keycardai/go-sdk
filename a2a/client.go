@@ -66,7 +66,9 @@ func WithHTTPClient(c *http.Client) DelegationOption {
 
 // WithMaxPeerResponseBytes configures the decoded limit for agent-card and invocation
 // replies read by default HTTP clients. The limit defaults to 64 MiB and must be
-// positive. It does not affect token exchange or caller-supplied HTTP clients.
+// positive. It does not affect token exchange or caller-supplied HTTP clients. A
+// ServiceDiscovery passed with WithServiceDiscovery keeps its own agent-card limit;
+// set that limit with WithDiscoveryMaxPeerResponseBytes.
 func WithMaxPeerResponseBytes(limit int64) DelegationOption {
 	return func(cfg *delegationConfig) { cfg.peerLimit = limit }
 }
