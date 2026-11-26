@@ -1,3 +1,16 @@
+## v0.43.0 (2026-11-26)
+
+
+- feat(oauth): bind credentials to the client credentials grant (#89)
+- * feat(oauth): bind credentials to the client credentials grant
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * fix(oauth): reject a request client ID beside a configured credential
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <Larry-Osakwe@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.42.1 (2026-11-26)
 
 
