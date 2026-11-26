@@ -139,9 +139,9 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 	}
 	trustedOrigins := make(map[string]struct{}, len(cfg.trustedOrigins))
 	for _, raw := range cfg.trustedOrigins {
-		origin, ok := endpointOrigin(raw)
+		origin, ok := endpointOrigin(raw, true)
 		if !ok {
-			return nil, &ConfigurationError{Message: fmt.Sprintf("invalid trusted endpoint origin %q", raw)}
+			return nil, &ConfigurationError{Message: "invalid trusted endpoint origin: expected a bare HTTP or HTTPS origin"}
 		}
 		trustedOrigins[origin] = struct{}{}
 	}
@@ -211,8 +211,8 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 
 	audience := strings.TrimRight(target, "/")
 	endpoint := c.jsonRPCEndpoint(target, card)
-	origin, valid := endpointOrigin(endpoint)
-	targetOrigin, targetValid := endpointOrigin(target)
+	origin, valid := endpointOrigin(endpoint, false)
+	targetOrigin, targetValid := endpointOrigin(target, false)
 	_, trusted := c.trustedOrigins[origin]
 	if !valid || !targetValid {
 		return nil, &ConfigurationError{Message: fmt.Sprintf("invalid invocation endpoint or target URL for %q", target)}
@@ -238,10 +238,16 @@ func (c *DelegationClient) Invoke(ctx context.Context, target, subjectToken stri
 	return &Result{Message: respMsg, Task: task, AgentCard: card}, nil
 }
 
-func endpointOrigin(raw string) (string, bool) {
+func endpointOrigin(raw string, requireBare bool) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
 		return "", false
+	}
+	if requireBare {
+		path := u.EscapedPath()
+		if (path != "" && path != "/") || u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") || u.User != nil {
+			return "", false
+		}
 	}
 	scheme := strings.ToLower(u.Scheme)
 	port := u.Port()
