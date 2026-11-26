@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 const (
@@ -49,6 +52,9 @@ type DeviceAuthorizationRequest struct {
 // DeviceAuthorization is the device authorization response (RFC 8628 section 3.2).
 // It is a plain value. Persist it, for example as JSON, to poll from another process
 // that authenticates as the same client.
+//
+// DeviceCode is a credential: a public client redeems it with client_id alone. String,
+// GoString, and LogValue leave it out. encoding/json writes it.
 type DeviceAuthorization struct {
 	// DeviceCode is the code the device polls with. NEVER show it to the person.
 	DeviceCode string `json:"device_code"`
@@ -69,6 +75,26 @@ type DeviceAuthorization struct {
 	// client's clock.
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+func (d DeviceAuthorization) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.DeviceAuthorization", Fields: []printed.Field{
+		{Name: "UserCode", Key: "user_code", Value: d.UserCode},
+		{Name: "VerificationURI", Key: "verification_uri", Value: d.VerificationURI},
+		{Name: "VerificationURIComplete", Key: "verification_uri_complete", Value: d.VerificationURIComplete},
+		{Name: "ExpiresIn", Key: "expires_in", Value: d.ExpiresIn},
+		{Name: "Interval", Key: "interval", Value: d.Interval},
+		{Name: "ExpiresAt", Key: "expires_at", Value: d.ExpiresAt},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (d DeviceAuthorization) String() string { return d.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (d DeviceAuthorization) GoString() string { return d.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (d DeviceAuthorization) LogValue() slog.Value { return d.printed().LogValue() }
 
 // deviceAuthorizationResponse is the wire format of the device authorization
 // response. Interval is a pointer so that an absent interval and an interval of 0
@@ -155,11 +181,36 @@ func WithDeviceNegativeTTL(d time.Duration) DeviceAuthorizationOption {
 // from the device's side. It reads device_authorization_endpoint and token_endpoint
 // from discovery, or from metadata set with WithDeviceMetadata. It does not keep
 // state between operations, other than the discovery cache.
+//
+// String, GoString, and LogValue show the issuer, the public client ID, and the
+// credential's type.
 type DeviceAuthorizationClient struct {
 	issuer        string
 	cfg           deviceAuthorizationConfig
 	authenticator ClientAuthenticator
 	metadata      discoveryCache[*AuthorizationServerMetadata]
+}
+
+func (c *DeviceAuthorizationClient) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.DeviceAuthorizationClient", Fields: []printed.Field{
+		{Name: "Issuer", Key: "issuer", Value: c.issuer},
+		{Name: "ClientID", Key: "client_id", Value: c.cfg.clientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(c.cfg.credential)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *DeviceAuthorizationClient) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *DeviceAuthorizationClient) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *DeviceAuthorizationClient) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // NewDeviceAuthorizationClient creates a DeviceAuthorizationClient for issuer. With

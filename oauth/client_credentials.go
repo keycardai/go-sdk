@@ -3,13 +3,18 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // ClientCredentialsRequest represents an RFC 6749 Section 4.4 client credentials request.
+//
+// String, GoString, and LogValue leave out ClientAssertion.
 type ClientCredentialsRequest struct {
 	Resource            string
 	Scope               string
@@ -20,6 +25,24 @@ type ClientCredentialsRequest struct {
 	// sent when the client uses HTTP Basic.
 	ClientID string
 }
+
+func (r ClientCredentialsRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientCredentialsRequest", Fields: []printed.Field{
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+		{Name: "Scope", Key: "scope", Value: r.Scope},
+		{Name: "ClientAssertionType", Key: "client_assertion_type", Value: r.ClientAssertionType},
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r ClientCredentialsRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r ClientCredentialsRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r ClientCredentialsRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // ClientCredentialsClientOption configures a ClientCredentialsClient.
 type ClientCredentialsClientOption func(*clientCredentialsConfig)
@@ -71,10 +94,33 @@ func WithCCNegativeTTL(d time.Duration) ClientCredentialsClientOption {
 // against an OAuth authorization server. It lazily discovers the token endpoint via
 // OAuth metadata and caches it for the discovery TTL; concurrent callers share one
 // discovery fetch.
+//
+// String, GoString, and LogValue show the issuer and client ID only.
 type ClientCredentialsClient struct {
 	issuerURL string
 	cfg       clientCredentialsConfig
 	endpoint  tokenEndpointResolver
+}
+
+func (c *ClientCredentialsClient) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientCredentialsClient", Fields: []printed.Field{
+		{Name: "Issuer", Key: "issuer", Value: c.issuerURL},
+		{Name: "ClientID", Key: "client_id", Value: c.cfg.clientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (c *ClientCredentialsClient) String() string { return c.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (c *ClientCredentialsClient) GoString() string { return c.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (c *ClientCredentialsClient) LogValue() slog.Value {
+	if c == nil {
+		return slog.AnyValue(nil)
+	}
+	return c.printed().LogValue()
 }
 
 // NewClientCredentialsClient creates a new ClientCredentialsClient for the given issuer.

@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // PKCE code challenge methods (RFC 7636 §4.3).
@@ -19,11 +22,29 @@ const (
 const defaultCodeVerifierBytes = 96
 
 // PKCEPair is a PKCE code verifier and its derived challenge (RFC 7636).
+//
+// String, GoString, and LogValue leave out CodeVerifier.
 type PKCEPair struct {
 	CodeVerifier        string
 	CodeChallenge       string
 	CodeChallengeMethod string
 }
+
+func (p PKCEPair) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.PKCEPair", Fields: []printed.Field{
+		{Name: "CodeChallenge", Key: "code_challenge", Value: p.CodeChallenge},
+		{Name: "CodeChallengeMethod", Key: "code_challenge_method", Value: p.CodeChallengeMethod},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (p PKCEPair) String() string { return p.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (p PKCEPair) GoString() string { return p.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (p PKCEPair) LogValue() slog.Value { return p.printed().LogValue() }
 
 // GenerateCodeVerifier returns a cryptographically random PKCE code verifier of 128
 // unreserved characters. The base64url alphabet is a subset of the RFC 7636 §4.1

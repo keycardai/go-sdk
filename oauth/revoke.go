@@ -4,13 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // RevokeTokenRequest is the input to RevokeToken. Supply either a Credential
 // or a ClientID with an optional ClientSecret.
+//
+// String, GoString, and LogValue leave out Token and ClientSecret, and show
+// Credential's type only.
 type RevokeTokenRequest struct {
 	// Token is the token to revoke.
 	Token string
@@ -24,6 +30,23 @@ type RevokeTokenRequest struct {
 	// implement [ClientAuthenticator].
 	Credential ApplicationCredential
 }
+
+func (r RevokeTokenRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.RevokeTokenRequest", Fields: []printed.Field{
+		{Name: "TokenTypeHint", Key: "token_type_hint", Value: r.TokenTypeHint},
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(r.Credential)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r RevokeTokenRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r RevokeTokenRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r RevokeTokenRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // RevocationOption configures RevokeToken.
 type RevocationOption func(*revocationConfig)
