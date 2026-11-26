@@ -1,3 +1,12 @@
+## v0.36.0 (2026-11-26)
+
+
+- feat(oauth): discover the application credential from the environment (SDK-6) (#85)
+- Implements keycardai/keycard-sdk-spec credential-discovery.md v2
+- Refs SDK-6
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
 ## v0.35.0 (2026-11-26)
 
 
