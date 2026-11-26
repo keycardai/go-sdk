@@ -39,6 +39,11 @@ type AuthorizationServerMetadata struct {
 	// RevocationEndpointAuthMethodsSupported lists the client authentication methods
 	// the revocation endpoint accepts.
 	RevocationEndpointAuthMethodsSupported []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
+	// IntrospectionEndpoint is where RFC 7662 token introspection requests are sent.
+	IntrospectionEndpoint string `json:"introspection_endpoint,omitempty"`
+	// IntrospectionEndpointAuthMethodsSupported lists the client authentication methods
+	// the introspection endpoint accepts.
+	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
 
 	SubjectTypesSupported            []string `json:"subject_types_supported,omitempty"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported,omitempty"`
@@ -58,6 +63,7 @@ var knownASMetadataFields = []string{
 	"code_challenge_methods_supported", "userinfo_endpoint", "end_session_endpoint",
 	"device_authorization_endpoint",
 	"revocation_endpoint", "revocation_endpoint_auth_methods_supported",
+	"introspection_endpoint", "introspection_endpoint_auth_methods_supported",
 	"subject_types_supported", "id_token_signing_alg_values_supported", "claims_supported",
 }
 

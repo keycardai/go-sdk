@@ -195,3 +195,45 @@ func TestFetchAuthorizationServerMetadata_Revocation(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchAuthorizationServerMetadata_Introspection(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		methods []string
+	}{
+		// Spec row 14: advertised introspection fields are typed.
+		{"present", []string{"client_secret_basic", "client_secret_post", "private_key_jwt"}},
+		// Spec row 15: omitted introspection fields are empty without an error.
+		{"absent", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const path = "/custom/introspection"
+			const algorithmsKey = "introspection_endpoint_auth_signing_alg_values_supported"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				issuer := "http://" + r.Host
+				doc := map[string]any{"issuer": issuer, algorithmsKey: []string{"RS256"}}
+				if tc.methods != nil {
+					doc["introspection_endpoint"] = issuer + path
+					doc["introspection_endpoint_auth_methods_supported"] = tc.methods
+				}
+				_ = json.NewEncoder(w).Encode(doc)
+			}))
+			defer server.Close()
+
+			md, err := FetchAuthorizationServerMetadata(context.Background(), server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEndpoint := ""
+			if tc.methods != nil {
+				wantEndpoint = server.URL + path
+			}
+			if md.IntrospectionEndpoint != wantEndpoint || !reflect.DeepEqual(md.IntrospectionEndpointAuthMethodsSupported, tc.methods) {
+				t.Errorf("introspection metadata = %q, %v; want %q, %v", md.IntrospectionEndpoint, md.IntrospectionEndpointAuthMethodsSupported, wantEndpoint, tc.methods)
+			}
+			if want := map[string]any{algorithmsKey: []any{"RS256"}}; !reflect.DeepEqual(md.Extra, want) {
+				t.Errorf("Extra = %v, want %v", md.Extra, want)
+			}
+		})
+	}
+}

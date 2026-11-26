@@ -32,6 +32,7 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **Device authorization grant**: `DeviceAuthorizationClient` (RFC 8628) for processes with no browser; see [`examples/device-authorization`](examples/device-authorization)
 - **Refresh**: `RefreshAuthorization` redeems a refresh token as a public client, a confidential client, or with a credential, optionally narrowed to some resources or scopes
 - **Revocation**: `RevokeToken` sends a token to the issuer's advertised revocation endpoint (RFC 7009). Revoking a Keycard refresh token revokes its session.
+- **Introspection**: `IntrospectToken` checks a token at the issuer's advertised endpoint (RFC 7662) with a confidential client credential. The result reports whether the token is active and includes its claims when active. Discovery exposes `IntrospectionEndpoint` and `IntrospectionEndpointAuthMethodsSupported` on `AuthorizationServerMetadata`.
 - **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
 - **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`. Each implements `ClientAuthenticator` for requests other than token exchange.
 
