@@ -84,7 +84,9 @@ func WithInboundZoneResolver(resolve func(host, target string) string) BearerAut
 // Per-zone mode requires WithInboundZoneResolver; shared discovery selects the
 // issuer from the token using the complete configured zone set.
 // It returns a ConfigurationError for a missing issuer, an incompatible zone
-// resolver, empty multi-resource audiences, or invalid introspection credentials.
+// resolver, empty multi-resource audiences, invalid introspection credentials,
+// or a trusted issuer or credential zone key that is not an absolute HTTPS
+// issuer URL when introspection is enabled.
 func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handler) http.Handler, error) {
 	cfg := bearerOptions(opts)
 	if b.issuer == "" {
@@ -163,9 +165,10 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 
 // NewBearerAuth builds the same middleware as RequireBearerAuth and returns a
 // ConfigurationError for a nil verifier or invalid introspection configuration:
-// a missing credential, a credential without client authentication, or an
-// unkeyed credential without exactly one trusted issuer. A custom verifier can
-// declare its trusted issuers with a TrustedIssuers() []string method.
+// a missing credential, a credential without client authentication, an
+// unkeyed credential without exactly one trusted issuer, or a trusted issuer
+// or credential zone key that is not an absolute HTTPS issuer URL. A custom
+// verifier can declare its trusted issuers with a TrustedIssuers() []string method.
 func NewBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) (func(http.Handler) http.Handler, error) {
 	if verifier == nil {
 		return nil, configurationError("bearer authentication requires a non-nil TokenVerifier")

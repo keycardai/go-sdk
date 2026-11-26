@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -33,8 +34,9 @@ func WithIntrospectionHTTPClient(client *http.Client) BearerAuthOption {
 	return func(cfg *bearerAuthConfig) { cfg.introspectHTTP = client }
 }
 
-// WithIntrospectionRequestTimeout sets the timeout for each introspection or
-// discovery request whose context has no deadline. The default is 10 seconds.
+// WithIntrospectionRequestTimeout sets the timeout for shared discovery and
+// for an introspection request whose context has no deadline. The default is
+// 10 seconds.
 func WithIntrospectionRequestTimeout(timeout time.Duration) BearerAuthOption {
 	return func(cfg *bearerAuthConfig) { cfg.introspectTime = timeout }
 }
@@ -64,15 +66,17 @@ func (cfg bearerAuthConfig) newIntrospection(trustedIssuers []string) (*bearerIn
 		zones:      make(map[string]struct{}),
 	}
 	for _, issuer := range trustedIssuers {
-		if issuer != "" {
-			in.issuers[issuer] = nil
+		if !validIntrospectionIssuer(issuer) {
+			return nil, configurationError("introspection requires each trusted issuer to be an absolute HTTPS issuer URL")
 		}
+		in.issuers[issuer] = nil
 	}
 	if keyed, ok := cred.(oauth.MultiZoneCredential); ok {
 		for _, zone := range keyed.Zones() {
-			if zone != "" {
-				in.zones[zone] = struct{}{}
+			if !validIntrospectionIssuer(zone) {
+				return nil, configurationError("introspection requires each credential zone key to be an absolute HTTPS issuer URL")
 			}
+			in.zones[zone] = struct{}{}
 		}
 	}
 	if len(in.zones) == 0 {
@@ -107,6 +111,12 @@ func (cfg bearerAuthConfig) newIntrospection(trustedIssuers []string) (*bearerIn
 		in.issuers[issuer] = oauth.NewIntrospectionMetadataResolver(issuer, &noRedirect, cfg.introspectTime)
 	}
 	return in, nil
+}
+
+func validIntrospectionIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil &&
+		u.RawQuery == "" && !u.ForceQuery && !strings.Contains(issuer, "#")
 }
 
 func nilPointer(v any) bool {

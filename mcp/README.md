@@ -61,7 +61,9 @@ requireBearer, err := binding.BearerAuth(
 
 Use the same options with `NewBearerAuth` when you build your own verifier.
 When the middleware trusts multiple zones, use a credential such as
-`oauth.NewMultiZoneClientSecret` with entries keyed by issuer URL.
+`oauth.NewMultiZoneClientSecret` with entries keyed by issuer URL. With
+introspection enabled, every trusted issuer and credential zone key must be
+an absolute HTTPS issuer URL without user info, a query, or a fragment.
 
 Introspection runs only after local verification and required scope checks
 pass. Results are not cached. An inactive token returns a 401

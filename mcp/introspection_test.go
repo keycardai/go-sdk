@@ -456,3 +456,37 @@ func TestBearerIntrospection_LogsFailurePerVerifiedIssuer(t *testing.T) {
 		})
 	}
 }
+
+// Spec row 23 (bearer-token-verification-middleware): reject unusable introspection issuer configuration before serving requests.
+func TestBearerIntrospection_RejectsInvalidIssuerURLsAtConstruction(t *testing.T) {
+	for _, issuer := range []string{"http://keycard.cloud", "/relative", "https://:443", "", "https://keycard.cloud?query=value"} {
+		t.Run("trusted issuer "+issuer, func(t *testing.T) {
+			verifier, err := NewMultiZoneTokenVerifier([]string{bindingIssuer, issuer}, oauth.WithAudiences(bindingMCP))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cred := mustMultiZone(t, map[string]ClientAuth{bindingIssuer: {ClientID: "app", ClientSecret: "secret"}})
+			options := []BearerAuthOption{WithIntrospect(true), WithIntrospectionCredential(cred)}
+			_, err = NewBearerAuth(verifier, options...)
+			expectBindingConfigError(t, err)
+			_, err = NewBearerAuth(verifier, append(options, WithIntrospect(false))...)
+			if err != nil {
+				t.Fatalf("local verification configuration: %v", err)
+			}
+		})
+	}
+	t.Run("resource binding with HTTP issuer", func(t *testing.T) {
+		b := makeBinding(t, "http://keycard.cloud", WithResourceIdentifier(bindingMCP))
+		_, err := b.BearerAuth(WithIntrospect(true), WithIntrospectionCredential(mustClientSecret(t, "app", "secret")))
+		expectBindingConfigError(t, err)
+	})
+	t.Run("credential zone key not trusted by verifier", func(t *testing.T) {
+		b := makeBinding(t, bindingIssuer, WithResourceIdentifier(bindingMCP))
+		cred := mustMultiZone(t, map[string]ClientAuth{
+			bindingIssuer:       {ClientID: "app", ClientSecret: "secret"},
+			"http://other.zone": {ClientID: "other-app", ClientSecret: "other-secret"},
+		})
+		_, err := b.BearerAuth(WithIntrospect(true), WithIntrospectionCredential(cred))
+		expectBindingConfigError(t, err)
+	})
+}
