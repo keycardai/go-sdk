@@ -1,3 +1,10 @@
+## v0.42.0 (2026-11-26)
+
+
+- fix(oauth)!: classify workload identity source retryability (#94)
+- Custom token sources must return a WorkloadIdentityRuntimeError with Transient set to true for failures that should be retried.
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+
 ## v0.41.1 (2026-11-26)
 
 
