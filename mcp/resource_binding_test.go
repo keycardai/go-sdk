@@ -465,6 +465,21 @@ func TestResourceBinding_ZoneMetadata(t *testing.T) {
 	}
 }
 
+// Spec row 4b (oauth-metadata-endpoints): zones sharing a metadata path select their
+// document by host, with the scheme's default port optional on either side.
+func TestResourceBinding_ZoneMetadataDefaultPort(t *testing.T) {
+	idA, idB := "https://a.example.com:443/mcp", "https://b.example.com/mcp"
+	b := makeBinding(t, bindingIssuer, WithResourceIdentifiersByZone(map[string]string{"a": idA, "b": idB}))
+	h := b.MetadataHandler()
+	assertProtectedDocument(t, sendBindingRequest(h, "https://a.example.com"+protectedResourcePath+"/mcp", "", nil), idA, "https://a.keycard.cloud")
+	assertProtectedDocument(t, sendBindingRequest(h, "https://B.example.com:443"+protectedResourcePath+"/mcp", "", nil), idB, "https://b.keycard.cloud")
+	if _, err := NewResourceBinding(bindingIssuer, WithResourceIdentifiersByZone(map[string]string{
+		"a": "https://a.example.com:443/mcp", "b": "https://A.example.com/mcp",
+	})); err == nil {
+		t.Error("expected a configuration error for zones publishing the same metadata URL")
+	}
+}
+
 // Spec row 10 (oauth-metadata-endpoints): the application mounts auth but registers discovery at the host root.
 func TestResourceBinding_MountedDiscovery(t *testing.T) {
 	const id = bindingHost + "/app/mcp"

@@ -229,7 +229,7 @@ func authMetadataHandler(binding *ResourceBinding, opts []MetadataOption) http.H
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			matches := documents[r.URL.RequestURI()]
 			for _, doc := range matches {
-				if len(matches) == 1 || strings.EqualFold(r.Host, doc.id.metadata.Host) {
+				if len(matches) == 1 || canonicalAuthority(doc.id.metadata.Scheme, r.Host) == canonicalAuthority(doc.id.metadata.Scheme, doc.id.metadata.Host) {
 					baseURL := doc.id.public.Scheme + "://" + doc.id.public.Host
 					protectedResource(w, doc.id.value, baseURL, doc.issuers)
 					return

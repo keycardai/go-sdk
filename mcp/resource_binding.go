@@ -204,7 +204,7 @@ func (b *ResourceBinding) configureZones(zones map[string]string) error {
 			}
 			b.single = id
 		} else if id.metadata != nil {
-			key := strings.ToLower(id.metadata.Host) + id.metadata.RequestURI()
+			key := canonicalAuthority(id.metadata.Scheme, id.metadata.Host) + id.metadata.RequestURI()
 			if metadataURLs[key] {
 				return configurationError("multiple zones publish the same protected-resource metadata URL")
 			}
@@ -216,6 +216,19 @@ func (b *ResourceBinding) configureZones(zones map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// canonicalAuthority lowercases host and drops the scheme's default port, so
+// "a.example:443" and "A.example" select the same https document.
+func canonicalAuthority(scheme, host string) string {
+	host = strings.ToLower(host)
+	switch strings.ToLower(scheme) {
+	case "https":
+		host = strings.TrimSuffix(host, ":443")
+	case "http":
+		host = strings.TrimSuffix(host, ":80")
+	}
+	return host
 }
 
 func validZoneID(zone string) bool {
