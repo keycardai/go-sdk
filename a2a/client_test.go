@@ -196,6 +196,9 @@ func TestDelegationClient_Invoke_Redirects(t *testing.T) {
 		// Spec row 17: follow a relative same-origin redirect with the token.
 		{row: "17", status: http.StatusTemporaryRedirect, same: true},
 		{row: "17/308", status: http.StatusPermanentRedirect, same: true},
+		{row: "17/301", status: http.StatusMovedPermanently, same: true},
+		{row: "17/302", status: http.StatusFound, same: true},
+		{row: "17/303", status: http.StatusSeeOther, same: true},
 		// Spec row 18: follow an allowlisted redirect with the token.
 		{row: "18", status: http.StatusTemporaryRedirect, trusted: true},
 		// Spec row 19: a scheme downgrade is a disallowed origin change.
@@ -258,9 +261,16 @@ func TestDelegationClient_Invoke_Redirects(t *testing.T) {
 			result, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("ping"))
 			var wantRequests int32
 			if tc.same || tc.trusted {
-				wantRequests = 1
-				if err != nil || result.Message.MessageID != "redirected" {
-					t.Fatalf("wanted the redirect result; got %v, %v", result, err)
+				if tc.status == http.StatusTemporaryRedirect || tc.status == http.StatusPermanentRedirect {
+					wantRequests = 1
+					if err != nil || result.Message.MessageID != "redirected" {
+						t.Fatalf("wanted the redirect result; got %v, %v", result, err)
+					}
+				} else {
+					var invocationError *InvocationError
+					if !errors.As(err, &invocationError) {
+						t.Fatalf("wanted invocation error; got %v", err)
+					}
 				}
 			} else {
 				origin, _ := endpointOrigin(destination, false)

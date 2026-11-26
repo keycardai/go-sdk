@@ -400,6 +400,9 @@ func (c *DelegationClient) invoke(ctx context.Context, target, targetOrigin, end
 		if err := c.checkRedirectOrigin(next.URL, target, targetOrigin); err != nil {
 			return err
 		}
+		if status := next.Response.StatusCode; status != http.StatusTemporaryRedirect && status != http.StatusPermanentRedirect {
+			return http.ErrUseLastResponse
+		}
 		if len(via) >= 10 {
 			return errors.New("stopped after 10 redirects")
 		}
