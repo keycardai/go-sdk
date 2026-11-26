@@ -227,10 +227,11 @@ var supportedVerifyAlgorithms = map[string]bool{
 
 // jwtVerifierConfig holds the optional verifier settings applied via JWTVerifierOption.
 type jwtVerifierConfig struct {
-	audiences    []string
-	audiencesSet bool
-	algorithms   []string
-	leeway       time.Duration
+	audiences        []string
+	audiencesSet     bool
+	allowAnyAudience bool
+	algorithms       []string
+	leeway           time.Duration
 }
 
 // JWTVerifierOption configures a JWTVerifier.
@@ -245,6 +246,12 @@ func WithAudiences(audiences ...string) JWTVerifierOption {
 		c.audiences = audiences
 		c.audiencesSet = true
 	}
+}
+
+// WithAllowAnyAudience explicitly disables audience validation. It cannot be
+// combined with WithAudiences. All other token checks still apply.
+func WithAllowAnyAudience() JWTVerifierOption {
+	return func(c *jwtVerifierConfig) { c.allowAnyAudience = true }
 }
 
 // WithAlgorithms sets the allowed JWT signing algorithms. Defaults to ["RS256"].
@@ -297,8 +304,11 @@ func NewJWTVerifier(keyring OAuthKeyring, issuers []string, opts ...JWTVerifierO
 	if cfg.audiencesSet && len(cfg.audiences) == 0 {
 		return nil, &ConfigurationError{Message: "WithAudiences requires at least one audience"}
 	}
-	if !cfg.audiencesSet {
-		slog.Default().Warn("keycard: JWT verifier has no audience configured; it accepts a token minted for any resource in the zone. Pass oauth.WithAudiences with this server's resource identifier.")
+	if cfg.allowAnyAudience && cfg.audiencesSet {
+		return nil, &ConfigurationError{Message: "WithAllowAnyAudience cannot be combined with WithAudiences"}
+	}
+	if !cfg.audiencesSet && !cfg.allowAnyAudience {
+		slog.Default().Warn("keycard: JWT verifier has no audience configured; it accepts a token minted for any resource in the zone. Pass oauth.WithAudiences with this server's resource_identifier.")
 	}
 
 	return &JWTVerifier{
@@ -308,6 +318,11 @@ func NewJWTVerifier(keyring OAuthKeyring, issuers []string, opts ...JWTVerifierO
 		algorithms: cfg.algorithms,
 		leeway:     cfg.leeway,
 	}, nil
+}
+
+// HasAudienceRestriction reports whether the verifier requires an audience match.
+func (v *JWTVerifier) HasAudienceRestriction() bool {
+	return len(v.audiences) != 0
 }
 
 // Verify parses and verifies a JWT, returning the claims. Every rejection is an

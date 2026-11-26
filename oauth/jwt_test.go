@@ -486,6 +486,18 @@ func TestNewJWTVerifier_SilentWithAudiences(t *testing.T) {
 	}
 }
 
+// Spec row 8g: explicit unrestricted audience does not emit a warning.
+func TestNewJWTVerifier_ExplicitAudienceOptOut(t *testing.T) {
+	buf := captureDefaultSlog(t)
+	v := newVerifier(t, &staticTestKeyring{}, []string{testIssuer}, WithAllowAnyAudience())
+	if v.HasAudienceRestriction() || buf.Len() != 0 {
+		t.Fatalf("expected unrestricted verification with no warning, got %q", buf.String())
+	}
+	if _, err := NewJWTVerifier(nil, []string{testIssuer}, WithAllowAnyAudience(), WithAudiences("a")); err == nil {
+		t.Fatal("expected configuration error for conflicting audience options")
+	}
+}
+
 func TestJWTClaims_Accessors(t *testing.T) {
 	now := time.Now().Unix()
 	c := JWTClaims{
