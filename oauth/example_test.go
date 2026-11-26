@@ -9,6 +9,18 @@ import (
 	"github.com/keycardai/go-sdk/oauth"
 )
 
+func ExampleDiscoverCredential() {
+	credential, err := oauth.DiscoverCredential(map[string]string{
+		"KEYCARD_CLIENT_ID":     "my-client",
+		"KEYCARD_CLIENT_SECRET": "example-secret",
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%T\n", credential)
+	// Output: *oauth.ClientSecretCredential
+}
+
 // ExampleGenerateCodeChallenge derives an S256 PKCE challenge from a verifier
 // (RFC 7636 Appendix B vector).
 func ExampleGenerateCodeChallenge() {
