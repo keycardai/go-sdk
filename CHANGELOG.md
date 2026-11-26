@@ -1,3 +1,10 @@
+## v0.39.0 (2026-11-26)
+
+
+- feat(a2a)!: require trusted delegation endpoint origins (#91)
+- DelegationClient.Invoke refuses a card invocation endpoint on another origin with a ConfigurationError before the token exchange, unless the origin is listed with WithTrustedEndpointOrigins (keycard-sdk-spec#155, SDK-103).
+- BREAKING CHANGE(a2a): delegation to an agent whose card names a JSON-RPC endpoint on a different origin now fails. Allow gateway origins with WithTrustedEndpointOrigins.
+
 ## v0.38.0 (2026-11-26)
 
 
