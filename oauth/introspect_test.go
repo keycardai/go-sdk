@@ -170,6 +170,8 @@ func TestIntrospectToken_ClientAuthentication(t *testing.T) {
 func TestIntrospectToken_Result(t *testing.T) {
 	ptr := func(s string) *string { return &s }
 	iat, exp := int64(0), int64(1700000010)
+	exponentIAT, fractionalExp := int64(1700000000), int64(1700000010)
+	negativeIAT, largeExp := int64(-1), int64(9223372036854775807)
 	for _, tc := range []struct {
 		name, body string
 		want       TokenIntrospection
@@ -187,6 +189,16 @@ func TestIntrospectToken_Result(t *testing.T) {
 		},
 		{name: "inactive", body: `{"active":false}`},
 		{name: "inactive with extra data", body: `{"active":false,"iss":"https://zone.example","act":{"sub":"actor"}}`},
+		{
+			name: "fractional and exponent timestamps",
+			body: `{"active":true,"iat":1.7e9,"exp":1700000010.5}`,
+			want: TokenIntrospection{Active: true, IssuedAt: &exponentIAT, Expiry: &fractionalExp},
+		},
+		{
+			name: "negative fraction and exact integer timestamps",
+			body: `{"active":true,"iat":-1.5,"exp":9223372036854775807}`,
+			want: TokenIntrospection{Active: true, IssuedAt: &negativeIAT, Expiry: &largeExp},
+		},
 		{
 			name: "active refresh token",
 			body: `{"active":true,"aud":"https://zone.example","sid":"session"}`,
@@ -310,7 +322,10 @@ func TestIntrospectToken_EndpointError(t *testing.T) {
 
 // Spec row 8: invalid bodies return a typed invalid_response.
 func TestIntrospectToken_InvalidResponse(t *testing.T) {
-	for _, body := range []string{"", `{"active":`, `{}`, `{"active":null}`, `{"active":"false"}`, `{"active":0}`, `{"Active":true}`, `{"active":true}{}`} {
+	for _, body := range []string{
+		"", `{"active":`, `{}`, `{"active":null}`, `{"active":"false"}`, `{"active":0}`, `{"Active":true}`, `{"active":true}{}`,
+		`{"active":true,"iat":"1700000010"}`, `{"active":true,"exp":false}`, `{"active":true,"iat":null}`,
+	} {
 		t.Run(body, func(t *testing.T) {
 			got, err := introspectTestToken(t, introspectionTestResponse(http.StatusOK, body), nil)
 			var oauthErr *OAuthError

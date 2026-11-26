@@ -216,13 +216,27 @@ func parseTokenIntrospection(data []byte) (*TokenIntrospection, error) {
 		{"scope", &scope},
 		{"sid", &result.SessionID},
 		{"jti", &result.JWTID},
-		{"iat", &result.IssuedAt},
-		{"exp", &result.Expiry},
 	} {
 		if raw, ok := fields[field.name]; ok {
 			if err := json.Unmarshal(raw, field.dest); err != nil {
 				return nil, fmt.Errorf("decoding introspection field %q: %w", field.name, err)
 			}
+			delete(fields, field.name)
+		}
+	}
+	for _, field := range []struct {
+		name string
+		dest **int64
+	}{
+		{"iat", &result.IssuedAt},
+		{"exp", &result.Expiry},
+	} {
+		if raw, ok := fields[field.name]; ok {
+			seconds, err := parseIntrospectionTimestamp(raw)
+			if err != nil {
+				return nil, fmt.Errorf("decoding introspection field %q: %w", field.name, err)
+			}
+			*field.dest = &seconds
 			delete(fields, field.name)
 		}
 	}
@@ -234,4 +248,19 @@ func parseTokenIntrospection(data []byte) (*TokenIntrospection, error) {
 		result.Extra = fields
 	}
 	return result, nil
+}
+
+func parseIntrospectionTimestamp(raw json.RawMessage) (int64, error) {
+	var integer *int64
+	if err := json.Unmarshal(raw, &integer); err == nil && integer != nil {
+		return *integer, nil
+	}
+	var number *float64
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return 0, err
+	}
+	if number == nil {
+		return 0, errors.New("expected a numeric timestamp")
+	}
+	return int64(*number), nil
 }
