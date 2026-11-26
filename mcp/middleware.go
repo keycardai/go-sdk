@@ -279,7 +279,7 @@ func bearerAuth(cfg bearerAuthConfig, introspection *bearerIntrospection, select
 			if introspection != nil {
 				active, err := introspection.check(r.Context(), authInfo.Issuer, token)
 				if err != nil {
-					introspection.logFailure(err)
+					introspection.logFailure(authInfo.Issuer, token, err)
 					writeBearerUnavailable(w)
 					return
 				}

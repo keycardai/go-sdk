@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,12 +135,28 @@ func (in *bearerIntrospection) check(ctx context.Context, issuer, token string) 
 	return result.Active, nil
 }
 
-func (in *bearerIntrospection) logFailure(err error) {
+func (in *bearerIntrospection) logFailure(issuer, token string, err error) {
+	if _, trusted := in.issuers[issuer]; !trusted {
+		issuer = ""
+	}
 	cause := introspectionFailureClass(err)
-	if _, logged := in.logged.LoadOrStore(cause, struct{}{}); logged {
+	key := struct{ issuer, cause string }{issuer, cause}
+	if _, logged := in.logged.LoadOrStore(key, struct{}{}); logged {
 		return
 	}
-	slog.Warn("keycard: token introspection failed", "cause", cause)
+	var configErr *oauth.ConfigurationError
+	var networkErr *oauth.NetworkError
+	var description string
+	switch {
+	case errors.As(err, &configErr):
+		description = configErr.Message
+	case errors.As(err, &networkErr):
+		description = networkErr.Message
+	}
+	if token != "" {
+		description = strings.ReplaceAll(description, token, "[redacted]")
+	}
+	slog.Warn("keycard: token introspection failed", "issuer", issuer, "cause", cause, "description", description)
 }
 
 func introspectionFailureClass(err error) string {

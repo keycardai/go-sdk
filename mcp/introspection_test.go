@@ -393,3 +393,66 @@ func TestBearerIntrospection_CachesDiscovery(t *testing.T) {
 		})
 	}
 }
+
+// Spec row 20 (bearer-token-verification-middleware): each verified zone logs its own failure cause once.
+func TestBearerIntrospection_LogsFailurePerVerifiedIssuer(t *testing.T) {
+	key := bindingKey(t)
+	a, b := "https://a.keycard.cloud", "https://b.keycard.cloud"
+	verifier, err := NewJWTOAuthTokenVerifier(&multiZoneKeyring{keys: map[string]crypto.PublicKey{
+		a: &key.PublicKey, b: &key.PublicKey,
+	}}, []string{a, b}, oauth.WithAudiences(bindingMCP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := mustMultiZone(t, map[string]ClientAuth{
+		a: {ClientID: "app-a", ClientSecret: "secret-a"},
+		b: {ClientID: "app-b", ClientSecret: "secret-b"},
+	})
+	tokens := map[string]string{
+		a: bindingToken(t, key, a, bindingMCP),
+		b: bindingToken(t, key, b, bindingMCP),
+	}
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "configuration", want: "does not advertise an introspection_endpoint"},
+		{name: "network", want: "introspection request failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := bindingWarnings(t)
+			client := &http.Client{Transport: introspectionTransport(func(r *http.Request) (*http.Response, error) {
+				issuer := "https://" + r.URL.Host
+				endpoint := ""
+				if tc.name == "network" {
+					endpoint = issuer + introspectionPath
+				}
+				if r.URL.Path == discoveryPath {
+					return introspectionResponse(200, fmt.Sprintf(`{"issuer":%q,"introspection_endpoint":%q}`, issuer, endpoint)), nil
+				}
+				return nil, fmt.Errorf("transport error contains %s", tokens[issuer])
+			})}
+			h := RequireBearerAuth(verifier, WithIntrospect(true), WithIntrospectionCredential(cred),
+				WithIntrospectionHTTPClient(client))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("unexpected handler call")
+			}))
+			for _, issuer := range []string{a, a, b, b} {
+				assertUnavailable(t, sendBindingRequest(h, bindingMCP, tokens[issuer], nil), false)
+			}
+			for _, issuer := range []string{a, b} {
+				count := 0
+				for _, line := range strings.Split(logs.String(), "\n") {
+					if strings.Contains(line, "issuer="+issuer) && strings.Contains(line, tc.want) {
+						count++
+					}
+				}
+				if count != 1 {
+					t.Errorf("issuer %s logged %d matching failures, want 1", issuer, count)
+				}
+				if strings.Contains(logs.String(), tokens[issuer]) {
+					t.Errorf("log for issuer %s contains the bearer token", issuer)
+				}
+			}
+		})
+	}
+}
