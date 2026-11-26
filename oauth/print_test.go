@@ -180,6 +180,14 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 			secrets: []string{"refresh-token", "client-secret"},
 		},
 		{
+			name: "IntrospectTokenRequest",
+			value: IntrospectTokenRequest{
+				Token: "introspection-token", TokenTypeHint: "access_token", Credential: discoveredSecret,
+			},
+			want:    "{TokenTypeHint:access_token Credential:*oauth.ClientSecretCredential}",
+			secrets: []string{"introspection-token", "discovered-secret"},
+		},
+		{
 			name: "RegistrationResponse",
 			value: &RegistrationResponse{
 				ClientID: "client-id", ClientSecret: "client-secret", RegistrationAccessToken: "registration-token",
@@ -383,6 +391,7 @@ func TestPrintedFormsListEveryField(t *testing.T) {
 		entry(&DeviceAuthorizationClient{}),
 		entry(IdentifiableKey{}),
 		entry(ImpersonateRequest{}, "ClientAssertion"),
+		entry(IntrospectTokenRequest{}, "Token"),
 		entry(&JWTSigner{}),
 		entry(&PEMPrivateKeyring{}),
 		entry(PKCEPair{}, "CodeVerifier"),

@@ -8,6 +8,7 @@
 //   - RFC 8628 device authorization grant ([DeviceAuthorizationClient])
 //   - Refresh token redemption ([RefreshAuthorization])
 //   - RFC 7009 token revocation ([RevokeToken])
+//   - RFC 7662 token introspection ([IntrospectToken])
 //   - OAuth authorization server metadata discovery ([FetchAuthorizationServerMetadata])
 //   - Application credentials ([ClientSecretCredential], [WebIdentityCredential],
 //     [WorkloadIdentityCredential] with pluggable [IdentityTokenSource] implementations)

@@ -67,3 +67,28 @@ func ExampleRevokeToken() {
 	fmt.Println("revoked")
 	// Output: revoked
 }
+
+func ExampleIntrospectToken() {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"active":false}`)
+	}))
+	defer server.Close()
+
+	credential, err := oauth.NewClientSecret("confidential-client", "example-secret")
+	if err != nil {
+		panic(err)
+	}
+	result, err := oauth.IntrospectToken(context.Background(), "", oauth.IntrospectTokenRequest{
+		Token:      "example-token",
+		Credential: credential,
+	}, oauth.WithIntrospectionMetadata(&oauth.AuthorizationServerMetadata{
+		Issuer:                server.URL,
+		IntrospectionEndpoint: server.URL + "/introspect",
+	}), oauth.WithIntrospectionHTTPClient(server.Client()))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("active:", result.Active)
+	// Output: active: false
+}
