@@ -91,8 +91,9 @@ func WithIntrospectionRequestTimeout(d time.Duration) IntrospectionOption {
 }
 
 // IntrospectToken checks a token at the issuer's advertised HTTPS introspection
-// endpoint. If [WithIntrospectionMetadata] supplies metadata, issuer may be
-// empty. The operation does not cache results or discovery, retry requests,
+// endpoint. Discovery requires an absolute HTTPS issuer URL. If
+// [WithIntrospectionMetadata] supplies metadata, issuer may be empty.
+// The operation does not cache results or discovery, retry requests,
 // or follow introspection redirects.
 func IntrospectToken(ctx context.Context, issuer string, req IntrospectTokenRequest, opts ...IntrospectionOption) (*TokenIntrospection, error) {
 	cfg := introspectionConfig{httpClient: http.DefaultClient, requestTimeout: defaultFetchTimeout}
@@ -117,6 +118,10 @@ func IntrospectToken(ctx context.Context, issuer string, req IntrospectTokenRequ
 	}
 	md := cfg.metadata
 	if md == nil {
+		issuerURL, err := url.Parse(issuer)
+		if err != nil || issuerURL.Scheme != "https" || issuerURL.Hostname() == "" {
+			return nil, &ConfigurationError{Message: "introspection discovery requires an absolute HTTPS issuer URL"}
+		}
 		md, err = FetchAuthorizationServerMetadata(ctx, issuer,
 			WithDiscoveryHTTPClient(cfg.httpClient), WithDiscoveryRequestTimeout(cfg.requestTimeout))
 		if err != nil {

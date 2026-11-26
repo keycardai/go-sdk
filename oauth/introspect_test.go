@@ -279,6 +279,20 @@ func TestIntrospectToken_ConfigurationError(t *testing.T) {
 	}
 }
 
+func TestIntrospectToken_RejectsHTTPDiscoveryIssuer(t *testing.T) {
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		return nil, nil
+	})}
+	got, err := IntrospectToken(context.Background(), "http://zone.example", IntrospectTokenRequest{
+		Token: "test-token", Credential: introspectionTestSecret(t),
+	}, WithIntrospectionHTTPClient(client))
+	var configErr *ConfigurationError
+	if got != nil || !errors.As(err, &configErr) {
+		t.Errorf("result = %v, error = %v; want nil, *ConfigurationError", got, err)
+	}
+}
+
 // Spec row 6: OAuth failures preserve the code, description, and HTTP status.
 // Spec row 7: retryable failures, including 5xx errors, do not trigger a retry.
 func TestIntrospectToken_EndpointError(t *testing.T) {
