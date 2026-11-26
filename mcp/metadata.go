@@ -230,12 +230,21 @@ func authMetadataHandler(binding *ResourceBinding, opts []MetadataOption) http.H
 		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			matches := documents[r.URL.RequestURI()]
-			for _, doc := range matches {
-				if len(matches) == 1 || canonicalAuthority(doc.id.metadata.Scheme, r.Host) == canonicalAuthority(doc.id.metadata.Scheme, doc.id.metadata.Host) {
-					baseURL := doc.id.public.Scheme + "://" + doc.id.public.Host
-					protectedResource(w, doc.id.value, baseURL, doc.issuers)
-					return
+			var selected *document
+			for i := range matches {
+				doc := &matches[i]
+				if len(matches) == 1 || strings.EqualFold(r.Host, doc.id.metadata.Host) {
+					selected = doc
+					break
 				}
+				if canonicalAuthority(doc.id.metadata.Scheme, r.Host) == canonicalAuthority(doc.id.metadata.Scheme, doc.id.metadata.Host) {
+					selected = doc
+				}
+			}
+			if selected != nil {
+				baseURL := selected.id.public.Scheme + "://" + selected.id.public.Host
+				protectedResource(w, selected.id.value, baseURL, selected.issuers)
+				return
 			}
 		}
 		mux.ServeHTTP(w, r)

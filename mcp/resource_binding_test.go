@@ -481,6 +481,21 @@ func TestResourceBinding_ZoneMetadataDefaultPort(t *testing.T) {
 	}
 }
 
+func TestResourceBinding_ZoneMetadataPrefersExactAuthority(t *testing.T) {
+	const exact = "http://api.example.com:443/mcp"
+	const alias = "https://api.example.com/mcp"
+	b := makeBinding(t, bindingIssuer, WithResourceIdentifiersByZone(map[string]string{"a": exact, "b": alias}))
+	// Rebuild the handler to vary the zone map's iteration order.
+	for range 32 {
+		h := b.MetadataHandler()
+		assertProtectedDocument(t, sendBindingRequest(h, "http://API.example.com:443"+protectedResourcePath+"/mcp", "", nil),
+			exact, "https://a.keycard.cloud")
+		if t.Failed() {
+			break
+		}
+	}
+}
+
 // Spec row 10 (oauth-metadata-endpoints): the application mounts auth but registers discovery at the host root.
 func TestResourceBinding_MountedDiscovery(t *testing.T) {
 	const id = bindingHost + "/app/mcp"
