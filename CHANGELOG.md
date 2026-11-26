@@ -1,3 +1,10 @@
+## v0.35.0 (2026-11-26)
+
+
+- feat(oauth): token revocation (ID-881) (#84)
+- Adds oauth.RevokeToken (RFC 7009) per keycard-sdk-spec token-revocation.md, plus NetworkError.
+- revocation_endpoint and revocation_endpoint_auth_methods_supported are now typed fields on AuthorizationServerMetadata, so they are no longer in AuthorizationServerMetadata.Extra.
+
 ## v0.34.1 (2026-11-25)
 
 
