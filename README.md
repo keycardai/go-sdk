@@ -38,9 +38,9 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 
 Builds on `oauth` to provide server-side and client-side MCP authentication.
 
-- **Bearer auth middleware**: `RequireBearerAuth` (standard `net/http` middleware), audience-bound via `oauth.WithAudiences`
+- **Bearer auth middleware**: `ResourceBinding.BearerAuth` (standard `net/http` middleware), bound to a configured resource identifier
 - **Token exchange orchestration**: `AuthProvider`, `AccessContext`; the `Grant` decorator with `WithUserIdentifier` (impersonation) and `WithRequestScopes`
-- **Metadata endpoints**: `AuthMetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
+- **Metadata endpoints**: `ResourceBinding.MetadataHandler` (`.well-known` endpoints, including `WithPublicJWKS`)
 
 Application credentials moved to the `oauth` package; `mcp` re-exports them as deprecated aliases, so existing imports keep working.
 
@@ -101,27 +101,30 @@ or dependency on this module.
 ```go
 mux := http.NewServeMux()
 
-mux.Handle("/.well-known/", mcp.AuthMetadataHandler(
-    mcp.WithIssuer("https://your-zone.keycard.cloud"),
+binding, err := mcp.NewResourceBinding("https://your-zone.keycard.cloud",
+    mcp.WithResourceIdentifier("https://api.example.com/api/hello"))
+if err != nil {
+    log.Fatal(err)
+}
+mux.Handle("/.well-known/", binding.MetadataHandler(
     mcp.WithScopesSupported([]string{"mcp:tools"}),
 ))
 
-// The verifier trusts only tokens issued by this zone, and WithAudiences
-// binds it to this server's resource identifier; without it the verifier
-// accepts a token minted for any resource in the zone and warns at startup.
-verifier, _ := mcp.NewZoneTokenVerifier("https://your-zone.keycard.cloud",
-    oauth.WithAudiences("https://api.example.com"))
-
-protected := mcp.RequireBearerAuth(
-    verifier,
-    mcp.WithRequiredScopes("mcp:tools"),
-)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+requireBearer, err := binding.BearerAuth(mcp.WithRequiredScopes("mcp:tools"))
+if err != nil {
+    log.Fatal(err)
+}
+protected := requireBearer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     info := mcp.AuthInfoFromRequest(r)
     fmt.Fprintf(w, "Hello, %s!", info.ClientID)
 }))
 
 mux.Handle("GET /api/hello", protected)
 ```
+
+The exact identifier drives the token audience, metadata document and challenge.
+See [resource binding modes and routing](mcp/README.md#resource-binding) for
+mounted handlers, multi-zone servers and verifier-only modes.
 
 ### Delegated access via token exchange
 
