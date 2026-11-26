@@ -1,6 +1,6 @@
 [tool.commitizen]
 name = "cz_customize"
-version = "0.0.0"
+version = "0.1.0"
 tag_format = "spiffe/v${version}"
 bump_message = "bump: spiffe $current_version → $new_version"
 major_version_zero = true
