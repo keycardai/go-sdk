@@ -169,7 +169,8 @@ func WithTokenExchangeNegativeTTL(d time.Duration) TokenExchangeClientOption {
 // It lazily discovers the token endpoint via OAuth metadata and caches it for the
 // discovery TTL; concurrent callers share one discovery fetch.
 //
-// String, GoString, and LogValue show the issuer and client ID only.
+// String, GoString, and LogValue show the issuer, the client ID, and the types of
+// the credential and the actor token source.
 type TokenExchangeClient struct {
 	issuerURL string
 	cfg       tokenExchangeConfig
@@ -180,6 +181,8 @@ func (c *TokenExchangeClient) printed() printed.Struct {
 	return printed.Struct{Type: "oauth.TokenExchangeClient", Fields: []printed.Field{
 		{Name: "Issuer", Key: "issuer", Value: c.issuerURL},
 		{Name: "ClientID", Key: "client_id", Value: c.cfg.clientID},
+		{Name: "Credential", Key: "credential", Value: printed.TypeName(c.cfg.credential)},
+		{Name: "Actor", Key: "actor", Value: printed.TypeName(c.cfg.actor)},
 	}}
 }
 

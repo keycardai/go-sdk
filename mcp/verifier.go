@@ -48,6 +48,8 @@ func (a AuthInfo) printed() printed.Struct {
 		{Name: "Subject", Key: "subject", Value: a.Subject},
 		{Name: "SubProfile", Key: "sub_profile", Value: a.SubProfile},
 		{Name: "KeycardAppID", Key: "keycard_app_id", Value: a.KeycardAppID},
+		{Name: "Aud", Key: "aud", Value: a.Aud},
+		{Name: "Act", Key: "act", Value: a.Act},
 		{Name: "Scopes", Key: "scopes", Value: a.Scopes},
 		{Name: "Resource", Key: "resource", Value: a.Resource},
 		{Name: "ExpiresAt", Key: "expires_at", Value: a.ExpiresAt},
