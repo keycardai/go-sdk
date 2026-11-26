@@ -50,6 +50,9 @@ type WorkloadIdentityRuntimeError struct {
 	Source  string
 	Message string
 	Err     error
+	// Transient marks a failure the source knows can succeed on retry, for a
+	// source outside this package whose cause is not an HTTP or network error.
+	Transient bool
 }
 
 func (e *WorkloadIdentityRuntimeError) Error() string {
@@ -61,8 +64,12 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// Retryable reports whether the source fails with a transient transport error.
+// Retryable reports whether the source marks the failure Transient or fails
+// with a transient transport error. Caller cancellation is never retryable.
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
+	if e.Transient {
+		return !errors.Is(e.Err, context.Canceled)
+	}
 	var sourceStatus workloadIdentityHTTPStatusError
 	if errors.As(e.Err, &sourceStatus) {
 		return retryableHTTPStatus(int(sourceStatus))
