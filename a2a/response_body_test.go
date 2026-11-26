@@ -64,7 +64,8 @@ func readPeerReply(t *testing.T, target string, invoke bool, limit int64) error 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = client.invoke(context.Background(), target, "token", NewTextMessage("ping"))
+	targetOrigin, _ := endpointOrigin(target, false)
+	_, _, err = client.invoke(context.Background(), target, targetOrigin, target, "token", NewTextMessage("ping"))
 	return err
 }
 
