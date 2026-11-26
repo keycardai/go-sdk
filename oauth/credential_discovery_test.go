@@ -317,6 +317,39 @@ func TestDiscoverCredentialEmptyExplicitEnvironmentIsAbsent(t *testing.T) {
 	wantCredentialDiscoveryError(t, map[string]string{}, "absent", nil)
 }
 
+// Spec rows 23 and 24: web identity discovery carries an optional client ID.
+func TestDiscoverCredentialWebIdentityClientID(t *testing.T) {
+	dir := t.TempDir()
+	for _, selection := range []struct {
+		name, key, value, wantDir string
+	}{
+		{"inferred", webIdentityStorageEnv, dir, dir},
+		{"explicit default storage", credentialTypeEnv, webIdentityType, resolveWebIdentityStorageDir()},
+	} {
+		t.Run(selection.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, id string
+				set      bool
+			}{
+				{"row 23 set", "client", true},
+				{"row 24 unset", "", false},
+				{"row 24 empty", "", true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					env := map[string]string{selection.key: selection.value}
+					if tc.set {
+						env[clientIDEnv] = tc.id
+					}
+					cred := wantDiscoveredWebIdentity(t, env, selection.wantDir)
+					if got := cred.ClientID(); got != tc.id {
+						t.Errorf("ClientID = %q, want %q", got, tc.id)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestCredentialDiscoveryErrorUnwrap(t *testing.T) {
 	cause := errors.New("cause")
 	err := fmt.Errorf("startup: %w", &CredentialDiscoveryError{Message: "discovery failed", Err: cause})
