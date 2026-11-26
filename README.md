@@ -50,6 +50,17 @@ One agent calling another on the user's behalf: discover the target agent's card
 
 - **Delegation**: `DelegationClient`, `ServiceDiscovery`
 
+Delegation only accepts invocation endpoints on the target's origin by default.
+Use `a2a.WithTrustedEndpointOrigins` for trusted gateways on another origin.
+An untrusted endpoint returns a non-retryable `a2a.ConfigurationError` before
+token exchange.
+
+Default HTTP clients limit decoded peer replies to 64 MiB. Use
+`a2a.WithMaxPeerResponseBytes` for delegation or
+`a2a.WithDiscoveryMaxPeerResponseBytes` for standalone discovery. Overflow
+returns a typed `a2a.ResponseBodyTooLargeError` in the error chain. Neither
+option changes the 1 MiB token-exchange limit or caps a supplied HTTP client.
+
 ### `spiffe`: SPIFFE JWT-SVID Workload Identity
 
 The optional module is installable with `go get github.com/keycardai/go-sdk/spiffe`
