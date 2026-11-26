@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"testing"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/internal/printed/printedtest"
 	"github.com/keycardai/go-sdk/oauth"
 )
@@ -77,9 +78,11 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 			name: "AuthInfo",
 			value: &AuthInfo{
 				Token: "bearer-token", ClientID: "client-id", Subject: "user-1", SubProfile: "user",
+				Aud: []string{"https://api.example.com"}, Act: map[string]any{"sub": "agent-1"},
 				Scopes: []string{"read"}, ExpiresAt: 1767226200, Issuer: issuer,
 			},
-			want: "{ClientID:client-id Subject:user-1 SubProfile:user KeycardAppID: Scopes:[read] Resource: " +
+			want: "{ClientID:client-id Subject:user-1 SubProfile:user KeycardAppID: Aud:[https://api.example.com] " +
+				"Act:map[sub:agent-1] Scopes:[read] Resource: " +
 				"ExpiresAt:1767226200 Issuer:https://zone.example.com}",
 			secrets: []string{"bearer-token"},
 		},
@@ -113,4 +116,19 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 // form, including slog, which must not call LogValue on a nil *OAuthTokens.
 func TestPrintEmptyTokenStore(t *testing.T) {
 	printedtest.Check(t, NewInMemoryTokenStore(), "{Tokens:<nil>}", "LogValue panicked")
+}
+
+// TestPrintedFormsListEveryField checks that every exported field of each mcp type
+// with a printed form is either printed or marked secret.
+func TestPrintedFormsListEveryField(t *testing.T) {
+	entry := func(v interface{ printed() printed.Struct }, secret ...string) printedtest.Type {
+		return printedtest.Type{Value: v, Form: v.printed(), Secret: secret}
+	}
+	printedtest.CheckFields(t, ".", []printedtest.Type{
+		entry(AuthInfo{}, "Token"),
+		entry(&AuthProvider{}),
+		entry(NewInMemoryTokenStore()),
+		entry(&JSONWebTokenSigner{}),
+		entry(OAuthTokens{}, "AccessToken", "RefreshToken"),
+	})
 }

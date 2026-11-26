@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/internal/printed/printedtest"
 )
 
@@ -14,5 +15,16 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	printedtest.Check(t, client, "{Exchange:{Issuer:https://zone.example.com ClientID:client-id} InvokeTimeout:5s}", "client-secret")
+	printedtest.Check(t, client, "{Exchange:{Issuer:https://zone.example.com ClientID:client-id Credential:<nil> Actor:<nil>} InvokeTimeout:5s}", "client-secret")
+}
+
+// TestPrintedFormsListEveryField checks that every exported field of each a2a type
+// with a printed form is either printed or marked secret.
+func TestPrintedFormsListEveryField(t *testing.T) {
+	entry := func(v interface{ printed() printed.Struct }, secret ...string) printedtest.Type {
+		return printedtest.Type{Value: v, Form: v.printed(), Secret: secret}
+	}
+	printedtest.CheckFields(t, ".", []printedtest.Type{
+		entry(&DelegationClient{}),
+	})
 }

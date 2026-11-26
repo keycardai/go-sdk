@@ -8,12 +8,22 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/internal/printed/printedtest"
 )
 
+// Spec row 9 (client-secret): the client authentication result shows the header
+// name Authorization and no header value or client secret.
+// Spec row 38 (device-authorization): no printed form of a DeviceAuthorization
+// holds the device_code, and every other field is shown.
+// Spec row 27 (token-exchange): no printed form of a token-exchange request or a
+// token response holds a token, and every other field is shown.
+//
 // TestPrintLeavesOutSecrets builds each type that holds a secret the way a caller
 // gets it, and checks its String output and that no fmt or slog form holds a secret.
 // internal/printed checks the exact GoString and slog forms.
@@ -77,6 +87,25 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 		AccessToken: "access-token", TokenType: "Bearer", ExpiresIn: 3600, RefreshToken: "refresh-token",
 		IDToken: "id-token", Scope: []string{"openid"}, IssuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
 	}
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("file-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	discoveredSecret, err := DiscoverCredential(map[string]string{
+		"KEYCARD_CLIENT_ID": "client-id", "KEYCARD_CLIENT_SECRET": "discovered-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoveredWorkload, err := DiscoverCredential(map[string]string{
+		"KEYCARD_CLIENT_ID": "client-id", "AWS_WEB_IDENTITY_TOKEN_FILE": tokenFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorClient := NewTokenExchangeClient(issuer, WithTokenExchangeCredential(clientSecret),
+		WithTokenExchangeActor(IdentityTokenFunc(func(context.Context) (string, error) { return "actor-token", nil })))
+
 	accessContext := NewAccessContext()
 	accessContext.SetToken("https://api-a.example.com", token)
 	accessContext.SetResourceError("https://api-b.example.com", ErrorDetail{Message: "denied", Code: "access_denied"})
@@ -200,8 +229,52 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 		{
 			name:    "TokenExchangeClient",
 			value:   NewTokenExchangeClient(issuer, WithClientCredentials("client-id", "client-secret")),
-			want:    "{Issuer:https://zone.example.com ClientID:client-id}",
+			want:    "{Issuer:https://zone.example.com ClientID:client-id Credential:<nil> Actor:<nil>}",
 			secrets: []string{"client-secret"},
+		},
+		{
+			name:    "TokenExchangeClient with a credential and an actor token source",
+			value:   actorClient,
+			want:    "{Issuer:https://zone.example.com ClientID: Credential:*oauth.ClientSecretCredential Actor:oauth.IdentityTokenFunc}",
+			secrets: []string{"client-secret", "actor-token"},
+		},
+		{
+			name: "ClientCredentialsRequest",
+			value: ClientCredentialsRequest{
+				Resource: "https://api.example.com", Scope: "read", ClientAssertion: "assertion-jwt",
+				ClientAssertionType: "jwt-bearer", ClientID: "client-id",
+			},
+			want:    "{Resource:https://api.example.com Scope:read ClientAssertionType:jwt-bearer ClientID:client-id}",
+			secrets: []string{"assertion-jwt"},
+		},
+		{
+			name: "ImpersonateRequest",
+			value: ImpersonateRequest{
+				UserIdentifier: "user-1", Resource: "https://api.example.com", Scopes: []string{"read"},
+				ClientAssertion: "assertion-jwt", ClientAssertionType: "jwt-bearer",
+			},
+			want:    "{UserIdentifier:user-1 Resource:https://api.example.com Scopes:[read] ClientAssertionType:jwt-bearer}",
+			secrets: []string{"assertion-jwt"},
+		},
+		{
+			name: "RevokeTokenRequest",
+			value: RevokeTokenRequest{
+				Token: "refresh-token", TokenTypeHint: "refresh_token", ClientID: "client-id", ClientSecret: "client-secret",
+			},
+			want:    "{TokenTypeHint:refresh_token ClientID:client-id Credential:<nil>}",
+			secrets: []string{"refresh-token", "client-secret"},
+		},
+		{
+			name:    "discovered ClientSecretCredential",
+			value:   discoveredSecret,
+			want:    "{ClientID:client-id Issuers:[]}",
+			secrets: []string{"discovered-secret"},
+		},
+		{
+			name:    "discovered WorkloadIdentityCredential",
+			value:   discoveredWorkload,
+			want:    "{ClientID:client-id Source:*oauth.FileTokenSource}",
+			secrets: []string{"file-token"},
 		},
 		{
 			name:    "ClientCredentialsClient",
@@ -218,7 +291,7 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 		{
 			name:    "AccessContext",
 			value:   accessContext,
-			want:    "{Resources:[https://api-a.example.com] ResourceErrors:map[https://api-b.example.com:{denied access_denied  }] GlobalError:<nil>}",
+			want:    "{Resources:[https://api-a.example.com] ResourceErrors:map[https://api-b.example.com:{denied access_denied  <nil> }] GlobalError:<nil>}",
 			secrets: []string{"access-token", "refresh-token", "id-token"},
 		},
 		{
@@ -253,6 +326,10 @@ func TestPrintLeavesOutSecrets(t *testing.T) {
 	}
 }
 
+// Spec row 38 (device-authorization): the JSON of a DeviceAuthorization has the
+// device_code.
+// Spec row 27 (token-exchange): the JSON of a token response has every token.
+//
 // TestJSONKeepsSecrets checks that encoding/json still writes the values that the
 // printed forms leave out, so persisted tokens and device authorizations still work.
 func TestJSONKeepsSecrets(t *testing.T) {
@@ -284,4 +361,39 @@ func TestJSONKeepsSecrets(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPrintedFormsListEveryField checks that every exported field of each type with
+// a printed form is either printed or marked secret, so a new field cannot drop out
+// of the printed form unnoticed.
+func TestPrintedFormsListEveryField(t *testing.T) {
+	entry := func(v interface{ printed() printed.Struct }, secret ...string) printedtest.Type {
+		return printedtest.Type{Value: v, Form: v.printed(), Secret: secret}
+	}
+	printedtest.CheckFields(t, ".", []printedtest.Type{
+		entry(NewAccessContext()),
+		entry(AuthenticateRequest{}, "ClientSecret"),
+		entry(AuthorizationCodeExchangeRequest{}, "Code", "CodeVerifier", "ClientSecret"),
+		entry(ClientAuth{}, "ClientSecret"),
+		entry(ClientAuthentication{}),
+		entry(&ClientCredentialsClient{}),
+		entry(ClientCredentialsRequest{}, "ClientAssertion"),
+		entry(&ClientSecretCredential{}),
+		entry(DeviceAuthorization{}, "DeviceCode"),
+		entry(&DeviceAuthorizationClient{}),
+		entry(IdentifiableKey{}),
+		entry(ImpersonateRequest{}, "ClientAssertion"),
+		entry(&JWTSigner{}),
+		entry(&PEMPrivateKeyring{}),
+		entry(PKCEPair{}, "CodeVerifier"),
+		entry(&PrivateKeyManager{}),
+		entry(RefreshAuthorizationRequest{}, "RefreshToken", "ClientSecret"),
+		entry(RegistrationResponse{}, "ClientSecret", "RegistrationAccessToken"),
+		entry(RevokeTokenRequest{}, "Token", "ClientSecret"),
+		entry(&TokenExchangeClient{}),
+		entry(TokenExchangeRequest{}, "SubjectToken", "ActorToken", "ClientAssertion"),
+		entry(TokenResponse{}, "AccessToken", "RefreshToken", "IDToken"),
+		entry(&WebIdentityCredential{}),
+		entry(&WorkloadIdentityCredential{}),
+	})
 }
