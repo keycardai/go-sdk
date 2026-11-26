@@ -134,7 +134,7 @@ def submodule_increment(name: str) -> str | None:
         match = re.match(r"^(feat|fix|refactor|perf)(\(.+\))?(!)?:", subject)
         if not match:
             continue
-        if match.group(3) or "BREAKING CHANGE" in message:
+        if match.group(3) or re.search(r"^BREAKING[- ]CHANGE", message, re.M):
             # Like major_version_zero, a breaking change below 1.0.0 is a
             # minor bump; a Go v2+ module would also need a new module path.
             return "MINOR" if submodule_version(name).startswith("0.") else "MAJOR"
