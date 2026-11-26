@@ -327,8 +327,11 @@ func TestBearerIntrospection_LogsEachFailureOnce(t *testing.T) {
 	key := bindingKey(t)
 	token := bindingToken(t, key, bindingIssuer, bindingMCP)
 	code := "invalid_client"
+	requests := 0
 	client := introspectionClient(t, func(*http.Request) (*http.Response, error) {
-		return introspectionResponse(500, fmt.Sprintf(`{"error":%q,"error_description":%q}`, code, token)), nil
+		requests++
+		description := fmt.Sprintf("request %d: %s", requests, token)
+		return introspectionResponse(500, fmt.Sprintf(`{"error":%q,"error_description":%q}`, code, description)), nil
 	})
 	h := singleIntrospectionBinding(t, key, WithIntrospect(true),
 		WithIntrospectionCredential(mustClientSecret(t, "app", "secret")), WithIntrospectionHTTPClient(client))

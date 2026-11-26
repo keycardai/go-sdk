@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -123,28 +122,49 @@ func (in *bearerIntrospection) check(ctx context.Context, issuer, token string) 
 }
 
 func (in *bearerIntrospection) logFailure(err error) {
-	cause := fmt.Sprintf("%T", err)
-	key := sha256.Sum256([]byte(cause + ":" + err.Error()))
-	if _, logged := in.logged.LoadOrStore(key, struct{}{}); logged {
+	cause := introspectionFailureClass(err)
+	if _, logged := in.logged.LoadOrStore(cause, struct{}{}); logged {
 		return
 	}
+	slog.Warn("keycard: token introspection failed", "cause", cause)
+}
+
+func introspectionFailureClass(err error) string {
 	var oauthErr *oauth.OAuthError
 	var httpErr *oauth.HTTPError
+	var networkErr *oauth.NetworkError
+	var configErr *oauth.ConfigurationError
+	var metadataErr *oauth.InvalidMetadataError
+	var issuerErr *oauth.IssuerMismatchError
 	switch {
 	case errors.As(err, &oauthErr):
-		status := oauthErr.Status
+		cause := "OAuth error"
 		switch oauthErr.ErrorCode {
 		case "invalid_client", "invalid_request", "invalid_response", "server_error", "temporarily_unavailable":
-			cause = fmt.Sprintf("OAuth %s (HTTP %d)", oauthErr.ErrorCode, status)
-		default:
-			cause = fmt.Sprintf("OAuth error (HTTP %d)", status)
+			cause = "OAuth " + oauthErr.ErrorCode
 		}
+		if status := oauthErr.Status; status >= 100 && status <= 599 {
+			return fmt.Sprintf("%s (HTTP %d)", cause, status)
+		}
+		return cause
 	case errors.As(err, &httpErr):
-		cause = fmt.Sprintf("HTTP %d", httpErr.Status)
+		if status := httpErr.Status; status >= 100 && status <= 599 {
+			return fmt.Sprintf("HTTP %d", status)
+		}
+		return "HTTP error"
 	case errors.Is(err, context.DeadlineExceeded):
-		cause = "request deadline exceeded"
+		return "request deadline exceeded"
 	case errors.Is(err, context.Canceled):
-		cause = "request canceled"
+		return "request canceled"
+	case errors.As(err, &networkErr):
+		return "network error"
+	case errors.As(err, &configErr):
+		return "configuration error"
+	case errors.As(err, &metadataErr):
+		return "invalid authorization server metadata"
+	case errors.As(err, &issuerErr):
+		return "authorization server issuer mismatch"
+	default:
+		return "other error"
 	}
-	slog.Warn("keycard: token introspection failed", "cause", cause)
 }
