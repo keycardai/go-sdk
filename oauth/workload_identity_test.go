@@ -82,6 +82,7 @@ func TestWorkloadIdentity_FetchesFreshTokenEveryExchange(t *testing.T) {
 	}
 }
 
+// Spec row 23: a plain custom source error is not retryable.
 func TestWorkloadIdentity_WrapsCustomSourceError(t *testing.T) {
 	cause := errors.New("socket unavailable")
 	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(_ context.Context) (string, error) {
@@ -102,6 +103,18 @@ func TestWorkloadIdentity_WrapsCustomSourceError(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Errorf("errors.Is(cause): cause was dropped, got %v", err)
 	}
+	if runtimeErr.Retryable() {
+		t.Error("unmarked custom error is retryable")
+	}
+
+	httpCause := &HTTPError{Status: http.StatusTooManyRequests}
+	_, err = fetchIdentityToken(context.Background(), IdentityTokenFunc(func(context.Context) (string, error) {
+		return "", fmt.Errorf("source failed: %w", httpCause)
+	}))
+	if !errors.As(err, &runtimeErr) || runtimeErr.Source != "custom" ||
+		!errors.Is(err, httpCause) || runtimeErr.Retryable() {
+		t.Errorf("unmarked custom error with 429 cause: %v", err)
+	}
 }
 
 func TestWorkloadIdentity_PassesThroughTypedSourceError(t *testing.T) {
@@ -120,6 +133,18 @@ func TestWorkloadIdentity_PassesThroughTypedSourceError(t *testing.T) {
 	}
 	if runtimeErr.Source != "file" {
 		t.Errorf("source: got %q, want the source's own identifier preserved", runtimeErr.Source)
+	}
+}
+
+// Spec row 24: a marked custom error retains its identity and cause.
+func TestWorkloadIdentity_PassesThroughMarkedCustomError(t *testing.T) {
+	cause := errors.New("temporarily unavailable")
+	marked := &WorkloadIdentityRuntimeError{Source: "test-source", Err: cause, Transient: true}
+	_, err := fetchIdentityToken(context.Background(), IdentityTokenFunc(func(context.Context) (string, error) {
+		return "", marked
+	}))
+	if err != marked || marked.Source != "test-source" || !errors.Is(err, cause) || !marked.Retryable() {
+		t.Fatalf("marked custom error was not passed through: %v", err)
 	}
 }
 
@@ -172,6 +197,38 @@ func TestNewFileTokenSource_ConfigErrorOnMissingFile(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("errors.Is(os.ErrNotExist): cause was dropped, got %v", err)
+	}
+}
+
+// Spec rows 21 and 22: an emptied or removed token file is retryable at runtime.
+func TestFileTokenSource_RetryableAfterConstruction(t *testing.T) {
+	for name, invalidate := range map[string]func(string) error{
+		"emptied": func(path string) error { return os.WriteFile(path, nil, 0600) },
+		"removed": os.Remove,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(path, []byte("token"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			source, err := NewFileTokenSource(WithFileTokenPath(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := invalidate(path); err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.IdentityToken(context.Background())
+			var runtimeErr *WorkloadIdentityRuntimeError
+			if !errors.As(err, &runtimeErr) || runtimeErr.Source != "file" || !runtimeErr.Retryable() {
+				t.Fatalf("expected a retryable file runtime error, got %v", err)
+			}
+			_, err = NewFileTokenSource(WithFileTokenPath(path))
+			var configErr *WorkloadIdentityConfigurationError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("expected a configuration error, got %v", err)
+			}
+		})
 	}
 }
 
@@ -303,10 +360,18 @@ func TestGCPMetadataTokenSource_RuntimeErrorOnFailure(t *testing.T) {
 				http.Error(w, "not found", http.StatusNotFound)
 			},
 		},
+		// Spec row 20: the 429 status wins regardless of the body.
 		{
 			name: "rate limited",
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "rate limited", http.StatusTooManyRequests)
+			},
+			retryable: true,
+		},
+		{
+			name: "rate limited with permanent OAuth code",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, `{"error":"invalid_client"}`, http.StatusTooManyRequests)
 			},
 			retryable: true,
 		},
@@ -465,6 +530,21 @@ func TestFlyTokenSource_EmptyObjectBodyWithoutAudience(t *testing.T) {
 }
 
 func TestFlyTokenSource_RuntimeErrorOnFailure(t *testing.T) {
+	// Spec row 20: the 429 status wins regardless of the body.
+	for _, body := range []string{"", `{"error":"invalid_client"}`} {
+		t.Run("429 "+body, func(t *testing.T) {
+			socketPath := startFlySocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, body, http.StatusTooManyRequests)
+			}))
+			source := NewFlyTokenSource(WithFlySocketPath(socketPath))
+			_, err := source.IdentityToken(context.Background())
+			var runtimeErr *WorkloadIdentityRuntimeError
+			if !errors.As(err, &runtimeErr) || runtimeErr.Source != "fly" || !runtimeErr.Retryable() {
+				t.Fatalf("expected a retryable Fly runtime error, got %v", err)
+			}
+		})
+	}
+
 	t.Run("non-200 status", func(t *testing.T) {
 		socketPath := startFlySocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "machine not found", http.StatusNotFound)
