@@ -1,0 +1,11 @@
+[tool.commitizen]
+name = "cz_customize"
+version = "0.0.0"
+tag_format = "spiffe/v${version}"
+bump_message = "bump: spiffe $current_version → $new_version"
+major_version_zero = true
+
+[tool.commitizen.customize]
+# scripts/bump.py passes the increment from commits that touch spiffe/, so a
+# root-only commit never bumps this module.
+changelog_pattern = '^(feat|fix|refactor|perf|test|build|ci|revert)(\(.+\))?(!)?:'

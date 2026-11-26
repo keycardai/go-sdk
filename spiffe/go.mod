@@ -5,7 +5,7 @@ go 1.25.0
 replace github.com/keycardai/go-sdk => ..
 
 require (
-	github.com/keycardai/go-sdk v0.37.0
+	github.com/keycardai/go-sdk v0.41.0
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	google.golang.org/grpc v1.83.2
 )

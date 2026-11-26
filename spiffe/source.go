@@ -4,7 +4,6 @@ package spiffe
 import (
 	"context"
 	"errors"
-	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -99,7 +98,7 @@ func (s *SpiffeJwtSvidSource) IdentityToken(ctx context.Context) (string, error)
 	err = waitForConnection(initCtx, conn)
 	cancel()
 	if err != nil {
-		return "", runtimeError("connecting to the SPIFFE Workload API", &net.OpError{Op: "connect", Net: "unix", Err: err})
+		return "", runtimeError("connecting to the SPIFFE Workload API", err, true)
 	}
 
 	// Use the official RPC directly to keep the assertion opaque.
@@ -117,12 +116,12 @@ func (s *SpiffeJwtSvidSource) IdentityToken(ctx context.Context) (string, error)
 		if status.Code(err) == codes.Canceled && ctx.Err() == context.Canceled {
 			err = errors.Join(context.Canceled, err)
 		}
-		return "", runtimeError("fetching JWT-SVID from the SPIFFE Workload API", &net.OpError{Op: "fetch", Net: "unix", Err: err})
+		return "", runtimeError("fetching JWT-SVID from the SPIFFE Workload API", err, true)
 	}
 	if token := svids[0].GetSvid(); token != "" {
 		return token, nil
 	}
-	return "", runtimeError("the SPIFFE Workload API returned an empty JWT-SVID", nil)
+	return "", runtimeError("the SPIFFE Workload API returned an empty JWT-SVID", nil, false)
 }
 
 func (s *SpiffeJwtSvidSource) connection() (*grpc.ClientConn, error) {
@@ -205,6 +204,8 @@ func configurationError(message string, err error) error {
 	return &oauth.WorkloadIdentityConfigurationError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err}
 }
 
-func runtimeError(message string, err error) error {
-	return &oauth.WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err}
+// runtimeError marks an unreachable agent, a timeout or a missing SVID
+// Transient, so it is retryable unless the caller canceled.
+func runtimeError(message string, err error, transient bool) error {
+	return &oauth.WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err, Transient: transient}
 }

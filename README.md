@@ -63,9 +63,9 @@ option changes the 1 MiB token-exchange limit or caps a supplied HTTP client.
 
 ### `spiffe`: SPIFFE JWT-SVID Workload Identity
 
-The optional module is installable with `go get github.com/keycardai/go-sdk/spiffe`
-starting with its first `spiffe/vX.Y.Z` tag. The module depends on the
-core SDK at `v0.37.0`, which provides `WorkloadIdentityRuntimeError.Retryable()`.
+The optional module is installable with `go get github.com/keycardai/go-sdk/spiffe`.
+It is released separately with `spiffe/vX.Y.Z` tags and depends on the core SDK
+release that provides `WorkloadIdentityRuntimeError.Transient`.
 It uses the official go-spiffe library and keeps gRPC out of the core SDK.
 
 ```go

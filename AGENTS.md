@@ -52,7 +52,7 @@ Conventional commits, `type(scope): description`. Validated on PRs with `cz chec
 - Release-triggering types (`changelog_pattern`): `feat`, `fix`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`, with any or no scope. `docs` and `chore` do not release.
 - Breaking change: `!` after the type/scope (`fix(oauth)!: ...`). `major_version_zero = true`, so breaking changes land as minors while the module is 0.x.
 - Merge to `main` runs `main.yml`, which runs `scripts/bump.py`: `cz bump --changelog --yes`, then pushes the bump commit and a `v<version>` tag to main using the release app token. The Go module proxy serves the tag; there is no publish workflow.
-- The SPIFFE module requires separate `spiffe/vX.Y.Z` tags, which `scripts/bump.py` does not produce. Before tagging SPIFFE, ensure its declared root requirement contains the OAuth APIs it uses.
+- The SPIFFE module has its own version in `spiffe/.cz.toml`. On a push to main, `scripts/bump.py` bumps the root, then tags `spiffe/vX.Y.Z` when commits since the last SPIFFE tag touch `spiffe/`, with the increment taken from those commits. Keep the declared root requirement in `spiffe/go.mod` at a released root version that contains the OAuth APIs it uses.
 - Never hand-edit the root `.cz.toml` version, root release tags or `CHANGELOG.md`; the bump job owns them. A bad release is retracted in `go.mod` (see `retract v0.14.0`), not by editing tags.
 
 ## Spec first
