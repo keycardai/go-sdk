@@ -1,3 +1,15 @@
+## v0.38.0 (2026-11-26)
+
+
+- feat(a2a): bound decoded peer replies (#86)
+- * feat(a2a): bound decoded peer replies
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * docs(a2a): note that a supplied ServiceDiscovery keeps its own peer limit
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.37.0 (2026-11-26)
 
 
