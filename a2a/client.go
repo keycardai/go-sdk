@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -199,14 +200,10 @@ func NewDelegationClient(issuer, clientID, clientSecret string, opts ...Delegati
 		oauth.WithTokenExchangeHTTPClient(httpClient),
 	)
 
-	invocationHTTPClient := *httpClient
-	invocationHTTPClient.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
 	return &DelegationClient{
 		exchange:       exchange,
 		discovery:      discovery,
-		httpClient:     &invocationHTTPClient,
+		httpClient:     httpClient,
 		wire:           wire,
 		invokeTimeout:  cfg.invokeTimeout,
 		peerLimit:      peerLimit,
@@ -365,6 +362,18 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
+func (c *DelegationClient) checkRedirectOrigin(redirect *url.URL, target, targetOrigin string) error {
+	origin, valid := endpointOrigin(redirect.String(), false)
+	_, trusted := c.trustedOrigins[origin]
+	if valid && (origin == targetOrigin || trusted) {
+		return nil
+	}
+	if !valid {
+		origin = redirect.Scheme + "://" + redirect.Host
+	}
+	return &ConfigurationError{Message: fmt.Sprintf("redirect origin %s is not trusted for target %q", origin, target)}
+}
+
 func (c *DelegationClient) invoke(ctx context.Context, target, targetOrigin, endpoint, bearer string, msg Message) (Message, *Task, error) {
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -385,27 +394,33 @@ func (c *DelegationClient) invoke(ctx context.Context, target, targetOrigin, end
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set(c.wire.versionHeader, c.wire.version)
 
-	resp, err := c.httpClient.Do(req)
+	client := *c.httpClient
+	checkRedirect := client.CheckRedirect
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if err := c.checkRedirectOrigin(next.URL, target, targetOrigin); err != nil {
+			return err
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		next.Header.Set("Authorization", "Bearer "+bearer)
+		if checkRedirect != nil {
+			if err := checkRedirect(next, via); err != nil {
+				return err
+			}
+			return c.checkRedirectOrigin(next.URL, target, targetOrigin)
+		}
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		var refusal *ConfigurationError
+		if errors.As(err, &refusal) {
+			return Message{}, nil, refusal
+		}
 		return Message{}, nil, &InvocationError{Message: fmt.Sprintf("invoking %s", endpoint), Err: err}
 	}
 	defer resp.Body.Close()
-
-	switch resp.StatusCode {
-	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-		if location := resp.Header.Get("Location"); location != "" {
-			if redirect, err := req.URL.Parse(location); err == nil {
-				origin, valid := endpointOrigin(redirect.String(), false)
-				_, trusted := c.trustedOrigins[origin]
-				if !valid || (origin != targetOrigin && !trusted) {
-					if !valid {
-						origin = redirect.Scheme + "://" + redirect.Host
-					}
-					return Message{}, nil, &ConfigurationError{Message: fmt.Sprintf("redirect origin %s is not trusted for target %q", origin, target)}
-				}
-			}
-		}
-	}
 
 	var responseBody io.Reader = resp.Body
 	if c.peerLimit > 0 {

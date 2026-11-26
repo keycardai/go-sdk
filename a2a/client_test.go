@@ -193,9 +193,10 @@ func TestDelegationClient_Invoke_Redirects(t *testing.T) {
 		// Spec row 16: disallowed 307 and 302 redirects receive no request.
 		{row: "16/307", status: http.StatusTemporaryRedirect},
 		{row: "16/302", status: http.StatusFound},
-		// Spec row 17: a relative same-origin redirect is an invocation error.
+		// Spec row 17: follow a relative same-origin redirect with the token.
 		{row: "17", status: http.StatusTemporaryRedirect, same: true},
-		// Spec row 18: an allowlisted redirect is an invocation error.
+		{row: "17/308", status: http.StatusPermanentRedirect, same: true},
+		// Spec row 18: follow an allowlisted redirect with the token.
 		{row: "18", status: http.StatusTemporaryRedirect, trusted: true},
 		// Spec row 19: a scheme downgrade is a disallowed origin change.
 		{row: "19", status: http.StatusTemporaryRedirect, tls: true},
@@ -203,9 +204,16 @@ func TestDelegationClient_Invoke_Redirects(t *testing.T) {
 		t.Run(tc.row, func(t *testing.T) {
 			zone := newFakeZone(t)
 			var redirected atomic.Int32
-			redirectHandler := func(w http.ResponseWriter, _ *http.Request) {
+			redirectHandler := func(w http.ResponseWriter, r *http.Request) {
 				redirected.Add(1)
-				w.WriteHeader(http.StatusBadRequest)
+				if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer exchanged-token" {
+					t.Errorf("redirect request method = %q, Authorization = %q", r.Method, r.Header.Get("Authorization"))
+				}
+				var request jsonRPCRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("redirect request body: %v", err)
+				}
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"message":{"messageId":"redirected","parts":[{"text":"handled"}]}}}`))
 			}
 			other := httptest.NewServer(http.HandlerFunc(redirectHandler))
 			defer other.Close()
@@ -247,21 +255,22 @@ func TestDelegationClient_Invoke_Redirects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("ping"))
+			result, err := client.Invoke(context.Background(), agent.URL, "user-token", NewTextMessage("ping"))
+			var wantRequests int32
 			if tc.same || tc.trusted {
-				var invocationError *InvocationError
-				if !errors.As(err, &invocationError) {
-					t.Fatalf("wanted invocation error; got %v", err)
+				wantRequests = 1
+				if err != nil || result.Message.MessageID != "redirected" {
+					t.Fatalf("wanted the redirect result; got %v, %v", result, err)
 				}
 			} else {
 				origin, _ := endpointOrigin(destination, false)
-				var originError *ConfigurationError
-				if !errors.As(err, &originError) || originError.Retryable() ||
+				originError, ok := err.(*ConfigurationError)
+				if !ok || originError.Retryable() ||
 					!strings.Contains(originError.Error(), origin) || !strings.Contains(originError.Error(), agent.URL) {
 					t.Fatalf("wanted non-retryable refusal for %q on %q; got %v", origin, agent.URL, err)
 				}
 			}
-			if redirected.Load() != 0 || zone.exchangeCount() != 1 {
+			if redirected.Load() != wantRequests || zone.exchangeCount() != 1 {
 				t.Fatalf("redirect requests = %d, exchanges = %d", redirected.Load(), zone.exchangeCount())
 			}
 		})
