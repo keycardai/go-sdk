@@ -1,3 +1,23 @@
+## v0.41.0 (2026-11-26)
+
+
+- feat(spiffe): SPIFFE JWT-SVID workload identity source (SDK-100) (#88)
+- * feat(spiffe): SPIFFE JWT-SVID workload identity source (SDK-100)
+- * docs: describe the spiffe module in AGENTS.md
+- * fix(spiffe): reject a unix socket URI with a host
+- * docs(spiffe): clarify install requirements
+- * fix(spiffe): retry connection after agent startup
+- * fix(oauth): classify workload identity retries at the source
+- * fix(spiffe): require patched go-jose and gRPC
+- * feat(oauth): let workload identity sources mark failures transient
+- * ci: tag sub-modules as <dir>/vX.Y.Z from their own .cz.toml
+- * fix(spiffe): mark agent and SVID failures transient and release as spiffe/vX.Y.Z
+- * ci: count BREAKING-CHANGE footers in sub-module bumps
+- * ci: require the colon on sub-module breaking footers
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <Larry-Osakwe@users.noreply.github.com>
+
 ## v0.40.0 (2026-11-26)
 
 
