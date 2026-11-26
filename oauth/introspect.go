@@ -90,6 +90,74 @@ func WithIntrospectionRequestTimeout(d time.Duration) IntrospectionOption {
 	return func(cfg *introspectionConfig) { cfg.requestTimeout = d }
 }
 
+// IntrospectionMetadataResolver resolves and caches the metadata for one
+// issuer. It caches discovery, not introspection results.
+type IntrospectionMetadataResolver struct {
+	issuer string
+	client *http.Client
+	cache  discoveryCache[*AuthorizationServerMetadata]
+}
+
+// NewIntrospectionMetadataResolver constructs a resolver with a one-hour
+// discovery TTL and a one-minute negative TTL. A nil client uses
+// http.DefaultClient, and a nonpositive request timeout defaults to 10 seconds.
+func NewIntrospectionMetadataResolver(issuer string, client *http.Client, timeout time.Duration) *IntrospectionMetadataResolver {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if timeout <= 0 {
+		timeout = defaultFetchTimeout
+	}
+	return &IntrospectionMetadataResolver{
+		issuer: issuer,
+		client: client,
+		cache:  newDiscoveryCache[*AuthorizationServerMetadata](defaultDiscoveryTTL, defaultNegativeTTL, timeout),
+	}
+}
+
+// Metadata returns the issuer's metadata for use with
+// [WithIntrospectionMetadata]. Callers must not modify the cached metadata.
+func (r *IntrospectionMetadataResolver) Metadata(ctx context.Context) (*AuthorizationServerMetadata, error) {
+	metadata, err := r.cache.get(ctx, func(fetchCtx context.Context) (*AuthorizationServerMetadata, error) {
+		md, err := discoverIntrospectionMetadata(fetchCtx, r.issuer, WithDiscoveryHTTPClient(r.client), cachedDiscovery)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkIntrospectionEndpoint(r.issuer, md.IntrospectionEndpoint); err != nil {
+			return nil, err
+		}
+		return md, nil
+	})
+	return metadata, err
+}
+
+func discoverIntrospectionMetadata(ctx context.Context, issuer string, opts ...DiscoveryOption) (*AuthorizationServerMetadata, error) {
+	issuerURL, err := url.Parse(issuer)
+	if err != nil || issuerURL.Scheme != "https" || issuerURL.Hostname() == "" {
+		return nil, &ConfigurationError{Message: "introspection discovery requires an absolute HTTPS issuer URL"}
+	}
+	md, err := FetchAuthorizationServerMetadata(ctx, issuer, opts...)
+	if err != nil {
+		var typed KeycardError
+		if errors.As(err, &typed) {
+			return nil, err
+		}
+		return nil, &NetworkError{Message: "discovering introspection endpoint", Err: err}
+	}
+	return md, nil
+}
+
+func checkIntrospectionEndpoint(issuer, endpoint string) error {
+	if endpoint == "" {
+		return &ConfigurationError{Message: fmt.Sprintf("authorization server %q does not advertise an introspection_endpoint", issuer)}
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return &ConfigurationError{Message: "introspection_endpoint must be an absolute HTTPS URL"}
+	}
+	return nil
+}
+
 // IntrospectToken checks a token at the issuer's advertised HTTPS introspection
 // endpoint. Discovery requires an absolute HTTPS issuer URL. If
 // [WithIntrospectionMetadata] supplies metadata, issuer may be empty.
@@ -118,26 +186,14 @@ func IntrospectToken(ctx context.Context, issuer string, req IntrospectTokenRequ
 	}
 	md := cfg.metadata
 	if md == nil {
-		issuerURL, err := url.Parse(issuer)
-		if err != nil || issuerURL.Scheme != "https" || issuerURL.Hostname() == "" {
-			return nil, &ConfigurationError{Message: "introspection discovery requires an absolute HTTPS issuer URL"}
-		}
-		md, err = FetchAuthorizationServerMetadata(ctx, issuer,
+		md, err = discoverIntrospectionMetadata(ctx, issuer,
 			WithDiscoveryHTTPClient(cfg.httpClient), WithDiscoveryRequestTimeout(cfg.requestTimeout))
 		if err != nil {
-			var typed KeycardError
-			if errors.As(err, &typed) {
-				return nil, err
-			}
-			return nil, &NetworkError{Message: "discovering introspection endpoint", Err: err}
+			return nil, err
 		}
 	}
-	if md.IntrospectionEndpoint == "" {
-		return nil, &ConfigurationError{Message: fmt.Sprintf("authorization server %q does not advertise an introspection_endpoint", issuer)}
-	}
-	endpoint, err := url.Parse(md.IntrospectionEndpoint)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" {
-		return nil, &ConfigurationError{Message: "introspection_endpoint must be an absolute HTTPS URL"}
+	if err := checkIntrospectionEndpoint(issuer, md.IntrospectionEndpoint); err != nil {
+		return nil, err
 	}
 
 	form := url.Values{"token": {req.Token}}

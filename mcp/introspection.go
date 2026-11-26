@@ -40,7 +40,7 @@ func WithIntrospectionRequestTimeout(timeout time.Duration) BearerAuthOption {
 
 type bearerIntrospection struct {
 	credential oauth.ApplicationCredential
-	issuers    map[string]struct{}
+	issuers    map[string]*oauth.IntrospectionMetadataResolver
 	zones      map[string]struct{}
 	options    []oauth.IntrospectionOption
 	logged     sync.Map
@@ -59,12 +59,12 @@ func (cfg bearerAuthConfig) newIntrospection(trustedIssuers []string) (*bearerIn
 	}
 	in := &bearerIntrospection{
 		credential: cred,
-		issuers:    make(map[string]struct{}, len(trustedIssuers)),
+		issuers:    make(map[string]*oauth.IntrospectionMetadataResolver, len(trustedIssuers)),
 		zones:      make(map[string]struct{}),
 	}
 	for _, issuer := range trustedIssuers {
 		if issuer != "" {
-			in.issuers[issuer] = struct{}{}
+			in.issuers[issuer] = nil
 		}
 	}
 	if keyed, ok := cred.(oauth.MultiZoneCredential); ok {
@@ -97,6 +97,14 @@ func (cfg bearerAuthConfig) newIntrospection(trustedIssuers []string) (*bearerIn
 	if cfg.introspectTime > 0 {
 		in.options = append(in.options, oauth.WithIntrospectionRequestTimeout(cfg.introspectTime))
 	}
+	if len(in.issuers) == 0 {
+		for zone := range in.zones {
+			in.issuers[zone] = nil
+		}
+	}
+	for issuer := range in.issuers {
+		in.issuers[issuer] = oauth.NewIntrospectionMetadataResolver(issuer, &noRedirect, cfg.introspectTime)
+	}
 	return in, nil
 }
 
@@ -106,15 +114,20 @@ func nilPointer(v any) bool {
 }
 
 func (in *bearerIntrospection) check(ctx context.Context, issuer, token string) (bool, error) {
-	if _, trusted := in.issuers[issuer]; issuer == "" || (len(in.issuers) != 0 && !trusted) {
+	resolver, trusted := in.issuers[issuer]
+	if !trusted {
 		return false, configurationError("introspection requires a verified trusted issuer")
 	}
 	if _, configured := in.zones[issuer]; len(in.zones) != 0 && !configured {
 		return false, configurationError(fmt.Sprintf("no introspection credential for zone %q", issuer))
 	}
+	md, err := resolver.Metadata(ctx)
+	if err != nil {
+		return false, err
+	}
 	result, err := oauth.IntrospectToken(ctx, issuer, oauth.IntrospectTokenRequest{
 		Token: token, Credential: in.credential,
-	}, in.options...)
+	}, append([]oauth.IntrospectionOption{oauth.WithIntrospectionMetadata(md)}, in.options...)...)
 	if err != nil {
 		return false, err
 	}

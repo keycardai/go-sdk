@@ -34,6 +34,35 @@ func introspectionTestResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 }
 
+// Spec row 5 (base): a missing endpoint is negatively cached for one minute.
+func TestIntrospectionMetadataResolver_NegativeTTL(t *testing.T) {
+	now := time.Unix(100, 0)
+	requests := 0
+	client := &http.Client{Transport: metadataTestTransport(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return introspectionTestResponse(200, `{"issuer":"`+introspectionTestIssuer+`"}`), nil
+		}
+		return introspectionTestResponse(200, `{"issuer":"`+introspectionTestIssuer+`","introspection_endpoint":"`+introspectionTestEndpoint+`"}`), nil
+	})}
+	resolver := NewIntrospectionMetadataResolver(introspectionTestIssuer, client, 0)
+	resolver.cache.now = func() time.Time { return now }
+
+	for _, delay := range []time.Duration{0, 59 * time.Second} {
+		now = now.Add(delay)
+		_, err := resolver.Metadata(context.Background())
+		var configErr *ConfigurationError
+		if !errors.As(err, &configErr) || requests != 1 {
+			t.Fatalf("at %v: got %v and %d discovery requests, want a configuration error and one request", delay, err, requests)
+		}
+	}
+	now = now.Add(time.Second)
+	md, err := resolver.Metadata(context.Background())
+	if err != nil || md.IntrospectionEndpoint != introspectionTestEndpoint || requests != 2 {
+		t.Fatalf("after the negative TTL: got %v, %v and %d discovery requests", md, err, requests)
+	}
+}
+
 // Spec row 1: the confidential client posts a form to the discovered endpoint with Basic authentication.
 // Spec row 10: supplied metadata skips discovery.
 // Spec row 15: a hint is sent unchanged when set and omitted otherwise.

@@ -348,3 +348,48 @@ func TestBearerIntrospection_LogsEachFailureOnce(t *testing.T) {
 		t.Error("introspection log contains the bearer token")
 	}
 }
+
+// Spec row 22 (bearer-token-verification-middleware): requests reuse discovery but not introspection results.
+// Spec row 5 (base): discovery failures for a missing required endpoint use the negative TTL.
+func TestBearerIntrospection_CachesDiscovery(t *testing.T) {
+	key := bindingKey(t)
+	token := bindingToken(t, key, bindingIssuer, bindingMCP)
+	for _, tc := range []struct {
+		name      string
+		endpoint  string
+		wantPosts int
+	}{
+		{name: "cache hit", endpoint: bindingIssuer + introspectionPath, wantPosts: 2},
+		{name: "negative cache hit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gets, posts := 0, 0
+			client := &http.Client{Transport: introspectionTransport(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case discoveryPath:
+					gets++
+					return introspectionResponse(200, fmt.Sprintf(`{"issuer":%q,"introspection_endpoint":%q}`, bindingIssuer, tc.endpoint)), nil
+				case introspectionPath:
+					posts++
+					return introspectionResponse(200, fmt.Sprintf(`{"active":%t}`, posts == 1)), nil
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", r.URL)
+				}
+			})}
+			h := singleIntrospectionBinding(t, key, WithIntrospect(true),
+				WithIntrospectionCredential(mustClientSecret(t, "app", "secret")), WithIntrospectionHTTPClient(client))
+			first := sendBindingRequest(h, bindingMCP, token, nil)
+			second := sendBindingRequest(h, bindingMCP, token, nil)
+			if tc.wantPosts == 0 {
+				assertUnavailable(t, first, false)
+				assertUnavailable(t, second, false)
+			} else {
+				assertBindingResponse(t, first, 204, "", "")
+				assertBindingResponse(t, second, 401, "invalid_token", bindingHost+protectedResourcePath+"/mcp")
+			}
+			if gets != 1 || posts != tc.wantPosts {
+				t.Errorf("discovery GETs = %d, introspection POSTs = %d; want 1 GET and %d POSTs", gets, posts, tc.wantPosts)
+			}
+		})
+	}
+}
