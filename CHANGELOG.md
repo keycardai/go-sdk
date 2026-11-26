@@ -1,3 +1,9 @@
+## v0.45.0 (2026-11-26)
+
+
+- feat(mcp): token introspection in the bearer middleware (#98)
+- Adds WithIntrospect and the application credential to the mcp bearer middleware and net/http integration per bearer-token-verification-middleware spec-version 8 (spec#101, ID-882).
+
 ## v0.44.0 (2026-11-26)
 
 
