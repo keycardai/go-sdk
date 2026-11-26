@@ -17,7 +17,9 @@ type ClientCredentialsRequest struct {
 	ClientAssertionType string
 	// ClientID names the application credential the client authenticates as,
 	// sent as the client_id form parameter beside ClientAssertion. It is never
-	// sent when the client uses HTTP Basic.
+	// sent when the client uses HTTP Basic. With a client configured through
+	// [WithCCCredential], set it only beside ClientAssertion; the credential
+	// supplies its own client_id otherwise.
 	ClientID string
 }
 
@@ -127,6 +129,9 @@ func (c *ClientCredentialsClient) RequestToken(ctx context.Context, req ClientCr
 	}
 	var authenticator ClientAuthenticator
 	if req.ClientAssertion == "" && c.cfg.credential != nil {
+		if req.ClientID != "" {
+			return nil, &ConfigurationError{Message: "ClientID without ClientAssertion conflicts with WithCCCredential; the credential supplies its own client_id"}
+		}
 		var ok bool
 		authenticator, ok = c.cfg.credential.(ClientAuthenticator)
 		if !ok {

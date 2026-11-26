@@ -101,6 +101,29 @@ func TestClientCredentialsClient_RejectsMixedAuth(t *testing.T) {
 	}
 }
 
+// A request ClientID beside a configured credential, without a request
+// assertion, is a configuration error rather than a silently dropped field.
+func TestClientCredentialsClient_RejectsRequestClientIDWithCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request: %s", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
+		t.Error("configured credential must not be called")
+		return "workload-jwt", nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClientCredentialsClient(server.URL, WithCCCredential(cred))
+	_, err = client.RequestToken(context.Background(), ClientCredentialsRequest{ClientID: "acr_123"})
+	var configErr *ConfigurationError
+	if !errors.As(err, &configErr) {
+		t.Errorf("got %v, want ConfigurationError", err)
+	}
+}
+
 // Spec row 4d: a request assertion bypasses configured credentials and Basic auth.
 func TestClientCredentialsClient_RequestAssertionPrecedence(t *testing.T) {
 	cred, err := NewWorkloadIdentity(IdentityTokenFunc(func(context.Context) (string, error) {
