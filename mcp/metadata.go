@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -29,7 +30,7 @@ type metadataConfig struct {
 	publicJWKS            map[string]any
 }
 
-// WithIssuer sets the authorization server issuer URL.
+// WithIssuer sets the authorization server issuer URL for AuthMetadataHandler.
 func WithIssuer(issuer string) MetadataOption {
 	return func(cfg *metadataConfig) { cfg.issuer = issuer }
 }
@@ -69,9 +70,26 @@ func WithPublicJWKS(jwks map[string]any) MetadataOption {
 // authorization-server proxy route is not registered, leaving clients no way to discover
 // the authorization server.
 func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
+	warnLegacyResourceBinding()
+	return authMetadataHandler(nil, opts)
+}
+
+// MetadataHandler serves the binding's discovery and auxiliary metadata.
+// Register it at the host-root /.well-known/ paths, or forward those public
+// paths to it. The handler cannot inspect the application's router. The
+// binding's issuer takes precedence; WithIssuer applies only when the binding
+// has none.
+func (b *ResourceBinding) MetadataHandler(opts ...MetadataOption) http.Handler {
+	return authMetadataHandler(b, opts)
+}
+
+func authMetadataHandler(binding *ResourceBinding, opts []MetadataOption) http.Handler {
 	cfg := metadataConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if binding != nil && binding.issuer != "" {
+		cfg.issuer = binding.issuer
 	}
 	if cfg.httpClient == nil {
 		cfg.httpClient = http.DefaultClient
@@ -79,30 +97,15 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 
 	mux := http.NewServeMux()
 
-	// protectedResource serves the Protected Resource Metadata (RFC 9728). It is registered
-	// for both the bare well-known path (origin resource) and the path-inserted form
-	// (e.g. /.well-known/oauth-protected-resource/mcp), so a resource mounted at a sub-path
-	// advertises and resolves to its full URL rather than the bare origin.
-	protectedResource := func(w http.ResponseWriter, r *http.Request) {
+	protectedResource := func(w http.ResponseWriter, resource, baseURL string, issuers []string) {
 		setCORSHeaders(w)
-
-		scheme := requestScheme(r)
-		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-		// The resource is the origin plus the path that follows the well-known prefix:
-		// "" for the origin resource, "/mcp" for the path-inserted form. A trailing slash
-		// (e.g. the bare path-inserted form ".../oauth-protected-resource/") normalizes to
-		// the origin so the advertised resource matches an origin-bound audience exactly.
-		resource := baseURL + strings.TrimRight(strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource"), "/")
 
 		metadata := ProtectedResourceMetadata{
 			Resource:              resource,
+			AuthorizationServers:  issuers,
 			ScopesSupported:       cfg.scopesSupported,
 			ResourceName:          cfg.resourceName,
 			ResourceDocumentation: cfg.resourceDocumentation,
-		}
-		if cfg.issuer != "" {
-			metadata.AuthorizationServers = []string{cfg.issuer}
 		}
 		// When this server publishes its JWKS, advertise its location (RFC 9728 jwks_uri)
 		// so the one WithPublicJWKS option both serves and advertises, as Python couples them.
@@ -113,18 +116,28 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metadata)
 	}
-	// Two routes: the exact bare path (origin resource) and the subtree for the
-	// path-inserted form (.../oauth-protected-resource/mcp). The handler derives the
-	// resource from r.URL.Path, so no path wildcard binding is needed.
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource", protectedResource)
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource/", protectedResource)
-
+	legacy := binding == nil || binding.legacy
+	var issuerList []string
 	if cfg.issuer != "" {
-		mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		issuerList = []string{cfg.issuer}
+	}
+	if legacy {
+		legacyResource := func(w http.ResponseWriter, r *http.Request) {
+			baseURL := fmt.Sprintf("%s://%s", requestScheme(r), r.Host)
+			resource := baseURL + strings.TrimRight(strings.TrimPrefix(r.URL.Path, protectedResourcePath), "/")
+			protectedResource(w, resource, baseURL, issuerList)
+		}
+		mux.HandleFunc("GET "+protectedResourcePath, legacyResource)
+		mux.HandleFunc("GET "+protectedResourcePath+"/", legacyResource)
+	}
+
+	const authorizationServerPath = "/.well-known/oauth-authorization-server"
+	if cfg.issuer != "" {
+		proxy := func(w http.ResponseWriter, r *http.Request, issuer string) {
 			setCORSHeaders(w)
 
 			// Fetch upstream authorization server metadata and return it unmodified
-			issuerMetadataURL := cfg.issuer + "/.well-known/oauth-authorization-server"
+			issuerMetadataURL := issuer + authorizationServerPath
 			fetchReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, issuerMetadataURL, nil)
 			if err != nil {
 				http.Error(w, "failed to create metadata request", http.StatusInternalServerError)
@@ -144,15 +157,32 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 				return
 			}
 
-			var metadata map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+			body, err := io.ReadAll(resp.Body)
+			var metadata map[string]json.RawMessage
+			if err != nil || json.Unmarshal(body, &metadata) != nil {
 				http.Error(w, "failed to decode authorization server metadata", http.StatusBadGateway)
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(metadata)
-		})
+			_, _ = w.Write(body)
+		}
+		if binding != nil && binding.zones != nil {
+			zoneProxy := func(w http.ResponseWriter, r *http.Request) {
+				issuer, ok := binding.zoneIssuers[r.PathValue("zone")]
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				proxy(w, r, issuer)
+			}
+			mux.HandleFunc("GET "+authorizationServerPath+"/{zone}", zoneProxy)
+			mux.HandleFunc("GET "+authorizationServerPath+"/{zone}/{rest...}", zoneProxy)
+		} else {
+			mux.HandleFunc("GET "+authorizationServerPath, func(w http.ResponseWriter, r *http.Request) {
+				proxy(w, r, cfg.issuer)
+			})
+		}
 	}
 
 	if cfg.publicJWKS != nil {
@@ -163,13 +193,62 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 		})
 	}
 
-	// Handle CORS preflight
-	mux.HandleFunc("OPTIONS /.well-known/", func(w http.ResponseWriter, r *http.Request) {
+	preflight := func(w http.ResponseWriter, _ *http.Request) {
 		setCORSHeaders(w)
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}
 
-	return mux
+	if legacy {
+		mux.HandleFunc("OPTIONS /.well-known/", preflight)
+		return mux
+	}
+	type document struct {
+		id      resourceIdentifier
+		issuers []string
+	}
+	documents := map[string][]document{}
+	addDocument := func(id resourceIdentifier, issuers []string) {
+		if id.metadata != nil {
+			target := id.metadata.RequestURI()
+			documents[target] = append(documents[target], document{id, issuers})
+		}
+	}
+	switch {
+	case binding.zones == nil:
+		addDocument(binding.single, issuerList)
+	case binding.multi:
+		addDocument(binding.single, binding.trustedZoneIssuers())
+	default:
+		for zone, id := range binding.zones {
+			addDocument(id, []string{binding.zoneIssuers[zone]})
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions && strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			preflight(w, r)
+			return
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			matches := documents[r.URL.RequestURI()]
+			var selected *document
+			for i := range matches {
+				doc := &matches[i]
+				if len(matches) == 1 || strings.EqualFold(r.Host, doc.id.metadata.Host) {
+					selected = doc
+					break
+				}
+				if canonicalAuthority(doc.id.metadata.Scheme, r.Host) == canonicalAuthority(doc.id.metadata.Scheme, doc.id.metadata.Host) {
+					selected = doc
+				}
+			}
+			if selected != nil {
+				baseURL := selected.id.public.Scheme + "://" + selected.id.public.Host
+				protectedResource(w, selected.id.value, baseURL, selected.issuers)
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func setCORSHeaders(w http.ResponseWriter) {
