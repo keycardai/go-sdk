@@ -277,6 +277,7 @@ func TestResourceBinding_InvalidConfiguration(t *testing.T) {
 		{"metadata_9a_ambiguous_discovery", bindingIssuer, []ResourceBindingOption{sharedZones}},
 		{"empty_explicit_map", bindingIssuer, []ResourceBindingOption{WithResourceIdentifiersByZone(nil)}},
 		{"invalid_identifier", bindingIssuer, []ResourceBindingOption{WithResourceIdentifier("/mcp")}},
+		{"uppercase_zone_id", bindingIssuer, []ResourceBindingOption{WithResourceIdentifiersByZone(map[string]string{"Zone": bindingMCP})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewResourceBinding(tc.issuer, tc.opts...)

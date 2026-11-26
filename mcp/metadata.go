@@ -76,7 +76,9 @@ func AuthMetadataHandler(opts ...MetadataOption) http.Handler {
 
 // MetadataHandler serves the binding's discovery and auxiliary metadata.
 // Register it at the host-root /.well-known/ paths, or forward those public
-// paths to it. The handler cannot inspect the application's router.
+// paths to it. The handler cannot inspect the application's router. The
+// binding's issuer takes precedence; WithIssuer applies only when the binding
+// has none.
 func (b *ResourceBinding) MetadataHandler(opts ...MetadataOption) http.Handler {
 	return authMetadataHandler(b, opts)
 }
@@ -86,7 +88,7 @@ func authMetadataHandler(binding *ResourceBinding, opts []MetadataOption) http.H
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if binding != nil {
+	if binding != nil && binding.issuer != "" {
 		cfg.issuer = binding.issuer
 	}
 	if cfg.httpClient == nil {

@@ -189,7 +189,7 @@ func (b *ResourceBinding) configureZones(zones map[string]string) error {
 	}
 	for zone, value := range zones {
 		if !validZoneID(zone) {
-			return configurationError("zone ID must be a DNS label")
+			return configurationError("zone ID must be a lowercase DNS label")
 		}
 		id, err := parseResourceIdentifier(value)
 		if err != nil {
@@ -236,7 +236,7 @@ func validZoneID(zone string) bool {
 		return false
 	}
 	for _, c := range zone {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c >= 'A' && c <= 'Z') {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 			return false
 		}
 	}
