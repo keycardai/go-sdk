@@ -1,3 +1,23 @@
+## v0.40.0 (2026-11-26)
+
+
+- feat(mcp): bind discovery and bearer auth to configured resources (SDK-14) (#90)
+- * feat(oauth): support explicit audience opt-out (SDK-14)
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * feat(mcp): bind discovery and bearer auth to configured resources (SDK-14)
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * test(mcp): cite spec rows in the Spec row comment form
+- * fix(mcp): ignore default ports when selecting zone metadata by host
+- * fix(mcp): reject uppercase zone IDs and keep WithIssuer without a binding issuer
+- * fix(mcp): prefer exact metadata authority over default port aliases
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- * fix(mcp): reject duplicate metadata authorities across schemes
+- Co-Authored-By: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Co-authored-by: Larry Osakwe <Larry-Osakwe@users.noreply.github.com>
+
 ## v0.39.1 (2026-11-26)
 
 
