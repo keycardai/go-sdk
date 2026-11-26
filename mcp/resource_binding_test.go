@@ -496,6 +496,17 @@ func TestResourceBinding_ZoneMetadataPrefersExactAuthority(t *testing.T) {
 	}
 }
 
+func TestResourceBinding_ZoneMetadataRejectsDuplicateExactAuthority(t *testing.T) {
+	_, err := NewResourceBinding(bindingIssuer, WithResourceIdentifiersByZone(map[string]string{
+		"a": "http://a.example.com:443/mcp",
+		"b": "https://A.example.com:443/mcp",
+	}))
+	expectBindingConfigError(t, err)
+	if got, want := err.Error(), "multiple zones publish the same protected-resource metadata URL"; !strings.Contains(got, want) {
+		t.Errorf("error = %q, want %q", got, want)
+	}
+}
+
 // Spec row 10 (oauth-metadata-endpoints): the application mounts auth but registers discovery at the host root.
 func TestResourceBinding_MountedDiscovery(t *testing.T) {
 	const id = bindingHost + "/app/mcp"

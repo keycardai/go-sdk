@@ -179,6 +179,7 @@ func (b *ResourceBinding) configureZones(zones map[string]string) error {
 	b.zones = make(map[string]resourceIdentifier, len(zones))
 	b.zoneIssuers = make(map[string]string, len(zones))
 	metadataURLs := make(map[string]bool, len(zones))
+	metadataHostsByTarget := make(map[string][]string, len(zones))
 	if b.issuer != "" {
 		base, err := url.Parse(b.issuer)
 		if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Hostname() == "" || base.User != nil ||
@@ -204,11 +205,14 @@ func (b *ResourceBinding) configureZones(zones map[string]string) error {
 			}
 			b.single = id
 		} else if id.metadata != nil {
-			key := canonicalAuthority(id.metadata.Scheme, id.metadata.Host) + id.metadata.RequestURI()
-			if metadataURLs[key] {
+			target, host := id.metadata.RequestURI(), id.metadata.Host
+			key := canonicalAuthority(id.metadata.Scheme, host) + target
+			hosts := metadataHostsByTarget[target]
+			if metadataURLs[key] || slices.ContainsFunc(hosts, func(other string) bool { return strings.EqualFold(host, other) }) {
 				return configurationError("multiple zones publish the same protected-resource metadata URL")
 			}
 			metadataURLs[key] = true
+			metadataHostsByTarget[target] = append(hosts, host)
 		}
 		b.zones[zone] = id
 		if b.issuer != "" {
