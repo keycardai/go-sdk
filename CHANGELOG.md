@@ -1,3 +1,13 @@
+## v0.37.0 (2026-11-26)
+
+
+- feat(oauth): actor token source on the token exchange client (SDK-99) (#87)
+- * feat(oauth): actor token source on the token exchange client (SDK-99)
+- * fix(oauth): treat actor token source rate limits as retryable
+- * fix(oauth): bound actor lookups and isolate source errors
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+
 ## v0.36.0 (2026-11-26)
 
 
