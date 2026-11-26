@@ -486,7 +486,7 @@ func TestNewJWTVerifier_SilentWithAudiences(t *testing.T) {
 	}
 }
 
-// Spec row 8g: explicit unrestricted audience does not emit a warning.
+// Spec row 8g (bearer-token-verification-middleware): explicit unrestricted audience does not emit a warning.
 func TestNewJWTVerifier_ExplicitAudienceOptOut(t *testing.T) {
 	buf := captureDefaultSlog(t)
 	v := newVerifier(t, &staticTestKeyring{}, []string{testIssuer}, WithAllowAnyAudience())

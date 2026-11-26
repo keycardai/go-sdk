@@ -119,8 +119,8 @@ func expectBindingConfigError(t *testing.T, err error) {
 	}
 }
 
-// Bearer spec rows 1, 8, 12-12d, 15 and integration row 2.
-// Route gating spec rows 2, 2a and 6.
+// Spec row 1, 8, 12-12d, 15 and integration 2 (bearer-token-verification-middleware): one configured identifier drives the audience and challenge.
+// Spec row 2, 2a and 6 (route-level-auth-gating): scope gates reuse the binding's challenge.
 func TestResourceBinding_SingleResourceChallenges(t *testing.T) {
 	warnings := bindingWarnings(t)
 	key := bindingKey(t)
@@ -173,7 +173,8 @@ func TestResourceBinding_SingleResourceChallenges(t *testing.T) {
 	}
 }
 
-// Bearer spec rows 8a-8h and route gating spec row 7.
+// Spec row 8a-8h (bearer-token-verification-middleware): verifier-only modes serve no discovery and omit resource_metadata.
+// Spec row 7 (route-level-auth-gating): out-of-binding scope denial omits resource_metadata.
 func TestResourceBinding_VerifierOnly(t *testing.T) {
 	warnings := bindingWarnings(t)
 	key, wrongKey := bindingKey(t), bindingKey(t)
@@ -219,7 +220,7 @@ func TestResourceBinding_VerifierOnly(t *testing.T) {
 	}
 }
 
-// Bearer spec rows 16, 16a, 16c and 17.
+// Spec row 16, 16a, 16c and 17 (bearer-token-verification-middleware): the request or token selects the zone before verification.
 func TestResourceBinding_ZoneVerification(t *testing.T) {
 	warnings := bindingWarnings(t)
 	a, b := bindingKey(t), bindingKey(t)
@@ -252,7 +253,8 @@ func TestResourceBinding_ZoneVerification(t *testing.T) {
 	}
 }
 
-// Bearer spec rows 13, 14b, 16b, 16d and 17a. Metadata spec rows 8b, 9b and 9d.
+// Spec row 13, 14b, 16b, 16d and 17a (bearer-token-verification-middleware): conflicting modes fail at construction.
+// Spec row 8b, 9b and 9d (oauth-metadata-endpoints): conflicting discovery configuration fails at construction.
 func TestResourceBinding_InvalidConfiguration(t *testing.T) {
 	zones := WithResourceIdentifiersByZone(map[string]string{"a": bindingMCP, "b": bindingHost + "/other"})
 	sharedZones := WithResourceIdentifiersByZone(map[string]string{"a": bindingMCP, "b": bindingMCP})
@@ -293,7 +295,8 @@ func TestResourceBinding_InvalidConfiguration(t *testing.T) {
 	}
 }
 
-// Bearer spec rows 7 and 14; metadata spec row 8c during deprecation.
+// Spec row 7 and 14 (bearer-token-verification-middleware): legacy configuration keeps its behavior and warns once.
+// Spec row 8c (oauth-metadata-endpoints): legacy metadata warns once during deprecation.
 func TestResourceBinding_LegacyWarnsOnce(t *testing.T) {
 	warnings := bindingWarnings(t)
 	key := bindingKey(t)
@@ -359,7 +362,7 @@ type bindingTransport func(*http.Request) (*http.Response, error)
 
 func (f bindingTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// Metadata spec rows 1 and 7. The configured query is preserved verbatim.
+// Spec row 1 and 7 (oauth-metadata-endpoints): the document publishes the configured identifier, query included, verbatim.
 func TestResourceBinding_ProtectedResourceDocuments(t *testing.T) {
 	for _, tc := range []struct{ name, target, id string }{
 		{"metadata_1", protectedResourcePath, bindingHost},
@@ -376,7 +379,7 @@ func TestResourceBinding_ProtectedResourceDocuments(t *testing.T) {
 	}
 }
 
-// Metadata spec row 9: distinct endpoints have separate metadata and audience policies.
+// Spec row 9 (oauth-metadata-endpoints): distinct endpoints have separate metadata and audience policies.
 func TestResourceBinding_MultipleDiscoverableEndpoints(t *testing.T) {
 	key := bindingKey(t)
 	keyring := WithBearerKeyring(&pubKeyring{pub: &key.PublicKey})
@@ -394,7 +397,7 @@ func TestResourceBinding_MultipleDiscoverableEndpoints(t *testing.T) {
 	assertBindingResponse(t, sendBindingRequest(mux, "/tools", token, nil), 401, "invalid_token", bindingHost+protectedResourcePath+"/tools")
 }
 
-// Metadata spec rows 8 and 8a.
+// Spec row 8 and 8a (oauth-metadata-endpoints): verifier-only modes leave AS metadata available and serve no resource document.
 func TestResourceBinding_MetadataVerifierOnly(t *testing.T) {
 	warnings := bindingWarnings(t)
 	for _, option := range []ResourceBindingOption{WithResourceIdentifier("urn:example:service"), WithMultiResource(true), WithAllowAnyAudience(true)} {
@@ -422,7 +425,7 @@ func TestResourceBinding_MetadataVerifierOnly(t *testing.T) {
 	}
 }
 
-// Metadata spec rows 4a, 4b, 9a and 9c, and integration row 2.
+// Spec row 4a, 4b, 9a, 9c and integration 2 (oauth-metadata-endpoints): zone documents list only configured zone issuers.
 func TestResourceBinding_ZoneMetadata(t *testing.T) {
 	warnings := bindingWarnings(t)
 	base := bindingIssuer + ":8443"
@@ -462,7 +465,7 @@ func TestResourceBinding_ZoneMetadata(t *testing.T) {
 	}
 }
 
-// Metadata spec row 10: the application mounts auth but registers discovery at the host root.
+// Spec row 10 (oauth-metadata-endpoints): the application mounts auth but registers discovery at the host root.
 func TestResourceBinding_MountedDiscovery(t *testing.T) {
 	const id = bindingHost + "/app/mcp"
 	b := makeBinding(t, bindingIssuer, WithResourceIdentifier(id))
