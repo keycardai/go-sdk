@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -50,6 +51,7 @@ type tokenExchangeConfig struct {
 	clientID       string
 	clientSecret   string
 	credential     ApplicationCredential
+	actor          IdentityTokenSource
 	httpClient     *http.Client
 	discoveryTTL   time.Duration
 	negativeTTL    time.Duration
@@ -71,6 +73,20 @@ func WithTokenExchangeCredential(credential ApplicationCredential) TokenExchange
 	}
 }
 
+// WithTokenExchangeActor sets the source of the actor JWT for token exchanges.
+// The client fetches a token for each exchange that does not supply its own
+// actor token and skips the source for impersonation. A nil source, including
+// a typed nil function or pointer, disables it.
+func WithTokenExchangeActor(source IdentityTokenSource) TokenExchangeClientOption {
+	switch value := reflect.ValueOf(source); value.Kind() {
+	case reflect.Func, reflect.Pointer:
+		if value.IsNil() {
+			source = nil
+		}
+	}
+	return func(cfg *tokenExchangeConfig) { cfg.actor = source }
+}
+
 // WithTokenExchangeHTTPClient sets the HTTP client for token exchange requests.
 func WithTokenExchangeHTTPClient(c *http.Client) TokenExchangeClientOption {
 	return func(cfg *tokenExchangeConfig) {
@@ -78,8 +94,9 @@ func WithTokenExchangeHTTPClient(c *http.Client) TokenExchangeClientOption {
 	}
 }
 
-// WithTokenExchangeRequestTimeout bounds each request this call makes to the authorization server when the
-// caller's context has no deadline of its own. Default: 10 seconds.
+// WithTokenExchangeRequestTimeout bounds actor token lookup and each request to
+// the authorization server when the caller's context has no deadline of its own.
+// Default: 10 seconds.
 func WithTokenExchangeRequestTimeout(d time.Duration) TokenExchangeClientOption {
 	return func(cfg *tokenExchangeConfig) { cfg.requestTimeout = d }
 }
@@ -134,6 +151,10 @@ func (c *TokenExchangeClient) TokenEndpoint(ctx context.Context) (string, error)
 // ExchangeToken performs a token exchange request. A request assertion takes
 // precedence over configured HTTP Basic credentials. A request ClientID with
 // HTTP Basic returns a ConfigurationError before discovery.
+// A configured [WithTokenExchangeActor] source provides an actor JWT unless the
+// request supplies one or uses the substitute-user token type. A source failure
+// returns a WorkloadIdentityConfigurationError or WorkloadIdentityRuntimeError
+// before any request to the authorization server.
 func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchangeRequest) (*TokenResponse, error) {
 	auth := &ClientAuth{ClientID: c.cfg.clientID, ClientSecret: c.cfg.clientSecret}
 	if c.cfg.credential != nil {
@@ -142,6 +163,17 @@ func (c *TokenExchangeClient) ExchangeToken(ctx context.Context, req TokenExchan
 	useBasic := req.ClientAssertion == "" && auth != nil && auth.ClientID != "" && auth.ClientSecret != ""
 	if useBasic && req.ClientID != "" {
 		return nil, &ConfigurationError{Message: "token exchange client_id cannot be sent with HTTP Basic"}
+	}
+
+	if c.cfg.actor != nil && req.ActorToken == "" && req.SubjectTokenType != SubstituteUserTokenType {
+		actorCtx, cancel := withDefaultTimeout(ctx, c.cfg.requestTimeout)
+		token, err := fetchIdentityToken(actorCtx, c.cfg.actor)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		req.ActorToken = token
+		req.ActorTokenType = "urn:ietf:params:oauth:token-type:jwt"
 	}
 
 	tokenEndpoint, err := c.endpoint.Endpoint(ctx)

@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +17,7 @@ type KeycardError interface {
 	keycardError()
 }
 
-// ConfigurationError indicates the SDK was constructed with invalid configuration,
-// such as a verifier built without a trusted issuer or with an unsupported algorithm.
+// ConfigurationError indicates invalid SDK configuration or operation inputs.
 type ConfigurationError struct {
 	Message string
 }
@@ -38,6 +38,33 @@ func (e *HTTPError) Error() string {
 	}
 	return e.Message
 }
+
+// Retryable reports whether the HTTP status indicates a transient failure.
+func (e *HTTPError) Retryable() bool {
+	return e.Status == http.StatusTooManyRequests || (e.Status >= 500 && e.Status < 600)
+}
+
+// NetworkError indicates that an HTTP request or response failed in transit.
+type NetworkError struct {
+	Message string
+	Err     error
+}
+
+func (e *NetworkError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+
+func (e *NetworkError) Unwrap() error { return e.Err }
+
+// Retryable reports whether the failure is a transient transport fault.
+func (e *NetworkError) Retryable() bool {
+	return !errors.Is(e.Err, context.Canceled) && retryableMetadataFailure(e.Err)
+}
+
+func (*NetworkError) keycardError() {}
 
 // OAuthError represents an OAuth protocol error with an error code. Err carries the
 // underlying cause, when there is one (e.g. a JSON decode failure behind an
@@ -152,6 +179,9 @@ func (e *InvalidMetadataError) Error() string {
 func (e *InvalidMetadataError) Unwrap() error { return e.Err }
 func (*InvalidMetadataError) keycardError()   {}
 
+// Retryable reports whether the metadata failure is transient.
+func (e *InvalidMetadataError) Retryable() bool { return retryableMetadataFailure(e.Err) }
+
 // JWKSDiscoveryError indicates the JWKS URI could not be resolved from the issuer's
 // authorization server metadata. Err carries the underlying cause (e.g. a discovery
 // fetch failure or an *IssuerMismatchError) for errors.Is/errors.As.
@@ -244,8 +274,8 @@ func (e *UserInfoFetchError) Error() string {
 func (e *UserInfoFetchError) Unwrap() error { return e.Err }
 func (*UserInfoFetchError) keycardError()   {}
 
-// parseOAuthErrorResponse parses an RFC 6749 section 5.2 error response from a token or
-// registration endpoint. It returns an *OAuthError when the body is JSON carrying an
+// parseOAuthErrorResponse parses an RFC 6749 section 5.2 error response from an
+// authorization server. It returns an *OAuthError when the body is JSON carrying an
 // "error" field, or nil otherwise so the caller can fall back to a generic HTTP error.
 // It does not close resp.Body.
 func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
@@ -256,6 +286,10 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 		}
 		return nil
 	}
+	return decodeOAuthError(data, resp.StatusCode)
+}
+
+func decodeOAuthError(data []byte, status int) *OAuthError {
 	var body map[string]any
 	if err := json.Unmarshal(data, &body); err != nil {
 		return nil
@@ -264,7 +298,7 @@ func parseOAuthErrorResponse(resp *http.Response) *OAuthError {
 	if !ok {
 		return nil
 	}
-	oauthErr := &OAuthError{ErrorCode: code, Message: code, Status: resp.StatusCode}
+	oauthErr := &OAuthError{ErrorCode: code, Message: code, Status: status}
 	if desc, ok := body["error_description"].(string); ok {
 		oauthErr.Message = desc
 		oauthErr.ErrorDescription = &desc

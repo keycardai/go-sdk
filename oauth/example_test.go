@@ -1,10 +1,25 @@
 package oauth_test
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 
 	"github.com/keycardai/go-sdk/oauth"
 )
+
+func ExampleDiscoverCredential() {
+	credential, err := oauth.DiscoverCredential(map[string]string{
+		"KEYCARD_CLIENT_ID":     "my-client",
+		"KEYCARD_CLIENT_SECRET": "example-secret",
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%T\n", credential)
+	// Output: *oauth.ClientSecretCredential
+}
 
 // ExampleGenerateCodeChallenge derives an S256 PKCE challenge from a verifier
 // (RFC 7636 Appendix B vector).
@@ -31,4 +46,24 @@ func ExampleBuildAuthorizeURL() {
 	}
 	fmt.Println(url)
 	// Output: https://zone.keycard.cloud/authorize?client_id=my-client&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback&response_type=code&scope=openid&state=xyz
+}
+
+func ExampleRevokeToken() {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	err := oauth.RevokeToken(context.Background(), "", oauth.RevokeTokenRequest{
+		Token:    "refresh-token",
+		ClientID: "public-client",
+	}, oauth.WithRevocationMetadata(&oauth.AuthorizationServerMetadata{
+		Issuer:             server.URL,
+		RevocationEndpoint: server.URL + "/revoke",
+	}), oauth.WithRevocationHTTPClient(server.Client()))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("revoked")
+	// Output: revoked
 }

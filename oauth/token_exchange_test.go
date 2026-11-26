@@ -12,7 +12,6 @@ import (
 )
 
 // Spec row 4f: reject a request ClientID with Basic before cold discovery.
-// This client does not expose an actor source.
 func TestTokenExchangeClient_RejectsClientIDWithBasic(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
@@ -20,7 +19,11 @@ func TestTokenExchangeClient_RejectsClientIDWithBasic(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewTokenExchangeClient(server.URL, WithClientCredentials("configured", "secret"))
+	actor := IdentityTokenFunc(func(context.Context) (string, error) {
+		t.Fatal("actor source called for an invalid Basic request")
+		return "", nil
+	})
+	client := NewTokenExchangeClient(server.URL, WithClientCredentials("configured", "secret"), WithTokenExchangeActor(actor))
 	_, err := client.ExchangeToken(context.Background(), TokenExchangeRequest{
 		SubjectToken: "subject",
 		ClientID:     "request-id",

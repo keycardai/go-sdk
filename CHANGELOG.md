@@ -1,3 +1,29 @@
+## v0.37.0 (2026-11-26)
+
+
+- feat(oauth): actor token source on the token exchange client (SDK-99) (#87)
+- * feat(oauth): actor token source on the token exchange client (SDK-99)
+- * fix(oauth): treat actor token source rate limits as retryable
+- * fix(oauth): bound actor lookups and isolate source errors
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+
+## v0.36.0 (2026-11-26)
+
+
+- feat(oauth): discover the application credential from the environment (SDK-6) (#85)
+- Implements keycardai/keycard-sdk-spec credential-discovery.md v2
+- Refs SDK-6
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+Co-authored-by: Larry Osakwe <larry@keycard.ai>
+
+## v0.35.0 (2026-11-26)
+
+
+- feat(oauth): token revocation (ID-881) (#84)
+- Adds oauth.RevokeToken (RFC 7009) per keycard-sdk-spec token-revocation.md, plus NetworkError.
+- revocation_endpoint and revocation_endpoint_auth_methods_supported are now typed fields on AuthorizationServerMetadata, so they are no longer in AuthorizationServerMetadata.Extra.
+
 ## v0.34.1 (2026-11-25)
 
 

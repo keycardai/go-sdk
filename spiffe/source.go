@@ -4,6 +4,7 @@ package spiffe
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -14,9 +15,11 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // WorkloadIdentitySourceSpiffe identifies errors from the SPIFFE token source.
@@ -96,7 +99,7 @@ func (s *SpiffeJwtSvidSource) IdentityToken(ctx context.Context) (string, error)
 	err = waitForConnection(initCtx, conn)
 	cancel()
 	if err != nil {
-		return "", runtimeError("connecting to the SPIFFE Workload API", err, true)
+		return "", runtimeError("connecting to the SPIFFE Workload API", &net.OpError{Op: "connect", Net: "unix", Err: err})
 	}
 
 	// Use the official RPC directly to keep the assertion opaque.
@@ -106,17 +109,20 @@ func (s *SpiffeJwtSvidSource) IdentityToken(ctx context.Context) (string, error)
 		Audience: []string{s.config.audience},
 		SpiffeId: s.config.spiffeID,
 	})
-	if err != nil {
-		return "", runtimeError("fetching JWT-SVID from the SPIFFE Workload API", err, true)
-	}
 	svids := resp.GetSvids()
-	if len(svids) == 0 {
-		return "", runtimeError("fetching JWT-SVID from the SPIFFE Workload API", errNoSVID, true)
+	if err == nil && len(svids) == 0 {
+		err = errNoSVID
+	}
+	if err != nil {
+		if status.Code(err) == codes.Canceled && ctx.Err() == context.Canceled {
+			err = errors.Join(context.Canceled, err)
+		}
+		return "", runtimeError("fetching JWT-SVID from the SPIFFE Workload API", &net.OpError{Op: "fetch", Net: "unix", Err: err})
 	}
 	if token := svids[0].GetSvid(); token != "" {
 		return token, nil
 	}
-	return "", runtimeError("the SPIFFE Workload API returned an empty JWT-SVID", nil, false)
+	return "", runtimeError("the SPIFFE Workload API returned an empty JWT-SVID", nil)
 }
 
 func (s *SpiffeJwtSvidSource) connection() (*grpc.ClientConn, error) {
@@ -199,6 +205,6 @@ func configurationError(message string, err error) error {
 	return &oauth.WorkloadIdentityConfigurationError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err}
 }
 
-func runtimeError(message string, err error, transient bool) error {
-	return &oauth.WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err, Transient: transient}
+func runtimeError(message string, err error) error {
+	return &oauth.WorkloadIdentityRuntimeError{Source: WorkloadIdentitySourceSpiffe, Message: message, Err: err}
 }

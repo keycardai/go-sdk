@@ -2,11 +2,13 @@ package oauth
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,27 @@ func TestGrantDenialReason(t *testing.T) {
 	}
 }
 
+func TestNetworkErrorRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"certificate verification", x509.UnknownAuthorityError{}, false},
+		{"redirect limit", errors.New("stopped after 10 redirects"), false},
+		{"caller cancellation", context.Canceled, false},
+		{"timeout", context.DeadlineExceeded, true},
+		{"interrupted read", io.ErrUnexpectedEOF, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &NetworkError{Err: &url.Error{Op: "Get", URL: "https://zone.example", Err: tc.err}}
+			if got := err.Retryable(); got != tc.want {
+				t.Errorf("Retryable() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHTTPError(t *testing.T) {
 	err := &HTTPError{Message: "not found", Status: 404}
 	if err.Error() != "HTTP 404: not found" {
@@ -126,8 +149,10 @@ func TestKeycardErrorMarker(t *testing.T) {
 		want bool
 	}{
 		{"ConfigurationError", &ConfigurationError{Message: "bad config"}, true},
+		{"CredentialDiscoveryError", &CredentialDiscoveryError{Message: "no credential"}, true},
 		{"DeviceAuthorizationDiscoveryError", &DeviceAuthorizationDiscoveryError{Message: "discovery", Err: errors.New("reset")}, true},
 		{"HTTPError", &HTTPError{Message: "not found", Status: 404}, true},
+		{"NetworkError", &NetworkError{Message: "request failed", Err: errors.New("reset")}, true},
 		{"OAuthError", &OAuthError{ErrorCode: "invalid_grant", Message: "expired"}, true},
 		{"InvalidTokenError", &InvalidTokenError{Message: "bad signature"}, true},
 		{"InsufficientScopeError", &InsufficientScopeError{Message: "need scope"}, true},

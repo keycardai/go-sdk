@@ -1,5 +1,10 @@
 package oauth
 
+import (
+	"context"
+	"errors"
+)
+
 // WebIdentityConfigurationError indicates a WebIdentity client assertion could not be
 // prepared because a required value was missing at request time: the client id (iss/sub)
 // or the token endpoint (aud).
@@ -34,11 +39,9 @@ func (e *WorkloadIdentityConfigurationError) Error() string {
 
 func (e *WorkloadIdentityConfigurationError) Unwrap() error { return e.Err }
 
-// WorkloadIdentityRuntimeError indicates the subject token could not be
-// obtained at request time (e.g. the token file was rotated away or emptied
-// after construction, or the platform endpoint was unreachable). It is
-// distinct from WorkloadIdentityConfigurationError, which indicates a
-// configuration fault. Source identifies the token source ("file",
+// WorkloadIdentityRuntimeError indicates that the identity token source fails
+// at request time (e.g. the token file is empty or the platform endpoint is
+// unreachable). Source identifies the token source ("file",
 // "gcp-metadata", "fly", "spiffe" from the spiffe module, or "custom" for a
 // source whose error is not one of this package's typed errors). Err carries the
 // underlying cause for errors.Is/errors.As, and is nil when there is no
@@ -47,8 +50,6 @@ type WorkloadIdentityRuntimeError struct {
 	Source  string
 	Message string
 	Err     error
-	// Transient marks a source-specific failure that can succeed on retry.
-	Transient bool
 }
 
 func (e *WorkloadIdentityRuntimeError) Error() string {
@@ -60,9 +61,17 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// Retryable reports whether the source classifies the failure as transient.
+// Retryable reports whether the source fails with a transient transport error.
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
-	return e.Transient
+	var sourceStatus workloadIdentityHTTPStatusError
+	if errors.As(e.Err, &sourceStatus) {
+		return retryableHTTPStatus(int(sourceStatus))
+	}
+	var status *HTTPError
+	if errors.As(e.Err, &status) {
+		return retryableHTTPStatus(status.Status)
+	}
+	return e.Err != nil && !errors.Is(e.Err, context.Canceled) && retryableMetadataFailure(e.Err)
 }
 
 // ClientSecretConfigurationError means a ClientSecretCredential is misconfigured.
@@ -76,7 +85,46 @@ func (e *ClientSecretConfigurationError) Error() string {
 	return e.Message
 }
 
+// CredentialDiscoveryReason identifies why DiscoverCredential cannot select a credential.
+type CredentialDiscoveryReason string
+
+const (
+	// CredentialDiscoveryAbsent means no supported credential is configured.
+	CredentialDiscoveryAbsent CredentialDiscoveryReason = "absent"
+	// CredentialDiscoveryAmbiguous means multiple types are configured without a selector.
+	CredentialDiscoveryAmbiguous CredentialDiscoveryReason = "ambiguous"
+	// CredentialDiscoveryIncomplete means a client secret is set without a client ID or selector.
+	CredentialDiscoveryIncomplete CredentialDiscoveryReason = "incomplete"
+	// CredentialDiscoveryUnknownType means the selector names an unsupported type.
+	CredentialDiscoveryUnknownType CredentialDiscoveryReason = "unknown_type"
+	// CredentialDiscoveryNotSatisfiable means the selected type lacks required inputs.
+	CredentialDiscoveryNotSatisfiable CredentialDiscoveryReason = "not_satisfiable"
+)
+
+// CredentialDiscoveryError indicates that the environment does not select one
+// usable application credential. Resolvable lists the canonical type names
+// with complete environment inputs, before constructor validation. Err holds
+// an underlying cause, if any, for errors.Is and errors.As.
+type CredentialDiscoveryError struct {
+	Reason     CredentialDiscoveryReason
+	Resolvable []string
+	Message    string
+	Err        error
+}
+
+// Error returns the discovery message and any underlying cause.
+func (e *CredentialDiscoveryError) Error() string {
+	if e.Err != nil {
+		return e.Message + ": " + e.Err.Error()
+	}
+	return e.Message
+}
+
+// Unwrap returns the underlying cause, if any.
+func (e *CredentialDiscoveryError) Unwrap() error { return e.Err }
+
 func (*WebIdentityConfigurationError) keycardError()      {}
 func (*WorkloadIdentityConfigurationError) keycardError() {}
 func (*WorkloadIdentityRuntimeError) keycardError()       {}
 func (*ClientSecretConfigurationError) keycardError()     {}
+func (*CredentialDiscoveryError) keycardError()           {}

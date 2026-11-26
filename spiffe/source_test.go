@@ -117,10 +117,27 @@ func TestNoSVID(t *testing.T) {
 		})
 		_, err := newSource(t, WithSocketPath(path), WithSpiffeID(spiffeID)).IdentityToken(fetchContext(t))
 		runtimeErr := requireRuntimeError(t, err, true)
-		if got := status.Convert(errors.Unwrap(runtimeErr)); got.Code() != codes.PermissionDenied || got.Message() != status.Convert(cause).Message() {
-			t.Fatalf("cause = %v, want %v", got, cause)
+		var grpcErr interface{ GRPCStatus() *status.Status }
+		if !errors.As(runtimeErr, &grpcErr) || grpcErr.GRPCStatus().Code() != codes.PermissionDenied ||
+			grpcErr.GRPCStatus().Message() != status.Convert(cause).Message() {
+			t.Fatalf("error = %v, want cause %v", runtimeErr, cause)
 		}
 	})
+}
+
+func TestCanceledFetchIsNotRetryable(t *testing.T) {
+	ctx, cancel := context.WithCancel(fetchContext(t))
+	defer cancel()
+	path := serveWorkloadAPI(t, func(ctx context.Context, _ *workload.JWTSVIDRequest) (*workload.JWTSVIDResponse, error) {
+		cancel()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	_, err := newSource(t, WithSocketPath(path)).IdentityToken(ctx)
+	requireRuntimeError(t, err, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want caller cancellation", err)
+	}
 }
 
 // Spec row 16: a rotated SVID is used on the next fetch.

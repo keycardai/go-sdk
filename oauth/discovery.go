@@ -34,6 +34,11 @@ type AuthorizationServerMetadata struct {
 	// DeviceAuthorizationEndpoint is where device authorization requests are sent
 	// (RFC 8628 section 4). It is empty when the server does not advertise it.
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
+	// RevocationEndpoint is where RFC 7009 token revocation requests are sent.
+	RevocationEndpoint string `json:"revocation_endpoint,omitempty"`
+	// RevocationEndpointAuthMethodsSupported lists the client authentication methods
+	// the revocation endpoint accepts.
+	RevocationEndpointAuthMethodsSupported []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
 
 	SubjectTypesSupported            []string `json:"subject_types_supported,omitempty"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported,omitempty"`
@@ -52,6 +57,7 @@ var knownASMetadataFields = []string{
 	"grant_types_supported", "token_endpoint_auth_methods_supported",
 	"code_challenge_methods_supported", "userinfo_endpoint", "end_session_endpoint",
 	"device_authorization_endpoint",
+	"revocation_endpoint", "revocation_endpoint_auth_methods_supported",
 	"subject_types_supported", "id_token_signing_alg_values_supported", "claims_supported",
 }
 
