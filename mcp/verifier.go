@@ -54,6 +54,14 @@ type JWTOAuthTokenVerifier struct {
 // oauth.WithAlgorithms, oauth.WithVerifierLeeway) are forwarded to the underlying JWT
 // verifier. Returns a configuration error when no trusted issuer is supplied.
 func NewJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring, issuers []string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
+	verifier, err := newJWTOAuthTokenVerifier(keyring, issuers, opts...)
+	if err == nil && verifier.verifier.HasAudienceRestriction() {
+		warnLegacyResourceBinding()
+	}
+	return verifier, err
+}
+
+func newJWTOAuthTokenVerifier(keyring oauth.OAuthKeyring, issuers []string, opts ...oauth.JWTVerifierOption) (*JWTOAuthTokenVerifier, error) {
 	verifier, err := oauth.NewJWTVerifier(keyring, issuers, opts...)
 	if err != nil {
 		return nil, err

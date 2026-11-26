@@ -53,12 +53,84 @@ type BearerAuthOption func(*bearerAuthConfig)
 
 type bearerAuthConfig struct {
 	requiredScopes []string
+	keyring        oauth.OAuthKeyring
+	resolveZone    func(host, target string) string
 }
 
 // WithRequiredScopes sets the scopes that must all be present in the token; a token
 // missing any is rejected with an insufficient-scope failure.
 func WithRequiredScopes(scopes ...string) BearerAuthOption {
 	return func(cfg *bearerAuthConfig) { cfg.requiredScopes = scopes }
+}
+
+// WithBearerKeyring supplies verification keys for ResourceBinding.BearerAuth.
+// If omitted, the middleware fetches the issuers' JWKS on demand.
+func WithBearerKeyring(keyring oauth.OAuthKeyring) BearerAuthOption {
+	return func(cfg *bearerAuthConfig) { cfg.keyring = keyring }
+}
+
+// WithInboundZoneResolver selects a configured zone by the request host and
+// original path and query. It receives neither the token nor forwarded headers.
+// It is required for per-zone resource verification and must be concurrency safe.
+func WithInboundZoneResolver(resolve func(host, target string) string) BearerAuthOption {
+	return func(cfg *bearerAuthConfig) { cfg.resolveZone = resolve }
+}
+
+// BearerAuth builds HTTP middleware with the binding's issuer and audience policy.
+// Per-zone mode requires WithInboundZoneResolver; shared discovery selects the
+// issuer from the token using the complete configured zone set.
+func (b *ResourceBinding) BearerAuth(opts ...BearerAuthOption) (func(http.Handler) http.Handler, error) {
+	cfg := bearerOptions(opts)
+	if b.issuer == "" {
+		return nil, configurationError("bearer authentication requires a configured issuer")
+	}
+	if (b.zones != nil && !b.multi) != (cfg.resolveZone != nil) {
+		return nil, configurationError("per-zone binding requires a token-independent inbound zone resolver")
+	}
+	if b.multi && len(b.audiences) == 0 {
+		return nil, configurationError("multi_resource requires a nonempty audience list")
+	}
+	keyring := cfg.keyring
+	if keyring == nil {
+		keyring = oauth.NewJWKSOAuthKeyring()
+	}
+	if cfg.resolveZone != nil {
+		verifiers := make(map[string]*JWTOAuthTokenVerifier, len(b.zones))
+		for zone, id := range b.zones {
+			verifier, err := newJWTOAuthTokenVerifier(keyring, []string{b.zoneIssuers[zone]}, oauth.WithAudiences(id.value))
+			if err != nil {
+				return nil, err
+			}
+			verifiers[zone] = verifier
+		}
+		return bearerAuth(cfg, func(r *http.Request) (TokenVerifier, string) {
+			zone := cfg.resolveZone(r.Host, receivedTarget(r).RequestURI())
+			verifier, ok := verifiers[zone]
+			if !ok {
+				return nil, ""
+			}
+			return verifier, b.zones[zone].challengeMetadataURL(r)
+		}), nil
+	}
+
+	issuers := []string{b.issuer}
+	if b.zones != nil {
+		issuers = b.trustedZoneIssuers()
+	}
+	audienceOption := oauth.WithAllowAnyAudience()
+	if len(b.audiences) != 0 {
+		audienceOption = oauth.WithAudiences(b.audiences...)
+	}
+	verifier, err := newJWTOAuthTokenVerifier(keyring, issuers, audienceOption)
+	if err != nil {
+		return nil, err
+	}
+	return bearerAuth(cfg, func(r *http.Request) (TokenVerifier, string) {
+		if b.legacy {
+			return verifier, protectedResourceMetadataURL(r)
+		}
+		return verifier, b.single.challengeMetadataURL(r)
+	}), nil
 }
 
 // RequireBearerAuth returns middleware that verifies Bearer tokens with verifier.
@@ -72,20 +144,35 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 	if verifier == nil {
 		panic("mcp: RequireBearerAuth requires a non-nil TokenVerifier")
 	}
+	if _, sdkVerifier := verifier.(*JWTOAuthTokenVerifier); !sdkVerifier {
+		warnLegacyResourceBinding()
+	}
+	return bearerAuth(bearerOptions(opts), func(r *http.Request) (TokenVerifier, string) {
+		return verifier, protectedResourceMetadataURL(r)
+	})
+}
 
+func bearerOptions(opts []BearerAuthOption) bearerAuthConfig {
 	cfg := bearerAuthConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	return cfg
+}
 
+func bearerAuth(cfg bearerAuthConfig, selectBinding func(*http.Request) (TokenVerifier, string)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resourceMetadataURL := protectedResourceMetadataURL(r)
+			verifier, resourceMetadataURL := selectBinding(r)
 
 			credentials := r.Header.Get("Authorization")
 			if credentials == "" {
-				challenge := fmt.Sprintf(`Bearer resource_metadata="%s"`, resourceMetadataURL)
-				w.Header().Set("WWW-Authenticate", challenge)
+				writeBearerChallenge(w, resourceMetadataURL, "")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if verifier == nil {
+				writeBearerChallenge(w, "", `error="invalid_token"`)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -98,8 +185,7 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 
 			scheme, token := parts[0], parts[1]
 			if !strings.EqualFold(scheme, "bearer") {
-				challenge := fmt.Sprintf(`Bearer error="invalid_token", error_description="Unsupported authentication scheme", resource_metadata="%s"`, resourceMetadataURL)
-				w.Header().Set("WWW-Authenticate", challenge)
+				writeBearerChallenge(w, resourceMetadataURL, `error="invalid_token", error_description="Unsupported authentication scheme"`)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -122,8 +208,7 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 				case *oauth.InsufficientScopeError:
 					errCode = e.ErrorCode()
 					errMsg = e.Message
-					challenge := fmt.Sprintf(`Bearer error="%s", error_description="%s", resource_metadata="%s"`, errCode, errMsg, resourceMetadataURL)
-					w.Header().Set("WWW-Authenticate", challenge)
+					writeBearerChallenge(w, resourceMetadataURL, fmt.Sprintf(`error="%s", error_description="%s"`, errCode, errMsg))
 					w.WriteHeader(http.StatusForbidden)
 					return
 				default:
@@ -131,8 +216,7 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 					errMsg = err.Error()
 				}
 
-				challenge := fmt.Sprintf(`Bearer error="%s", error_description="%s", resource_metadata="%s"`, errCode, errMsg, resourceMetadataURL)
-				w.Header().Set("WWW-Authenticate", challenge)
+				writeBearerChallenge(w, resourceMetadataURL, fmt.Sprintf(`error="%s", error_description="%s"`, errCode, errMsg))
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -145,8 +229,7 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 				}
 				for _, required := range cfg.requiredScopes {
 					if !scopeSet[required] {
-						challenge := fmt.Sprintf(`Bearer error="insufficient_scope", error_description="Insufficient scope", resource_metadata="%s"`, resourceMetadataURL)
-						w.Header().Set("WWW-Authenticate", challenge)
+						writeBearerChallenge(w, resourceMetadataURL, `error="insufficient_scope", error_description="Insufficient scope"`)
 						w.WriteHeader(http.StatusForbidden)
 						return
 					}
@@ -155,8 +238,7 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 
 			// Check expiry
 			if authInfo.ExpiresAt > 0 && authInfo.ExpiresAt < time.Now().Unix() {
-				challenge := fmt.Sprintf(`Bearer error="invalid_token", error_description="Token has expired", resource_metadata="%s"`, resourceMetadataURL)
-				w.Header().Set("WWW-Authenticate", challenge)
+				writeBearerChallenge(w, resourceMetadataURL, `error="invalid_token", error_description="Token has expired"`)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -165,6 +247,20 @@ func RequireBearerAuth(verifier TokenVerifier, opts ...BearerAuthOption) func(ht
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func writeBearerChallenge(w http.ResponseWriter, metadataURL, params string) {
+	if metadataURL != "" {
+		if params != "" {
+			params += ", "
+		}
+		params += fmt.Sprintf(`resource_metadata="%s"`, metadataURL)
+	}
+	challenge := "Bearer"
+	if params != "" {
+		challenge += " " + params
+	}
+	w.Header().Set("WWW-Authenticate", challenge)
 }
 
 // protectedResourceMetadataURL constructs the well-known URL for the protected resource
@@ -185,7 +281,7 @@ func protectedResourceMetadataURL(r *http.Request) string {
 	if resourcePath == "/" {
 		resourcePath = ""
 	}
-	return fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource%s", scheme, r.Host, resourcePath)
+	return fmt.Sprintf("%s://%s%s%s", scheme, r.Host, protectedResourcePath, resourcePath)
 }
 
 // keysUnavailable reports whether verification could not complete because the

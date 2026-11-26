@@ -6,6 +6,46 @@ Server-side and client-side MCP authentication for Keycard: `RequireBearerAuth`
 See the [root README](../README.md) for wiring examples with the official
 `modelcontextprotocol/go-sdk` and with `mark3labs/mcp-go`.
 
+## Resource binding
+
+Use one `NewResourceBinding` configuration for `BearerAuth` and
+`MetadataHandler`. With `WithResourceIdentifier`, the supplied HTTP(S) URL
+is the exact token audience and the `resource` value in discovery. A bearer
+challenge advertises discovery only when the original request path and query
+match that URL. Request and forwarding headers cannot change the advertised
+URL. A URN checks the audience without publishing discovery.
+
+Register the metadata handler at the public host root, for example via
+`mux.Handle("/.well-known/", binding.MetadataHandler())`. A protected handler
+mounted under `/app` at `https://api.example.com/app/mcp` needs a root route
+or proxy forwarding for `/.well-known/oauth-protected-resource/app/mcp`, not
+`/app/.well-known/oauth-protected-resource/app/mcp`. The SDK cannot inspect
+external routers or proxies to validate this wiring. For multiple independently
+discoverable endpoints, register each binding's metadata handler at its own
+well-known path and use the corresponding middleware on that endpoint.
+
+- **Per zone:** Set `WithResourceIdentifiersByZone` and supply a base issuer
+  such as `https://keycard.cloud`. Build bearer middleware with
+  `WithInboundZoneResolver`, which receives the request host and original path
+  and query, but no token. The selected zone controls both the issuer and the
+  audience. Register metadata at the host root; it looks up the zone by the
+  configured discovery path, not through the resolver.
+- **Shared discovery:** Set `WithResourceIdentifiersByZone` with an identical
+  HTTP(S) identifier for every trusted zone, `WithMultiResource(true)`, and
+  `WithResourceAudiences(sharedURL)` for bearer verification. The document
+  advertises all configured zone issuers and the verifier selects the issuer
+  from the token. Neither anonymous discovery nor challenges need a zone.
+- **Verifier only:** Use `WithMultiResource(true)` and a nonempty
+  `WithResourceAudiences(...)` list for match-any audience verification, or
+  `WithAllowAnyAudience(true)` to skip only the audience check. Neither publishes
+  a protected-resource document or advertises a metadata URL in challenges.
+
+Existing verifier and metadata constructors still accept legacy configurations.
+Legacy mode retains its audience policy and request-derived discovery, and logs
+a deprecation warning naming `resource_identifier`. Share one binding for
+middleware and metadata to configure and warn once. Legacy support will not be
+removed until a release ships at least 60 days after the first warning release.
+
 ## Preserve MCP request headers at proxies and WAFs
 
 From protocol version `2026-07-28` (SEP-2243) an MCP client sends `Mcp-Method`
