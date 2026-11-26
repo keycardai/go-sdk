@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // RegistrationRequest is RFC 7591 §2 client metadata. Every field is optional; only the
@@ -34,6 +37,9 @@ type RegistrationRequest struct {
 
 // RegistrationResponse is RFC 7591 §3.2.1. Raw preserves the full response body so
 // AS-specific fields not modeled here remain accessible.
+//
+// String, GoString, and LogValue leave out ClientSecret and
+// RegistrationAccessToken, and show the keys of Raw only.
 type RegistrationResponse struct {
 	ClientID                string
 	ClientSecret            string
@@ -43,6 +49,25 @@ type RegistrationResponse struct {
 	RegistrationClientURI   string
 	Raw                     map[string]any
 }
+
+func (r RegistrationResponse) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.RegistrationResponse", Fields: []printed.Field{
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+		{Name: "ClientIDIssuedAt", Key: "client_id_issued_at", Value: r.ClientIDIssuedAt},
+		{Name: "ClientSecretExpiresAt", Key: "client_secret_expires_at", Value: r.ClientSecretExpiresAt},
+		{Name: "RegistrationClientURI", Key: "registration_client_uri", Value: r.RegistrationClientURI},
+		{Name: "Raw", Key: "raw", Value: printed.Keys(r.Raw)},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r RegistrationResponse) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r RegistrationResponse) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r RegistrationResponse) LogValue() slog.Value { return r.printed().LogValue() }
 
 // RegisterOption configures RegisterClient.
 type RegisterOption func(*registrationConfig)

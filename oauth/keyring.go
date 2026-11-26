@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // OAuthKeyring resolves public keys by issuer and key ID.
@@ -26,11 +29,30 @@ type OAuthKeyring interface {
 }
 
 // IdentifiableKey pairs a private key with its metadata.
+//
+// String, GoString, and LogValue show Key's type only.
 type IdentifiableKey struct {
 	Key    crypto.PrivateKey
 	Issuer string
 	KID    string
 }
+
+func (k IdentifiableKey) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.IdentifiableKey", Fields: []printed.Field{
+		{Name: "Key", Key: "key", Value: printed.TypeName(k.Key)},
+		{Name: "Issuer", Key: "issuer", Value: k.Issuer},
+		{Name: "KID", Key: "kid", Value: k.KID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (k IdentifiableKey) String() string { return k.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (k IdentifiableKey) GoString() string { return k.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (k IdentifiableKey) LogValue() slog.Value { return k.printed().LogValue() }
 
 // PrivateKeyring provides private keys for JWT signing.
 type PrivateKeyring interface {
@@ -38,10 +60,33 @@ type PrivateKeyring interface {
 }
 
 // PEMPrivateKeyring implements PrivateKeyring using a PEM-encoded private key.
+//
+// String, GoString, and LogValue show the issuer and key ID, never the key.
 type PEMPrivateKeyring struct {
 	key    crypto.PrivateKey
 	issuer string
 	kid    string
+}
+
+func (k *PEMPrivateKeyring) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.PEMPrivateKeyring", Fields: []printed.Field{
+		{Name: "Issuer", Key: "issuer", Value: k.issuer},
+		{Name: "KID", Key: "kid", Value: k.kid},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (k *PEMPrivateKeyring) String() string { return k.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (k *PEMPrivateKeyring) GoString() string { return k.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (k *PEMPrivateKeyring) LogValue() slog.Value {
+	if k == nil {
+		return slog.AnyValue(nil)
+	}
+	return k.printed().LogValue()
 }
 
 // NewPEMPrivateKeyring creates a PrivateKeyring from a PEM-encoded private key.

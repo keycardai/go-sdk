@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // PrivateKeyStorage persists RSA key pairs for WebIdentity.
@@ -142,11 +145,33 @@ func (s *FilePrivateKeyStorage) ListKeyIDs() ([]string, error) {
 }
 
 // PrivateKeyManager generates and manages RSA key pairs for client assertions.
+//
+// String, GoString, and LogValue show the key ID, never the key.
 type PrivateKeyManager struct {
 	storage    PrivateKeyStorage
 	keyID      string
 	privateKey *rsa.PrivateKey
 	publicJWK  map[string]any
+}
+
+func (m *PrivateKeyManager) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.PrivateKeyManager", Fields: []printed.Field{
+		{Name: "KeyID", Key: "key_id", Value: m.keyID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (m *PrivateKeyManager) String() string { return m.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (m *PrivateKeyManager) GoString() string { return m.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (m *PrivateKeyManager) LogValue() slog.Value {
+	if m == nil {
+		return slog.AnyValue(nil)
+	}
+	return m.printed().LogValue()
 }
 
 // NewPrivateKeyManager creates a new PrivateKeyManager.
