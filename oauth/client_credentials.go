@@ -13,6 +13,8 @@ import (
 )
 
 // ClientCredentialsRequest represents an RFC 6749 Section 4.4 client credentials request.
+//
+// String, GoString, and LogValue leave out ClientAssertion.
 type ClientCredentialsRequest struct {
 	Resource            string
 	Scope               string
@@ -23,6 +25,24 @@ type ClientCredentialsRequest struct {
 	// sent when the client uses HTTP Basic.
 	ClientID string
 }
+
+func (r ClientCredentialsRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ClientCredentialsRequest", Fields: []printed.Field{
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+		{Name: "Scope", Key: "scope", Value: r.Scope},
+		{Name: "ClientAssertionType", Key: "client_assertion_type", Value: r.ClientAssertionType},
+		{Name: "ClientID", Key: "client_id", Value: r.ClientID},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r ClientCredentialsRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r ClientCredentialsRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r ClientCredentialsRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // ClientCredentialsClientOption configures a ClientCredentialsClient.
 type ClientCredentialsClientOption func(*clientCredentialsConfig)

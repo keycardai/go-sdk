@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
+
+	"github.com/keycardai/go-sdk/internal/printed"
 )
 
 // SubstituteUserTokenType is the vendor URN used as subject_token_type in
@@ -13,6 +16,8 @@ import (
 const SubstituteUserTokenType = "urn:keycard:params:oauth:token-type:substitute-user"
 
 // ImpersonateRequest contains the inputs for an impersonation token exchange.
+//
+// String, GoString, and LogValue leave out ClientAssertion.
 type ImpersonateRequest struct {
 	// UserIdentifier is the target user. Becomes "sub" in the issued token. Required.
 	UserIdentifier string
@@ -27,6 +32,24 @@ type ImpersonateRequest struct {
 	ClientAssertion     string
 	ClientAssertionType string
 }
+
+func (r ImpersonateRequest) printed() printed.Struct {
+	return printed.Struct{Type: "oauth.ImpersonateRequest", Fields: []printed.Field{
+		{Name: "UserIdentifier", Key: "user_identifier", Value: r.UserIdentifier},
+		{Name: "Resource", Key: "resource", Value: r.Resource},
+		{Name: "Scopes", Key: "scopes", Value: r.Scopes},
+		{Name: "ClientAssertionType", Key: "client_assertion_type", Value: r.ClientAssertionType},
+	}}
+}
+
+// String implements [fmt.Stringer].
+func (r ImpersonateRequest) String() string { return r.printed().String() }
+
+// GoString implements [fmt.GoStringer].
+func (r ImpersonateRequest) GoString() string { return r.printed().GoString() }
+
+// LogValue implements [slog.LogValuer].
+func (r ImpersonateRequest) LogValue() slog.Value { return r.printed().LogValue() }
 
 // Impersonate exchanges the client's application credential for a token that
 // acts on behalf of req.UserIdentifier.
