@@ -50,6 +50,12 @@ One agent calling another on the user's behalf: discover the target agent's card
 
 - **Delegation**: `DelegationClient`, `ServiceDiscovery`
 
+Default HTTP clients limit decoded peer replies to 64 MiB. Use
+`a2a.WithMaxPeerResponseBytes` for delegation or
+`a2a.WithDiscoveryMaxPeerResponseBytes` for standalone discovery. Overflow
+returns a typed `a2a.ResponseBodyTooLargeError` in the error chain. Neither
+option changes the 1 MiB token-exchange limit or caps a supplied HTTP client.
+
 ## Quick Start
 
 ### Protect an endpoint with bearer auth
