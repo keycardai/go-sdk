@@ -1,3 +1,10 @@
+## v0.44.0 (2026-11-26)
+
+
+- feat(oauth): add token introspection (ID-881) (#97)
+- Adds IntrospectToken per keycard-sdk-spec token-introspection v1 (spec#100).
+- introspection_endpoint and introspection_endpoint_auth_methods_supported are typed fields on AuthorizationServerMetadata and are not in Extra.
+
 ## v0.43.0 (2026-11-26)
 
 
