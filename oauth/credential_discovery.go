@@ -38,6 +38,7 @@ func WithWebIdentityServerName(name string) CredentialDiscoveryOption {
 // A token-file variable from NewFileTokenSource's discovery list configures a
 // workload identity, with KEYCARD_CLIENT_ID attached if set.
 // KEYCARD_WEB_IDENTITY_KEY_STORAGE_DIR configures a web identity.
+// A discovered web identity also carries KEYCARD_CLIENT_ID if set.
 //
 // KEYCARD_APPLICATION_CREDENTIAL_TYPE selects client_secret, workload_identity
 // (also accepted as the deprecated eks_workload_identity), or web_identity.
@@ -132,6 +133,10 @@ func DiscoverCredential(env map[string]string, opts ...CredentialDiscoveryOption
 		for _, opt := range opts {
 			opt(&cfg)
 		}
-		return NewWebIdentity(WithStorageDir(storageDir), WithServerName(cfg.webIdentityServerName)), nil
+		webOpts := []WebIdentityOption{WithStorageDir(storageDir), WithServerName(cfg.webIdentityServerName)}
+		if clientID != "" {
+			webOpts = append(webOpts, WithClientID(clientID))
+		}
+		return NewWebIdentity(webOpts...), nil
 	}
 }
