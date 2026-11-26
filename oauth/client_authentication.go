@@ -26,8 +26,10 @@ type ClientAuthentication struct {
 // with it before any request, such as WorkloadIdentityCredential without a client id.
 type ClientAuthenticator interface {
 	// ClientAuthentication returns the headers and form fields that authenticate the
-	// client to the zone identified by issuer, for a request sent to endpoint. Call it
-	// once per request. When the error is nil, the result must not be nil.
+	// client to the zone identified by issuer. The endpoint is the request URL,
+	// except for revocation, which passes the issuer from metadata as the assertion
+	// audience.
+	// Call it once per request. When the error is nil, the result must not be nil.
 	ClientAuthentication(ctx context.Context, issuer, endpoint string) (*ClientAuthentication, error)
 }
 
@@ -51,8 +53,8 @@ func (c *ClientSecretCredential) ClientAuthentication(_ context.Context, issuer,
 }
 
 // ClientAuthentication returns a newly signed client_assertion and its
-// client_assertion_type. The assertion's aud is endpoint, because a Keycard zone
-// rejects an assertion whose aud is not the URL of the endpoint it is sent to.
+// client_assertion_type. The assertion's aud is endpoint: the request URL for
+// token requests and the metadata issuer for revocation.
 // WithAudienceConfig does not apply. The assertion's iss and sub are the client id
 // set with WithClientID. A credential without one returns a
 // WebIdentityConfigurationError.
@@ -131,8 +133,7 @@ func clientAuthenticator(cred ApplicationCredential) (ClientAuthenticator, error
 // addClientAuthentication gets the client authentication from the client
 // authenticator and sets its headers and form fields in header and form. A field
 // it sets replaces the values already there, so the request does not send it
-// twice. endpoint must be the URL the request is sent to. It returns an error from
-// the client authenticator as is.
+// twice. It returns an error from the client authenticator as is.
 func addClientAuthentication(ctx context.Context, ca ClientAuthenticator, issuer, endpoint string, header http.Header, form url.Values) error {
 	auth, err := ca.ClientAuthentication(ctx, issuer, endpoint)
 	if err != nil {

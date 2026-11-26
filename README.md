@@ -27,9 +27,10 @@ No MCP dependency. Use standalone for JWT operations, JWKS key discovery, token 
 - **JWT signing/verification**: `JWTSigner`, `JWTVerifier`
 - **JWKS keyring**: `JWKSOAuthKeyring` with two-level caching and request deduplication
 - **Token exchange**: `TokenExchangeClient` (RFC 8693)
-- **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including the OIDC `userinfo_endpoint` and `end_session_endpoint`, and `device_authorization_endpoint` (RFC 8628)
+- **Discovery**: `FetchAuthorizationServerMetadata` (RFC 8414), including OIDC UserInfo and end-session endpoints, the device authorization endpoint (RFC 8628), and the revocation endpoint and its supported client authentication methods (RFC 7009). Use `RevocationEndpoint` and `RevocationEndpointAuthMethodsSupported` on `AuthorizationServerMetadata`; their corresponding JSON keys are not in `Extra`.
 - **Device authorization grant**: `DeviceAuthorizationClient` (RFC 8628) for processes with no browser; see [`examples/device-authorization`](examples/device-authorization)
 - **Refresh**: `RefreshAuthorization` redeems a refresh token as a public client, a confidential client, or with a credential, optionally narrowed to some resources or scopes
+- **Revocation**: `RevokeToken` sends a token to the issuer's advertised revocation endpoint (RFC 7009). Revoking a Keycard refresh token revokes its session.
 - **UserInfo**: `FetchUserInfo` for the signed-in user's identity claims (OIDC Core 1.0 §5.3)
 - **Application credentials**: `ClientSecret`, `WebIdentity` (RFC 7523), `WorkloadIdentity` (platform OIDC tokens via pluggable sources); multi-zone via `NewMultiZoneClientSecret`. Each implements `ClientAuthenticator` for requests other than token exchange.
 
