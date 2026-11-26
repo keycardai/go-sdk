@@ -61,6 +61,39 @@ Default HTTP clients limit decoded peer replies to 64 MiB. Use
 returns a typed `a2a.ResponseBodyTooLargeError` in the error chain. Neither
 option changes the 1 MiB token-exchange limit or caps a supplied HTTP client.
 
+### `spiffe`: SPIFFE JWT-SVID Workload Identity
+
+The optional module is installable with `go get github.com/keycardai/go-sdk/spiffe`.
+It is released separately with `spiffe/vX.Y.Z` tags and depends on the core SDK
+release that provides `WorkloadIdentityRuntimeError.Transient`.
+It uses the official go-spiffe library and keeps gRPC out of the core SDK.
+
+```go
+import (
+    "github.com/keycardai/go-sdk/oauth"
+    "github.com/keycardai/go-sdk/spiffe"
+)
+
+// The audience matches the credential's configured audience (the zone URL by default).
+source, err := spiffe.NewSpiffeJwtSvidSource("https://your-zone.keycard.cloud")
+if err != nil {
+    return err
+}
+defer source.Close()
+credential, err := oauth.NewWorkloadIdentity(source, oauth.WithWorkloadClientID("your-credential-id"))
+```
+
+The source connects on the first fetch, using the Unix socket in
+`SPIFFE_ENDPOINT_SOCKET` or the address passed to `spiffe.WithSocketPath`.
+Set `spiffe.WithSpiffeID` if the workload has multiple identities. Without it,
+the source uses the first JWT-SVID returned by the agent. The connection
+timeout defaults to 10 seconds and `spiffe.WithInitTimeout` overrides it.
+Each fetch asks the agent for a JWT-SVID and returns the compact token unchanged.
+
+If [spiffe-helper](https://github.com/spiffe/spiffe-helper) already writes the
+JWT-SVID to a file, the existing `oauth.FileTokenSource` works with no new code
+or dependency on this module.
+
 ## Quick Start
 
 ### Protect an endpoint with bearer auth

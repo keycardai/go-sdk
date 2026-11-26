@@ -6,6 +6,7 @@ Handles version bumping including retry logic for pushing changes
 to avoid race conditions in CI.
 """
 
+import re
 import subprocess
 import sys
 import time
@@ -103,6 +104,68 @@ def run_bump() -> bool:
     return True
 
 
+# Sub-modules with their own go.mod. Each has a <dir>/.cz.toml whose tag_format
+# is <dir>/v$version, the tag form the Go toolchain resolves for a sub-module.
+SUBMODULES = ["spiffe"]
+
+
+def submodule_version(name: str) -> str:
+    """Return the version recorded in the sub-module's .cz.toml."""
+    match = re.search(
+        r'^version\s*=\s*"([^"]+)"', (Path(name) / ".cz.toml").read_text(), re.M
+    )
+    return match.group(1) if match else "0.0.0"
+
+
+def submodule_increment(name: str) -> str | None:
+    """Return the bump increment from commits touching the sub-module since its last tag."""
+    _, last_tag, _ = run_command(
+        ["git", "describe", "--tags", "--abbrev=0", "--match", f"{name}/v*"]
+    )
+    rev_range = f"{last_tag}..HEAD" if last_tag else "HEAD"
+    exit_code, log, _ = run_command(
+        ["git", "log", "--format=%s%n%b%x00", rev_range, "--", f"{name}/"]
+    )
+    if exit_code != 0:
+        return None
+    increment = None
+    for message in log.split("\0"):
+        subject = message.strip().split("\n", 1)[0]
+        match = re.match(r"^(feat|fix|refactor|perf)(\(.+\))?(!)?:", subject)
+        if not match:
+            continue
+        if match.group(3) or re.search(r"^BREAKING[- ]CHANGE:", message, re.M):
+            # Like major_version_zero, a breaking change below 1.0.0 is a
+            # minor bump; a Go v2+ module would also need a new module path.
+            return "MINOR" if submodule_version(name).startswith("0.") else "MAJOR"
+        if match.group(1) == "feat":
+            increment = "MINOR"
+        elif increment is None:
+            increment = "PATCH"
+    return increment
+
+
+def bump_submodules() -> bool:
+    """Tag each sub-module with changes since its last tag as <dir>/vX.Y.Z."""
+    for name in SUBMODULES:
+        config = Path(name) / ".cz.toml"
+        if not config.exists():
+            continue
+        increment = submodule_increment(name)
+        if increment is None:
+            print(f"No releasable changes in {name}. Skipping its bump.")
+            continue
+        print(f"Bumping {name} ({increment})...")
+        exit_code, stdout, stderr = run_command(
+            ["cz", "--config", str(config), "bump", "--yes", "--increment", increment]
+        )
+        if exit_code != 0:
+            print(f"Failed to bump {name}: {stderr}")
+            return False
+        print(stdout)
+    return True
+
+
 def push_changes_with_retry(max_attempts: int = 3) -> bool:
     """Push changes to origin/main with retry logic."""
     for attempt in range(1, max_attempts + 1):
@@ -140,12 +203,19 @@ def main():
     if not pull_latest_changes():
         sys.exit(1)
 
-    if not has_unreleased_changes():
-        print("No unreleased changes detected. Skipping bump.")
-        return
+    if has_unreleased_changes():
+        if not run_bump():
+            sys.exit(1)
+    else:
+        print("No unreleased changes detected. Skipping root bump.")
 
-    if not run_bump():
+    if not bump_submodules():
         sys.exit(1)
+
+    exit_code, ahead, _ = run_command(["git", "rev-list", "--count", "origin/main..HEAD"])
+    if exit_code == 0 and ahead == "0":
+        print("Nothing to push.")
+        return
 
     if not push_changes_with_retry():
         sys.exit(1)

@@ -17,13 +17,13 @@ func (e *WebIdentityConfigurationError) Error() string {
 }
 
 // WorkloadIdentityConfigurationError indicates a workload identity credential
-// or token source was misconfigured at construction: a nil source, a missing,
-// unreadable, or empty token file, no discovery environment variable set, or
-// a missing required audience. Source identifies the token source ("file",
-// "gcp-metadata", "fly"; empty when the fault is in the credential itself). Err
-// carries the underlying cause (e.g. os.ErrNotExist or os.ErrPermission from
-// reading a token file) for errors.Is/errors.As, and is nil when there is no
-// underlying error.
+// or token source is misconfigured: a nil source, a missing, unreadable, or
+// empty token file, no discovery environment variable set, or a missing
+// required audience or socket. Source identifies the token source ("file",
+// "gcp-metadata", "fly", or "spiffe" from the spiffe module) and is empty when
+// the fault is in the credential itself. Err carries the underlying cause
+// (e.g. os.ErrNotExist or os.ErrPermission from reading a token file) for
+// errors.Is/errors.As, and is nil when there is no underlying error.
 type WorkloadIdentityConfigurationError struct {
 	Source  string
 	Message string
@@ -42,14 +42,17 @@ func (e *WorkloadIdentityConfigurationError) Unwrap() error { return e.Err }
 // WorkloadIdentityRuntimeError indicates that the identity token source fails
 // at request time (e.g. the token file is empty or the platform endpoint is
 // unreachable). Source identifies the token source ("file",
-// "gcp-metadata", "fly", or "custom" for a source whose error is not one of
-// this package's typed errors). Err carries the
+// "gcp-metadata", "fly", "spiffe" from the spiffe module, or "custom" for a
+// source whose error is not one of this package's typed errors). Err carries the
 // underlying cause for errors.Is/errors.As, and is nil when there is no
 // underlying error (e.g. an empty token).
 type WorkloadIdentityRuntimeError struct {
 	Source  string
 	Message string
 	Err     error
+	// Transient marks a failure the source knows can succeed on retry, for a
+	// source outside this package whose cause is not an HTTP or network error.
+	Transient bool
 }
 
 func (e *WorkloadIdentityRuntimeError) Error() string {
@@ -61,8 +64,12 @@ func (e *WorkloadIdentityRuntimeError) Error() string {
 
 func (e *WorkloadIdentityRuntimeError) Unwrap() error { return e.Err }
 
-// Retryable reports whether the source fails with a transient transport error.
+// Retryable reports whether the source marks the failure Transient or fails
+// with a transient transport error. Caller cancellation is never retryable.
 func (e *WorkloadIdentityRuntimeError) Retryable() bool {
+	if e.Transient {
+		return !errors.Is(e.Err, context.Canceled)
+	}
 	var sourceStatus workloadIdentityHTTPStatusError
 	if errors.As(e.Err, &sourceStatus) {
 		return retryableHTTPStatus(int(sourceStatus))

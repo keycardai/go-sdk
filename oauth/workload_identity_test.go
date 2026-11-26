@@ -554,3 +554,28 @@ func TestWorkloadIdentity_ClientID(t *testing.T) {
 		}
 	})
 }
+
+// Spec row 15: a source marks an agent or SVID failure Transient, so it is
+// retryable with its cause preserved; caller cancellation is not retryable.
+func TestWorkloadIdentityRuntimeError_Transient(t *testing.T) {
+	errNoSVID := errors.New("no JWT-SVID returned")
+	for _, tc := range []struct {
+		name      string
+		err       *WorkloadIdentityRuntimeError
+		retryable bool
+	}{
+		{"transient without cause", &WorkloadIdentityRuntimeError{Source: "spiffe", Message: "no SVID", Transient: true}, true},
+		{"transient with cause", &WorkloadIdentityRuntimeError{Source: "spiffe", Message: "no SVID", Err: errNoSVID, Transient: true}, true},
+		{"transient but canceled", &WorkloadIdentityRuntimeError{Source: "spiffe", Message: "fetch", Err: context.Canceled, Transient: true}, false},
+		{"not transient", &WorkloadIdentityRuntimeError{Source: "spiffe", Message: "no SVID", Err: errNoSVID}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.Retryable(); got != tc.retryable {
+				t.Errorf("Retryable() = %t, want %t", got, tc.retryable)
+			}
+			if tc.err.Err != nil && !errors.Is(tc.err, tc.err.Err) {
+				t.Error("cause is not preserved")
+			}
+		})
+	}
+}

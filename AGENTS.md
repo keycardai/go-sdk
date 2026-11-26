@@ -4,7 +4,7 @@ Context for coding agents working in keycardai/go-sdk. CLAUDE.md points here.
 
 ## What this repo is
 
-One Go module, `github.com/keycardai/go-sdk` (go 1.23.0), released as a single versioned unit. `doc.go` marks it preview: APIs may change between minors until 1.0.
+The root Go module is `github.com/keycardai/go-sdk` (Go 1.23.0). `doc.go` marks it preview: APIs may change between minors until 1.0.
 
 Packages (dependency direction in parentheses):
 
@@ -12,16 +12,25 @@ Packages (dependency direction in parentheses):
 - `mcp`: MCP server/client auth: `RequireBearerAuth` (`net/http` middleware), `AuthMetadataHandler`, `AuthProvider`/`AccessContext`, `Grant` (depends on oauth). Re-exports moved credential types as deprecated aliases.
 - `a2a`: agent-to-agent delegation client: card discovery, token exchange, JSON-RPC invoke (depends on oauth).
 - `policy`: Cedar policy bundle encode/decode, digest, evaluation (depends on cedar-go and jcs, no sibling).
+- `spiffe`: SPIFFE JWT-SVID workload identity source (depends on oauth). The optional `github.com/keycardai/go-sdk/spiffe` module (Go 1.25.0) keeps go-spiffe and gRPC out of the root module. Its `replace github.com/keycardai/go-sdk => ..` directive tests against the root checkout; downstream consumers use the declared root requirement.
 - `examples/*`: runnable examples. Most are in the root module; `examples/mcp-server-official` and `examples/mcp-server-mark3labs` are separate modules with `replace github.com/keycardai/go-sdk => ../..`.
 
 ## Build, test, lint
 
-These are the commands CI runs (`.github/workflows/ci.yml`), Go 1.23 and 1.25:
+For the root module, CI runs these commands (`.github/workflows/ci.yml`) on Go 1.23 and 1.25:
 
 ```sh
 go vet ./...
 go test -race -count=1 ./...
 go build ./examples/...
+```
+
+The SPIFFE module runs separately (CI job `test-spiffe`, Go from `spiffe/go.mod`):
+
+```sh
+cd spiffe
+go vet ./...
+go test -race -count=1 ./...
 ```
 
 The two MCP framework example modules run separately (CI job `test-examples`, Go from each example's go.mod):
@@ -33,17 +42,18 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
-`./...` from the root does not reach those two modules; run them yourself when you touch `mcp`. No golangci-lint, Makefile or other linter config is in the repo; `go vet` is the lint gate.
+`./...` from the root does not reach nested modules. Run the SPIFFE checks when you touch `spiffe` and the example checks when you touch `mcp`. No golangci-lint, Makefile or other linter config is in the repo; `go vet` is the lint gate.
 
 ## Commits and releases
 
 Conventional commits, `type(scope): description`. Validated on PRs with `cz check --rev-range <merge-base>..HEAD` (`.cz.toml`).
 
-- There is one version for the whole module, so the scope does not select a package. Scopes seen in history: `oauth`, `mcp`, `a2a`, `policy`, `examples`, multi-scope `mcp, oauth`, or none.
+- The root module has one version, so the scope does not select a package or module to release. Scopes include `oauth`, `mcp`, `a2a`, `policy`, `spiffe`, `examples`, multi-scope `mcp, oauth`, or none.
 - Release-triggering types (`changelog_pattern`): `feat`, `fix`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`, with any or no scope. `docs` and `chore` do not release.
 - Breaking change: `!` after the type/scope (`fix(oauth)!: ...`). `major_version_zero = true`, so breaking changes land as minors while the module is 0.x.
 - Merge to `main` runs `main.yml`, which runs `scripts/bump.py`: `cz bump --changelog --yes`, then pushes the bump commit and a `v<version>` tag to main using the release app token. The Go module proxy serves the tag; there is no publish workflow.
-- Never hand-edit `.cz.toml` version, tags or `CHANGELOG.md`; the bump job owns them. A bad release is retracted in `go.mod` (see `retract v0.14.0`), not by editing tags.
+- The SPIFFE module has its own version in `spiffe/.cz.toml`. On a push to main, `scripts/bump.py` bumps the root, then tags `spiffe/vX.Y.Z` when commits since the last SPIFFE tag touch `spiffe/`, with the increment taken from those commits. Keep the declared root requirement in `spiffe/go.mod` at a released root version that contains the OAuth APIs it uses.
+- Never hand-edit the root `.cz.toml` version, root release tags or `CHANGELOG.md`; the bump job owns them. A bad release is retracted in `go.mod` (see `retract v0.14.0`), not by editing tags.
 
 ## Spec first
 
@@ -57,9 +67,9 @@ Conventional commits, `type(scope): description`. Validated on PRs with `cz chec
 
 ## Idioms and gotchas
 
-- Root module stays free of MCP framework dependencies; anything that needs `modelcontextprotocol/go-sdk` or `mark3labs/mcp-go` goes in an example module (stated in `ci.yml`). Current direct deps: `golang-jwt/jwt/v5`, `cedar-go`, `gowebpki/jcs`, `x/sync`.
+- The root module stays free of go-spiffe, gRPC and MCP framework dependencies. Anything that needs `modelcontextprotocol/go-sdk` or `mark3labs/mcp-go` goes in an example module (stated in `ci.yml`). Root direct deps: `golang-jwt/jwt/v5`, `cedar-go`, `gowebpki/jcs`, `x/sync`. SPIFFE direct deps: the root module, `github.com/spiffe/go-spiffe/v2`, and `google.golang.org/grpc`.
 - Errors: every `oauth` error implements the `KeycardError` marker interface; callers use `errors.As`. Concrete types include `ConfigurationError`, `HTTPError`, `OAuthError` (carries `Err` for unwrapping). `mcp` aliases oauth error types; `a2a` and `policy` have their own `errors.go`.
 - Construction uses functional options (`mcp.WithZoneURL`, `oauth.WithAudiences`, ...).
-- Credentials live in `oauth`; the `mcp` names are `// Deprecated:` aliases kept for compatibility. Add new credential code to `oauth`.
+- Credentials live in `oauth`; the `mcp` names are `// Deprecated:` aliases kept for compatibility. Add new credential code to `oauth`; keep the SPIFFE token source in `spiffe`.
 - `NewZoneTokenVerifier` without `oauth.WithAudiences` accepts tokens for any resource in the zone and warns; keep examples audience-bound.
 - With the official MCP go-sdk, auth must come from `req.Extra.TokenInfo`, not the handler context (stateful sessions freeze the initialize context). See README "Serving MCP".
