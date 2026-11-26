@@ -1,3 +1,49 @@
+## v0.39.1 (2026-11-26)
+
+
+- fix(oauth, mcp, a2a): leave tokens, client secrets, and keys out of printed values (#67)
+- * fix(oauth): leave secrets out of printed ClientAuthentication and DeviceAuthorization
+- ClientAuthentication and DeviceAuthorization implement fmt.Stringer,
+fmt.GoStringer, and slog.LogValuer.
+- ClientAuthentication prints the header and form field names, sorted.
+It does not print their values, which hold the client secret or a
+client assertion.
+- DeviceAuthorization prints every field except DeviceCode. A public
+client redeems a device code with client_id alone (RFC 8628 section
+3.4). encoding/json still writes device_code, so a persisted
+authorization can poll.
+- ECO-528
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix: leave tokens, client secrets, and keys out of printed values
+- Every SDK type that holds a secret implements fmt.Stringer,
+fmt.GoStringer, and slog.LogValuer. The secrets are access, refresh,
+and ID tokens, subject and actor tokens, client secrets and
+assertions, device codes, authorization codes, PKCE verifiers, and
+private keys.
+- internal/printed builds the printed form from a list of the fields a
+type shows. A field not on the list is not printed. Interface fields
+such as a credential or keyring print their type only. encoding/json
+is unchanged, so persisted tokens keep their values.
+- Covers oauth request and response types, credentials, clients,
+keyrings, AccessContext, mcp OAuthTokens, InMemoryTokenStore,
+AuthInfo, AuthProvider, and JSONWebTokenSigner, and a2a
+DelegationClient.
+- ECO-528
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * test(oauth): JSON keeps the tokens and device code that printed forms leave out
+- Covers keycard-sdk-spec row 23 of token-exchange.md and row 34 of
+device-authorization.md.
+- ECO-528
+- Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+- * fix(oauth): leave client assertions out of printed ClientCredentialsRequest and ImpersonateRequest
+- * fix(oauth, mcp): leave the token out of a printed RevokeTokenRequest and show AuthInfo's Aud and Act
+- TokenExchangeClient also shows the types of its credential and actor token source, as other clients show their credential's type.
+- * test: check printed forms list every field or mark it secret, and cite the spec rows
+- Adds print rows for ClientCredentialsRequest, ImpersonateRequest, RevokeTokenRequest, discovered credentials, and a token exchange client with an actor token source. AccessContext's want includes ErrorDetail.Reason.
+- ---------
+- Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Co-authored-by: Larry Osakwe <23560354+Larry-Osakwe@users.noreply.github.com>
+
 ## v0.39.0 (2026-11-26)
 
 
