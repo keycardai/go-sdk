@@ -122,15 +122,17 @@ type capturingCredential struct {
 }
 
 func (c *capturingCredential) Auth(_ string) *ClientAuth {
-	return &ClientAuth{ClientID: "test-client", ClientSecret: "test-secret"}
+	return nil
 }
 
 func (c *capturingCredential) PrepareTokenExchangeRequest(_ context.Context, subjectToken, resource string, opts *PrepareOptions) (*oauth.TokenExchangeRequest, error) {
 	c.capturedOpts = opts
 	return &oauth.TokenExchangeRequest{
-		SubjectToken:     subjectToken,
-		Resource:         resource,
-		SubjectTokenType: "urn:ietf:params:oauth:token-type:access_token",
+		SubjectToken:        subjectToken,
+		Resource:            resource,
+		SubjectTokenType:    "urn:ietf:params:oauth:token-type:access_token",
+		ClientAssertion:     "test-assertion",
+		ClientAssertionType: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
 	}, nil
 }
 
@@ -161,10 +163,13 @@ func TestAuthProvider_ExchangeTokens_PassesTokenEndpoint(t *testing.T) {
 		t.Fatalf("creating provider: %v", err)
 	}
 
-	provider.ExchangeTokens(context.Background(), "user-token", "https://api.github.com")
+	ac := provider.ExchangeTokens(context.Background(), "user-token", "https://api.github.com")
+	if ac.Status() != StatusSuccess {
+		t.Fatalf("status: got %q, want success", ac.Status())
+	}
 
 	if cred.capturedOpts == nil {
-		t.Fatal("PrepareOptions was nil — TokenEndpoint not passed through")
+		t.Fatal("PrepareOptions is nil; expected the token endpoint")
 	}
 
 	expectedEndpoint := tokenServer.URL + "/token"

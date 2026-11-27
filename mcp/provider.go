@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/keycardai/go-sdk/internal/printed"
 	"github.com/keycardai/go-sdk/oauth"
@@ -79,21 +78,16 @@ func WithProviderHTTPClient(c *http.Client) AuthProviderOption {
 //
 // String, GoString, and LogValue show the zone issuers and the credential's type.
 type AuthProvider struct {
-	multiZone   bool
-	defaultZone string // single-zone issuer URL ("" when multi-zone)
-	credential  ApplicationCredential
-	httpClient  *http.Client
-
-	mu sync.Mutex
-	// clients is keyed by zone issuer URL. A key's presence marks a configured zone;
-	// the value is that zone's token-exchange client, created lazily (nil until first use).
-	clients map[string]*oauth.TokenExchangeClient
+	multiZone      bool
+	defaultZone    string // single-zone issuer URL ("" when multi-zone)
+	credentialType string
+	clients        map[string]*oauth.TokenExchangeClient
 }
 
 func (p *AuthProvider) printed() printed.Struct {
 	return printed.Struct{Type: "mcp.AuthProvider", Fields: []printed.Field{
 		{Name: "Zones", Key: "zones", Value: p.zones()},
-		{Name: "Credential", Key: "credential", Value: printed.TypeName(p.credential)},
+		{Name: "Credential", Key: "credential", Value: p.credentialType},
 	}}
 }
 
@@ -102,8 +96,6 @@ func (p *AuthProvider) zones() []string {
 	if !p.multiZone {
 		return []string{p.defaultZone}
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	return printed.Keys(p.clients)
 }
 
@@ -132,6 +124,9 @@ func NewAuthProvider(opts ...AuthProviderOption) (*AuthProvider, error) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.httpClient == nil {
+		cfg.httpClient = http.DefaultClient
+	}
 
 	// A WebIdentity credential needs a client id for its assertion, and the provider has
 	// no way to supply one at request time (it never sets resource_client_id). Without it
@@ -143,19 +138,32 @@ func NewAuthProvider(opts ...AuthProviderOption) (*AuthProvider, error) {
 	}
 
 	p := &AuthProvider{
-		credential: cfg.applicationCredential,
-		httpClient: cfg.httpClient,
-		clients:    make(map[string]*oauth.TokenExchangeClient),
+		credentialType: printed.TypeName(cfg.applicationCredential),
+		clients:        make(map[string]*oauth.TokenExchangeClient),
+	}
+	newZoneClient := func(zone string, credential ApplicationCredential) *oauth.TokenExchangeClient {
+		return oauth.NewTokenExchangeClient(zone,
+			oauth.WithTokenExchangeHTTPClient(cfg.httpClient),
+			oauth.WithTokenExchangeCredential(credential),
+		)
 	}
 
-	// A multi-zone credential is self-describing: it carries the zone set. Register each
-	// zone with a nil client; the client is created on first use in clientForZone.
-	if mz, ok := cfg.applicationCredential.(MultiZoneCredential); ok && len(mz.Zones()) > 0 {
-		p.multiZone = true
+	if mz, ok := cfg.applicationCredential.(MultiZoneCredential); ok {
 		for _, zone := range mz.Zones() {
-			p.clients[zone] = nil
+			credential := cfg.applicationCredential
+			if auth := credential.Auth(zone); auth != nil {
+				zoneCredential, err := oauth.NewClientSecret(auth.ClientID, auth.ClientSecret)
+				if err != nil {
+					return nil, fmt.Errorf("credential for zone %q: %w", zone, err)
+				}
+				credential = zoneCredential
+			}
+			p.clients[zone] = newZoneClient(zone, credential)
 		}
-		return p, nil
+		if len(p.clients) > 0 {
+			p.multiZone = true
+			return p, nil
+		}
 	}
 
 	zoneURL := cfg.zoneURL
@@ -168,7 +176,7 @@ func NewAuthProvider(opts ...AuthProviderOption) (*AuthProvider, error) {
 		}
 	}
 	p.defaultZone = zoneURL
-	p.clients[zoneURL] = nil
+	p.clients[zoneURL] = newZoneClient(zoneURL, cfg.applicationCredential)
 	return p, nil
 }
 
@@ -290,7 +298,7 @@ func (p *AuthProvider) exchange(ctx context.Context, issuer, subjectToken, userI
 		return ac
 	}
 
-	client := p.clientForZone(zone)
+	client := p.clients[zone]
 	if client == nil {
 		ac.SetError(oauth.ErrorDetail{
 			Message:  "Could not resolve the request's zone.",
@@ -299,16 +307,13 @@ func (p *AuthProvider) exchange(ctx context.Context, issuer, subjectToken, userI
 		return ac
 	}
 
-	// Resolve the token endpoint for credential assertion audience.
-	tokenEndpoint, _ := client.TokenEndpoint(ctx)
-
 	tokens := make(map[string]*oauth.TokenResponse)
 	for _, resource := range resources {
 		resourceScopes := scopes
 		if s, ok := scopesByResource[resource]; ok {
 			resourceScopes = s
 		}
-		resp, err := p.exchangeResource(ctx, client, zone, subjectToken, userIdentifier, resourceScopes, resource, tokenEndpoint)
+		resp, err := exchangeResource(ctx, client, subjectToken, userIdentifier, resourceScopes, resource)
 		if err != nil {
 			ac.SetResourceError(resource, exchangeErrorDetail(resource, err))
 			continue
@@ -322,9 +327,8 @@ func (p *AuthProvider) exchange(ctx context.Context, issuer, subjectToken, userI
 
 // exchangeResource exchanges (or impersonates) a single resource token. With a
 // userIdentifier it performs an RFC 8693 substitute-user impersonation; otherwise it
-// exchanges the caller's subject token, building the request via the application
-// credential when one is configured.
-func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.TokenExchangeClient, zone, subjectToken, userIdentifier string, scopes []string, resource, tokenEndpoint string) (*oauth.TokenResponse, error) {
+// exchanges the caller's subject token.
+func exchangeResource(ctx context.Context, client *oauth.TokenExchangeClient, subjectToken, userIdentifier string, scopes []string, resource string) (*oauth.TokenResponse, error) {
 	if userIdentifier != "" {
 		return client.Impersonate(ctx, oauth.ImpersonateRequest{
 			UserIdentifier: userIdentifier,
@@ -333,25 +337,11 @@ func (p *AuthProvider) exchangeResource(ctx context.Context, client *oauth.Token
 		})
 	}
 
-	var req *oauth.TokenExchangeRequest
-	if p.credential != nil {
-		r, err := p.credential.PrepareTokenExchangeRequest(ctx, subjectToken, resource, &PrepareOptions{Issuer: zone, TokenEndpoint: tokenEndpoint})
-		if err != nil {
-			return nil, err
-		}
-		req = r
-	} else {
-		req = &oauth.TokenExchangeRequest{
-			SubjectToken:     subjectToken,
-			Resource:         resource,
-			SubjectTokenType: "urn:ietf:params:oauth:token-type:access_token",
-		}
-	}
-	if len(scopes) > 0 {
-		req.Scope = strings.Join(scopes, " ")
-	}
-
-	return client.ExchangeToken(ctx, *req)
+	return client.ExchangeToken(ctx, oauth.TokenExchangeRequest{
+		SubjectToken: subjectToken,
+		Resource:     resource,
+		Scope:        strings.Join(scopes, " "),
+	})
 }
 
 // exchangeErrorDetail builds an ErrorDetail from a failed exchange, surfacing an OAuth
@@ -383,47 +373,10 @@ func (p *AuthProvider) resolveZone(issuer string) (string, error) {
 	if issuer == "" {
 		return "", fmt.Errorf("multi-zone provider could not resolve a zone: the token has no issuer")
 	}
-	// clients is guarded by mu (clientForZone mutates it), so take the lock for the
-	// membership check even though we only read it here.
-	p.mu.Lock()
-	_, configured := p.clients[issuer]
-	p.mu.Unlock()
-	if !configured {
+	if _, configured := p.clients[issuer]; !configured {
 		return "", fmt.Errorf("multi-zone provider has no credential configured for zone %q", issuer)
 	}
 	return issuer, nil
-}
-
-// clientForZone returns the token-exchange client for a configured zone, creating it on
-// first use with the zone's issuer and credential and caching it. It returns nil when the
-// zone is not configured: a client is only minted for a zone the map already holds, so an
-// unknown zone never gets one. Callers resolve the zone with resolveZone first.
-func (p *AuthProvider) clientForZone(zone string) *oauth.TokenExchangeClient {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	c, ok := p.clients[zone]
-	if !ok {
-		return nil
-	}
-	if c != nil {
-		return c
-	}
-
-	// Configured but not yet created: build the client on first use and cache it.
-	var clientOpts []oauth.TokenExchangeClientOption
-	if p.httpClient != nil {
-		clientOpts = append(clientOpts, oauth.WithTokenExchangeHTTPClient(p.httpClient))
-	}
-	if p.credential != nil {
-		if auth := p.credential.Auth(zone); auth != nil {
-			clientOpts = append(clientOpts, oauth.WithClientCredentials(auth.ClientID, auth.ClientSecret))
-		}
-	}
-
-	c = oauth.NewTokenExchangeClient(zone, clientOpts...)
-	p.clients[zone] = c
-	return c
 }
 
 func buildZoneURL(zoneID, baseURL string) string {
