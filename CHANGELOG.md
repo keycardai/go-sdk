@@ -1,3 +1,10 @@
+## v0.45.3 (2026-11-27)
+
+
+- fix(oauth): make the device timeout and JWKS concurrency tests deterministic (#101)
+- Make TestWaitForToken_RequestTimeout, TestDeviceAuthorization_RequestTimeout and TestJWKSOAuthKeyring_ConcurrentMissesForDifferentKidsShareOneFetch deterministic under -race by replacing wall-clock sleeps and tight timeouts with synchronization.
+- The synchronized JWKS test exposed a real race: a lookup could miss the cache, then start a second JWKS fetch after another lookup's fetch had already completed. The singleflight leader now rechecks the cache and reuses a set published since its miss, but only while that set is inside its refetch cooldown, so a lookup that is eligible to refetch (including with the cooldown disabled) still fetches a newly rotated key.
+
 ## v0.45.2 (2026-11-27)
 
 
