@@ -63,6 +63,12 @@ func WithBaseURL(baseURL string) AuthProviderOption {
 }
 
 // WithApplicationCredential sets the application credential for token exchange.
+//
+// The token exchange client uses Auth(issuer) for HTTP Basic client authentication.
+// If Auth returns nil and the request has no explicit client assertion, the client
+// calls PrepareTokenExchangeRequest for each request. It uses only ClientAssertion,
+// ClientAssertionType, and ClientID from the result. A result with no assertion is a
+// configuration error. The client does not send other request fields from the result.
 func WithApplicationCredential(cred ApplicationCredential) AuthProviderOption {
 	return func(cfg *authProviderConfig) { cfg.applicationCredential = cred }
 }

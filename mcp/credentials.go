@@ -24,6 +24,12 @@ type PrepareOptions = oauth.PrepareOptions
 // ApplicationCredential authenticates the application to the authorization
 // server during token exchange.
 //
+// The token exchange client uses Auth(issuer) for HTTP Basic client authentication.
+// If Auth returns nil and the request has no explicit client assertion, the client
+// calls PrepareTokenExchangeRequest for each request. It uses only ClientAssertion,
+// ClientAssertionType, and ClientID from the result. A result with no assertion is a
+// configuration error. The client does not send other request fields from the result.
+//
 // Deprecated: use [oauth.ApplicationCredential].
 type ApplicationCredential = oauth.ApplicationCredential
 

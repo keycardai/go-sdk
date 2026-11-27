@@ -45,6 +45,12 @@ type PrepareOptions struct {
 
 // ApplicationCredential authenticates the application to the authorization
 // server during token exchange.
+//
+// The token exchange client uses Auth(issuer) for HTTP Basic client authentication.
+// If Auth returns nil and the request has no explicit client assertion, the client
+// calls PrepareTokenExchangeRequest for each request. It uses only ClientAssertion,
+// ClientAssertionType, and ClientID from the result. A result with no assertion is a
+// configuration error. The client does not send other request fields from the result.
 type ApplicationCredential interface {
 	// Auth returns client credentials for HTTP basic auth for the given zone issuer, or
 	// nil for assertion-based auth or an unknown zone. Single-zone credentials ignore
