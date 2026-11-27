@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
@@ -695,10 +697,56 @@ func TestDeviceFlow_WebIdentityAssertionPerRequest(t *testing.T) {
 	}
 }
 
+const deviceTestRequestTimeout = 100 * time.Millisecond
+
+type deviceResponseStall int
+
+const (
+	deviceResponseReady deviceResponseStall = iota
+	deviceStallBeforeHeaders
+	deviceStallDuringBody
+)
+
+type deviceDeadlineReader struct{ ctx context.Context }
+
+func (r deviceDeadlineReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
+
+// deviceDeadlineHTTPClient records the request in the fake zone synchronously.
+// A stalled response waits for the real request deadline without depending on
+// whether a server goroutine can accept the request before that deadline.
+func deviceDeadlineHTTPClient(zone *fakeZone, requestStart func() time.Time, stall deviceResponseStall) *http.Client {
+	return &http.Client{Transport: metadataTestTransport(func(req *http.Request) (*http.Response, error) {
+		if req.Body != nil {
+			defer req.Body.Close()
+		}
+		ctx := req.Context()
+		earliest := requestStart().Add(deviceTestRequestTimeout)
+		latest := time.Now().Add(deviceTestRequestTimeout)
+		rec := httptest.NewRecorder()
+		zone.Config.Handler.ServeHTTP(rec, req)
+		deadline, ok := ctx.Deadline()
+		if !ok || deadline.Before(earliest) || deadline.After(latest) {
+			return nil, fmt.Errorf("request deadline = %v (set: %t), want between %v and %v", deadline, ok, earliest, latest)
+		}
+		if stall == deviceStallBeforeHeaders {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		resp := rec.Result()
+		if stall == deviceStallDuringBody {
+			resp.Body.Close()
+			resp.Body = io.NopCloser(io.MultiReader(strings.NewReader(`{"error":`), deviceDeadlineReader{ctx}))
+		}
+		return resp, nil
+	})}
+}
+
 // The request timeout bounds each request, including discovery, also when the
 // caller's context has a later deadline.
 func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
-	const timeout = 20 * time.Millisecond
 	auth := DeviceAuthorization{DeviceCode: "device-code-1", Interval: 5, ExpiresIn: 600}
 	cases := map[string]struct {
 		run           func(ctx context.Context, client *DeviceAuthorizationClient) error
@@ -734,12 +782,12 @@ func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
 		for _, ctxTimeout := range []time.Duration{0, time.Minute} {
 			t.Run(fmt.Sprintf("%s, caller deadline %v", name, ctxTimeout), func(t *testing.T) {
 				zone := newFakeZone(t)
-				zone.delay = time.Second
 				zone.script(stepToken)
+				var start time.Time
 				opts := []DeviceAuthorizationOption{
-					WithDeviceHTTPClient(zone.httpClient()),
+					WithDeviceHTTPClient(deviceDeadlineHTTPClient(zone, func() time.Time { return start }, deviceStallBeforeHeaders)),
 					WithDevicePublicClient("public-1"),
-					WithDeviceRequestTimeout(timeout),
+					WithDeviceRequestTimeout(deviceTestRequestTimeout),
 				}
 				if !tc.discover {
 					opts = append(opts, WithDeviceMetadata(zone.metadata()))
@@ -752,14 +800,11 @@ func TestDeviceAuthorization_RequestTimeout(t *testing.T) {
 					defer cancel()
 				}
 
-				start := time.Now()
+				start = time.Now()
 				err := tc.run(ctx, client)
 
 				if !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("error: got %v, want context.DeadlineExceeded", err)
-				}
-				if elapsed := time.Since(start); elapsed >= zone.delay {
-					t.Errorf("returned after %v, want before the zone's %v delay", elapsed, zone.delay)
 				}
 				if got := len(zone.deviceCalls()); got != tc.wantDevice {
 					t.Errorf("device authorization requests: got %d, want %d", got, tc.wantDevice)
@@ -1304,20 +1349,8 @@ func TestWaitForToken_ClientAuthenticationFails(t *testing.T) {
 // error, so its interval is doubled. The wait between polls does not count against
 // the timeout.
 func TestWaitForToken_RequestTimeout(t *testing.T) {
-	const timeout = 20 * time.Millisecond
-	// hangBody sends the status line and headers, then holds the body back until the
-	// client gives up.
-	hangBody := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":`))
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}
 	cases := map[string]struct {
-		zoneDelay  time.Duration
-		onToken    func(w http.ResponseWriter, r *http.Request)
-		realWait   time.Duration
+		stall      deviceResponseStall
 		ctxTimeout time.Duration
 		steps      []tokenStep
 		wantPolls  int
@@ -1326,14 +1359,14 @@ func TestWaitForToken_RequestTimeout(t *testing.T) {
 		wantPollInterval time.Duration
 	}{
 		"a poll that times out": {
-			zoneDelay:        time.Second,
+			stall:            deviceStallBeforeHeaders,
 			steps:            []tokenStep{stepToken},
 			wantPolls:        1,
 			wantTimeout:      true,
 			wantPollInterval: 10 * time.Second,
 		},
 		"a poll that times out under a later caller deadline": {
-			zoneDelay:        time.Second,
+			stall:            deviceStallBeforeHeaders,
 			ctxTimeout:       time.Minute,
 			steps:            []tokenStep{stepToken},
 			wantPolls:        1,
@@ -1341,14 +1374,13 @@ func TestWaitForToken_RequestTimeout(t *testing.T) {
 			wantPollInterval: 10 * time.Second,
 		},
 		"a poll that times out while the body is read": {
-			onToken:          hangBody,
-			steps:            []tokenStep{stepToken},
+			stall:            deviceStallDuringBody,
+			steps:            []tokenStep{stepOAuthError("authorization_pending")},
 			wantPolls:        1,
 			wantTimeout:      true,
 			wantPollInterval: 10 * time.Second,
 		},
 		"the wait between polls is not bounded by the request timeout": {
-			realWait:  4 * timeout,
 			steps:     []tokenStep{stepOAuthError("authorization_pending"), stepToken},
 			wantPolls: 2,
 		},
@@ -1356,14 +1388,21 @@ func TestWaitForToken_RequestTimeout(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			zone := newFakeZone(t)
-			zone.delay = tc.zoneDelay
-			zone.onToken = tc.onToken
 			zone.script(tc.steps...)
+			var waitFinished time.Time
 			client, clock, auth := newWaitClient(t, zone, 5, 600,
 				WithDeviceMetadata(zone.metadata()),
-				WithDeviceRequestTimeout(timeout))
-			if tc.realWait != 0 {
-				clock.onAfter = func(time.Duration) <-chan time.Time { return time.After(tc.realWait) }
+				WithDeviceRequestTimeout(deviceTestRequestTimeout),
+				WithDeviceHTTPClient(deviceDeadlineHTTPClient(zone, func() time.Time { return waitFinished }, tc.stall)))
+			clock.onAfter = func(d time.Duration) <-chan time.Time {
+				clock.mu.Lock()
+				clock.now = clock.now.Add(d)
+				now := clock.now
+				clock.mu.Unlock()
+				waitFinished = time.Now()
+				ch := make(chan time.Time, 1)
+				ch <- now
+				return ch
 			}
 			ctx := context.Background()
 			if tc.ctxTimeout != 0 {
@@ -1384,6 +1423,13 @@ func TestWaitForToken_RequestTimeout(t *testing.T) {
 			wantPollError(t, err, tc.wantPollInterval)
 			if got := len(zone.tokenCalls()); got != tc.wantPolls {
 				t.Errorf("polls: got %d, want %d", got, tc.wantPolls)
+			}
+			wantWaits := []time.Duration{5 * time.Second}
+			if tc.wantPolls == 2 {
+				wantWaits = append(wantWaits, 5*time.Second)
+			}
+			if got := clock.recordedWaits(); !reflect.DeepEqual(got, wantWaits) {
+				t.Errorf("waits: got %v, want %v", got, wantWaits)
 			}
 		})
 	}

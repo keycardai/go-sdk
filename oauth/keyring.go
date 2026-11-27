@@ -182,8 +182,8 @@ type jwksSetEntry struct {
 //  1. Discovery cache: issuer → jwks_uri (default TTL: 1 hour)
 //  2. Key cache: issuer::kid → public key (default TTL: 5 minutes)
 //
-// Concurrent requests for the same key share one fetch, which runs detached from any
-// single caller's cancellation so one caller cannot poison it for the others.
+// Concurrent requests for the same jwks_uri share one fetch, which runs detached
+// from any single caller's cancellation.
 type JWKSOAuthKeyring struct {
 	cfg jwksKeyringConfig
 	now func() time.Time
@@ -192,7 +192,7 @@ type JWKSOAuthKeyring struct {
 	generation     uint64
 	discoveryCache map[string]cacheEntry[string]
 	keyCache       map[string]cacheEntry[crypto.PublicKey]
-	jwksCache      map[string]jwksSetEntry // jwks_uri -> last fetched key set
+	jwksCache      map[string]*jwksSetEntry // jwks_uri -> last fetched key set
 	discoveryRetry map[string]metadataRetry
 	jwksRetry      map[string]metadataRetry
 
@@ -219,7 +219,7 @@ func NewJWKSOAuthKeyring(opts ...JWKSOAuthKeyringOption) *JWKSOAuthKeyring {
 		now:            time.Now,
 		discoveryCache: make(map[string]cacheEntry[string]),
 		keyCache:       make(map[string]cacheEntry[crypto.PublicKey]),
-		jwksCache:      make(map[string]jwksSetEntry),
+		jwksCache:      make(map[string]*jwksSetEntry),
 		discoveryRetry: make(map[string]metadataRetry),
 		jwksRetry:      make(map[string]metadataRetry),
 	}
@@ -317,13 +317,13 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 	// The cached key set first: a kid it holds imports with no fetch, and a kid it
 	// lacks refetches at most once per cooldown.
 	k.mu.Lock()
-	set, ok := k.jwksCache[jwksURI]
-	if ok && !k.now().Before(set.expiresAt) {
+	set := k.jwksCache[jwksURI]
+	if set != nil && !k.now().Before(set.expiresAt) {
 		delete(k.jwksCache, jwksURI)
-		ok = false
+		set = nil
 	}
 	k.mu.Unlock()
-	if ok {
+	if set != nil {
 		if jwk, err := findKey(set.keys, kid); err == nil {
 			return k.importAndCache(jwk, kid, cacheKey, started)
 		}
@@ -333,6 +333,20 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 	}
 
 	result, err := sharedFetch(ctx, &k.jwksGroup, fmt.Sprintf("%d:%s", started, jwksURI), k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
+		// Another caller may have finished fetching after we checked the cache
+		// but before we entered singleflight. Reuse that set while it is fresh
+		// and its cooldown still prevents a refresh for a missing kid.
+		k.mu.Lock()
+		latest := k.jwksCache[jwksURI]
+		sameGeneration := k.generation == started
+		k.mu.Unlock()
+		if latest != nil && latest != set && sameGeneration {
+			now := k.now()
+			if now.Before(latest.expiresAt) && now.Sub(latest.fetchedAt) < k.cfg.refetchCooldown {
+				return latest.keys, nil
+			}
+		}
+
 		if err := k.retryFailure(k.jwksRetry, jwksURI); err != nil {
 			return nil, err
 		}
@@ -377,7 +391,7 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 		k.mu.Lock()
 		if k.generation == started {
 			delete(k.jwksRetry, jwksURI)
-			k.jwksCache[jwksURI] = jwksSetEntry{keys: jwkSet.Keys, fetchedAt: now, expiresAt: now.Add(k.cfg.keyTTL)}
+			k.jwksCache[jwksURI] = &jwksSetEntry{keys: jwkSet.Keys, fetchedAt: now, expiresAt: now.Add(k.cfg.keyTTL)}
 		}
 		k.mu.Unlock()
 		return jwkSet.Keys, nil
