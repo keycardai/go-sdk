@@ -49,7 +49,8 @@ func retryableMetadataFailure(err error) bool {
 
 func http2TransportFailure(err error) bool {
 	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
-		// The standard library's HTTP/2 error types moved to net/http/internal/http2 in Go 1.27.
+		// The standard library does not export its HTTP/2 error types: they are in
+		// net/http before Go 1.27 and in net/http/internal/http2 from Go 1.27.
 		kind := reflect.TypeOf(cause)
 		switch kind.PkgPath() {
 		case "net/http":
