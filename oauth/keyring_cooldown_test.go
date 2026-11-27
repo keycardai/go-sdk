@@ -103,28 +103,124 @@ func TestJWKSOAuthKeyring_RotatedInKidFoundAfterCooldown(t *testing.T) {
 	}
 }
 
+type jwksWaitingContext struct {
+	context.Context
+	waiting chan<- struct{}
+}
+
+// sharedFetch calls Done after registering the caller with the singleflight group.
+func (c jwksWaitingContext) Done() <-chan struct{} {
+	c.waiting <- struct{}{}
+	return c.Context.Done()
+}
+
+// Spec row 17: concurrent lookups for different kids share a single JWKS fetch.
 func TestJWKSOAuthKeyring_ConcurrentMissesForDifferentKidsShareOneFetch(t *testing.T) {
+	t.Run("cold cache", func(t *testing.T) {
+		var kids atomic.Value
+		requestedKids := []string{"a", "b", "c", "d"}
+		kids.Store(requestedKids)
+		var fetches atomic.Int32
+		srv := cooldownZone(t, &kids, &fetches)
+		releaseFetch := make(chan struct{})
+		release := sync.OnceFunc(func() { close(releaseFetch) })
+		defer release()
+		client := &http.Client{Transport: metadataTestTransport(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/.well-known/jwks.json" {
+				<-releaseFetch
+			}
+			return srv.Client().Transport.RoundTrip(req)
+		})}
+		k := NewJWKSOAuthKeyring(WithKeyringHTTPClient(client))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := k.resolveJWKSURI(ctx, srv.URL, 0); err != nil {
+			t.Fatal(err)
+		}
+
+		waiting := make(chan struct{}, len(requestedKids))
+		results := make(chan error, len(requestedKids))
+		for _, kid := range requestedKids {
+			go func() {
+				_, err := k.Key(jwksWaitingContext{ctx, waiting}, srv.URL, kid)
+				results <- err
+			}()
+		}
+		for range requestedKids {
+			select {
+			case <-waiting:
+			case <-ctx.Done():
+				t.Fatal("lookups did not join the JWKS flight")
+			}
+		}
+		release()
+		for range requestedKids {
+			if err := <-results; err != nil {
+				t.Error(err)
+			}
+		}
+		if got := fetches.Load(); got != 1 {
+			t.Fatalf("want 1 shared JWKS fetch, got %d", got)
+		}
+	})
+
+	t.Run("one caller paused after a cache miss", testJWKSRefreshDuringCacheMiss)
+}
+
+func testJWKSRefreshDuringCacheMiss(t *testing.T) {
 	var kids atomic.Value
-	kids.Store([]string{"a", "b", "c", "d"})
+	kids.Store([]string{"old"})
 	var fetches atomic.Int32
 	srv := cooldownZone(t, &kids, &fetches)
 	k := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()))
-	if _, err := k.resolveJWKSURI(context.Background(), srv.URL, 0); err != nil {
+	clock := newFakeDeviceClock()
+	k.now = clock.Now
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := k.Key(ctx, srv.URL, "old"); err != nil {
 		t.Fatal(err)
 	}
-	var wg sync.WaitGroup
-	for _, kid := range []string{"a", "b", "c", "d"} {
-		wg.Add(1)
-		go func(kid string) {
-			defer wg.Done()
-			if _, err := k.Key(context.Background(), srv.URL, kid); err != nil {
-				t.Error(err)
+	kids.Store([]string{"a", "b"})
+	<-clock.After(DefaultJWKSRefetchCooldown)
+
+	checkedCache := make(chan struct{})
+	resumeLookup := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumeLookup) })
+	defer resume()
+	var clockReads atomic.Int32
+	k.now = func() time.Time {
+		// The first read checks the cached set's TTL. The second checks the
+		// cooldown after the caller has missed its kid and released k.mu.
+		if clockReads.Add(1) == 2 {
+			close(checkedCache)
+			select {
+			case <-resumeLookup:
+			case <-ctx.Done():
 			}
-		}(kid)
+		}
+		return clock.Now()
 	}
-	wg.Wait()
-	if got := fetches.Load(); got != 1 {
-		t.Fatalf("want 1 shared JWKS fetch, got %d", got)
+
+	result := make(chan error, 1)
+	go func() {
+		uri := srv.URL + "/.well-known/jwks.json"
+		_, err := k.resolveKey(ctx, srv.URL, "a", uri, srv.URL+"::a", 0)
+		result <- err
+	}()
+	select {
+	case <-checkedCache:
+	case <-ctx.Done():
+		t.Fatal("first lookup did not reach the cooldown check")
+	}
+	if _, err := k.Key(ctx, srv.URL, "b"); err != nil {
+		t.Fatal(err)
+	}
+	resume()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if got := fetches.Load() - 1; got != 1 {
+		t.Fatalf("want 1 shared JWKS refresh, got %d", got)
 	}
 }
 
