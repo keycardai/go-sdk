@@ -1,3 +1,9 @@
+## v0.45.1 (2026-11-27)
+
+
+- fix(mcp): the token exchange client holds the provider's credential (SDK-173)
+- Refs SDK-173
+
 ## v0.45.0 (2026-11-26)
 
 
