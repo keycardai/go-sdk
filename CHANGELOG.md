@@ -1,3 +1,14 @@
+## v0.45.2 (2026-11-27)
+
+
+- fix(oauth): test on Go 1.27 and fix the HTTP/2 stream reset retry classification (#100)
+- * fix(oauth): recognize Go 1.27 HTTP/2 transport errors
+- * ci: test on Go 1.27
+- * docs: update the Go CI versions
+- * docs(oauth): explain HTTP/2 error type locations
+- ---------
+- Co-authored-by: devin-ai-keycard <devin-ai@keycard.ai>
+
 ## v0.45.1 (2026-11-27)
 
 
