@@ -26,9 +26,7 @@ type ImpersonateRequest struct {
 	// Scopes are the scopes requested for the issued token. Optional.
 	Scopes []string
 	// ClientAssertion, with ClientAssertionType, authenticates the exchange
-	// via a JWT bearer assertion — e.g. a workload-identity OIDC token —
-	// instead of the client's configured basic-auth secret. Zero values use
-	// the secret.
+	// via a JWT bearer assertion instead of the client's configured credential.
 	ClientAssertion     string
 	ClientAssertionType string
 }
