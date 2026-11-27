@@ -164,15 +164,21 @@ func TestJWKSOAuthKeyring_ConcurrentMissesForDifferentKidsShareOneFetch(t *testi
 		}
 	})
 
-	t.Run("one caller paused after a cache miss", testJWKSRefreshDuringCacheMiss)
+	t.Run("one caller paused after a cache miss", func(t *testing.T) {
+		testJWKSRefreshDuringCacheMiss(t, DefaultJWKSRefetchCooldown, []string{"a", "b"}, 1)
+	})
+	t.Run("one caller paused with cooldown disabled", func(t *testing.T) {
+		testJWKSRefreshDuringCacheMiss(t, 0, []string{"b"}, 2)
+	})
 }
 
-func testJWKSRefreshDuringCacheMiss(t *testing.T) {
+func testJWKSRefreshDuringCacheMiss(t *testing.T, cooldown time.Duration, firstRefreshKids []string, wantRefreshes int32) {
+	t.Helper()
 	var kids atomic.Value
 	kids.Store([]string{"old"})
 	var fetches atomic.Int32
 	srv := cooldownZone(t, &kids, &fetches)
-	k := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()))
+	k := NewJWKSOAuthKeyring(WithKeyringHTTPClient(srv.Client()), WithJWKSRefetchCooldown(cooldown))
 	clock := newFakeDeviceClock()
 	k.now = clock.Now
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -180,7 +186,7 @@ func testJWKSRefreshDuringCacheMiss(t *testing.T) {
 	if _, err := k.Key(ctx, srv.URL, "old"); err != nil {
 		t.Fatal(err)
 	}
-	kids.Store([]string{"a", "b"})
+	kids.Store(firstRefreshKids)
 	<-clock.After(DefaultJWKSRefetchCooldown)
 
 	checkedCache := make(chan struct{})
@@ -215,12 +221,14 @@ func testJWKSRefreshDuringCacheMiss(t *testing.T) {
 	if _, err := k.Key(ctx, srv.URL, "b"); err != nil {
 		t.Fatal(err)
 	}
+	// If the first refresh lacked "a", it is now available on the endpoint.
+	kids.Store([]string{"a", "b"})
 	resume()
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
-	if got := fetches.Load() - 1; got != 1 {
-		t.Fatalf("want 1 shared JWKS refresh, got %d", got)
+	if got := fetches.Load() - 1; got != wantRefreshes {
+		t.Fatalf("want %d JWKS refreshes, got %d", wantRefreshes, got)
 	}
 }
 

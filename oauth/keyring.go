@@ -334,14 +334,18 @@ func (k *JWKSOAuthKeyring) resolveKey(ctx context.Context, issuer, kid, jwksURI,
 
 	result, err := sharedFetch(ctx, &k.jwksGroup, fmt.Sprintf("%d:%s", started, jwksURI), k.cfg.fetchTimeout, func(fetchCtx context.Context) (any, error) {
 		// Another caller may have finished fetching after we checked the cache
-		// but before we entered singleflight. Reuse that fresh set for this lookup.
+		// but before we entered singleflight. Reuse that set while it is fresh
+		// and its cooldown still prevents a refresh for a missing kid.
 		k.mu.Lock()
 		latest := k.jwksCache[jwksURI]
-		if latest != nil && latest != set && k.generation == started && k.now().Before(latest.expiresAt) {
-			k.mu.Unlock()
-			return latest.keys, nil
-		}
+		sameGeneration := k.generation == started
 		k.mu.Unlock()
+		if latest != nil && latest != set && sameGeneration {
+			now := k.now()
+			if now.Before(latest.expiresAt) && now.Sub(latest.fetchedAt) < k.cfg.refetchCooldown {
+				return latest.keys, nil
+			}
+		}
 
 		if err := k.retryFailure(k.jwksRetry, jwksURI); err != nil {
 			return nil, err
