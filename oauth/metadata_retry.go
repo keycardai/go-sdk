@@ -49,7 +49,7 @@ func retryableMetadataFailure(err error) bool {
 
 func http2TransportFailure(err error) bool {
 	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
-		// net/http does not export its bundled HTTP/2 transport error types.
+		// The standard library's HTTP/2 error types moved to net/http/internal/http2 in Go 1.27.
 		kind := reflect.TypeOf(cause)
 		switch kind.PkgPath() {
 		case "net/http":
@@ -57,7 +57,7 @@ func http2TransportFailure(err error) bool {
 			case "http2StreamError", "http2ConnectionError", "http2GoAwayError":
 				return true
 			}
-		case "golang.org/x/net/http2":
+		case "net/http/internal/http2", "golang.org/x/net/http2":
 			switch kind.Name() {
 			case "StreamError", "ConnectionError", "GoAwayError":
 				return true
