@@ -17,7 +17,7 @@ Packages (dependency direction in parentheses):
 
 ## Build, test, lint
 
-For the root module, CI runs these commands (`.github/workflows/ci.yml`) on Go 1.23 and 1.25:
+For the root module, CI runs these commands (`.github/workflows/ci.yml`) on Go 1.23, 1.25 and 1.27:
 
 ```sh
 go vet ./...
